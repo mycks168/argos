@@ -1,0 +1,34 @@
+[project]
+name = "argos"
+version = "0.1.0"
+description = "ARGOS: Autonomous Road Guardian & Observation System"
+requires-python = ">=3.11"
+dependencies = [
+    "gpiozero",
+    "lgpio",
+    "python-dotenv",
+    "requests",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+]
+
+[project.scripts]
+argos = "argos.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+addopts = "--cov=argos --cov-report=term-missing --cov-fail-under=80"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+omit = [
+    "src/argos/hardware/gpio.py",
+    "src/argos/main.py",
+]

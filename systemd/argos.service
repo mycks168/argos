@@ -1,0 +1,21 @@
+[Unit]
+Description=ARGOS voice Codex agent
+Documentation=file:/home/pi/argos/README.md
+After=network-online.target sound.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/argos
+EnvironmentFile=/home/pi/argos/.env
+Environment=PATH=/home/pi/.local/bin:/home/pi/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pi/argos/.venv/bin/argos
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,177 @@
+from argos.config import CodexSlot, Settings
+from argos.core.app import ArgosApp
+
+
+def _settings():
+    return Settings(
+        stt_gateway_url="http://stt",
+        stt_language="ja",
+        tts_filter_url="http://filter",
+        tts_filter_token="token",
+        tts_delimiters="。！？!?",
+        voicevox_url="http://voicevox",
+        voicevox_speaker=2,
+        voicevox_sample_rate=48000,
+        audio_input_device="in",
+        audio_output_device="out",
+        audio_output_card="",
+        audio_output_volume=90,
+        audio_sample_rate=16000,
+        ptt_gpio=17,
+        silence_rms_threshold=10,
+        dry_run=True,
+        codex_slots=(CodexSlot("作業", "/tmp", "", ""),),
+        codex_sandbox="workspace-write",
+        codex_approval_policy="on-request",
+        codex_extra_args=(),
+    )
+
+
+class FakeRecorder:
+    def __init__(self, *args):
+        self.started = False
+        self.cancelled = False
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        return "/tmp/u.wav"
+
+    def cancel(self):
+        self.cancelled = True
+
+
+class FakeAudio:
+    def __init__(self, *args):
+        self.cancelled = False
+        self.played = []
+
+    def cancel(self):
+        self.cancelled = True
+
+    def play_wav(self, wav):
+        self.played.append(wav)
+
+
+class FakeStt:
+    def __init__(self, *args):
+        pass
+
+    def transcribe(self, wav):
+        return "こんにちは"
+
+
+class FakeCodex:
+    def __init__(self, *args):
+        self.current_name = "作業"
+        self.asked = []
+
+    def ask(self, text):
+        self.asked.append(text)
+        return "応答"
+
+    def ask_stream(self, text):
+        self.asked.append(text)
+        yield "応答"
+
+    def next_slot(self):
+        self.current_name = "次"
+        return "次"
+
+    def reset_current(self):
+        self.reset = True
+
+
+class FakeFilter:
+    def __init__(self, *args):
+        pass
+
+    def normalize(self, text):
+        return f"正規化:{text}"
+
+
+class FakeVoicevox:
+    def __init__(self, *args):
+        pass
+
+    def synthesize(self, text):
+        return text.encode()
+
+
+def _patch_app(monkeypatch):
+    monkeypatch.setattr("argos.core.app.Recorder", FakeRecorder)
+    monkeypatch.setattr("argos.core.app.AudioPlayer", FakeAudio)
+    monkeypatch.setattr("argos.core.app.SttGatewayClient", FakeStt)
+    monkeypatch.setattr("argos.core.app.CodexCliClient", FakeCodex)
+    monkeypatch.setattr("argos.core.app.TtsFilterClient", FakeFilter)
+    monkeypatch.setattr("argos.core.app.VoicevoxClient", FakeVoicevox)
+
+
+def test_handle_text_dry_run(monkeypatch, capsys):
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._handle_text("依頼")
+
+    assert app._codex.asked == ["依頼"]
+    assert "ARGOS> 応答" in capsys.readouterr().out
+
+
+def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    app = ArgosApp(_settings())
+
+    app._process_recording()
+
+    assert app._codex.asked == ["こんにちは"]
+    assert app._button.state.value == "idle"
+    assert "ARGOS> 応答" in capsys.readouterr().out
+
+
+def test_ptt_and_status_methods(monkeypatch, capsys):
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._on_ptt_press()
+    app._on_cancel()
+    app._on_double_click()
+
+    assert app._recorder.started
+    assert app._recorder.cancelled
+    assert app._audio.cancelled
+    assert "次に切り替えました" in capsys.readouterr().out
+
+
+def test_stream_response_splits_tts_chunks(monkeypatch):
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+
+    response = app._speak_response_stream(["一文目。二文", "目です。\n三文目"])
+
+    assert response == "一文目。二文目です。\n三文目"
+    assert app._audio.played == [
+        "正規化:一文目。".encode(),
+        "正規化:二文目です。".encode(),
+        "正規化:三文目".encode(),
+    ]
+
+
+def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    played = []
+
+    def cancel_on_first_play(wav):
+        played.append(wav)
+        app._on_cancel()
+
+    app._audio.play_wav = cancel_on_first_play
+
+    response = app._speak_response_stream(["一文目。二文目。三文目。"])
+
+    assert response == "一文目。二文目。三文目。"
+    assert played == ["正規化:一文目。".encode()]
