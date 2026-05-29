@@ -229,13 +229,18 @@ class CodexCliClient:
         """Codex CLI のコマンドラインを構築する。"""
         slot = conversation.slot
         if conversation.session_id:
-            base = ["codex", "exec", "resume", "--all", "--skip-git-repo-check"]
+            base = self._exec_base()
+            base.extend(["resume", "--all", "--skip-git-repo-check"])
             prompt_args = [conversation.session_id, "-"]
         elif conversation.started:
-            base = ["codex", "exec", "resume", "--last", "--all", "--skip-git-repo-check"]
+            base = self._exec_base()
+            base.extend(["resume", "--last", "--all", "--skip-git-repo-check"])
             prompt_args = ["-"]
         else:
-            base = ["codex", "exec", "--skip-git-repo-check", "-C", slot.cwd, "-s", self._settings.codex_sandbox]
+            base = self._exec_base()
+            base.extend(["--skip-git-repo-check", "-C", slot.cwd])
+            if not self._settings.codex_bypass_sandbox:
+                base.extend(["-s", self._settings.codex_sandbox])
             prompt_args = ["-"]
         if slot.model:
             base.extend(["-m", slot.model])
@@ -245,6 +250,13 @@ class CodexCliClient:
         base.extend(extra_args)
         base.extend(["-o", output_path])
         base.extend(prompt_args)
+        return base
+
+    def _exec_base(self) -> list[str]:
+        """Codex exec の共通起動オプションを返す。"""
+        base = ["codex", "exec"]
+        if self._settings.codex_bypass_sandbox:
+            base.append("--dangerously-bypass-approvals-and-sandbox")
         return base
 
     def _build_env(self, slot: CodexSlot) -> dict[str, str]:

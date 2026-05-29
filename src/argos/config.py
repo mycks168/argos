@@ -47,11 +47,23 @@ class Settings:
     audio_output_card: str
     audio_output_volume: int
     audio_sample_rate: int
+    lcd_enabled: bool
+    lcd_width: int
+    lcd_height: int
+    lcd_x_offset: int
+    lcd_y_offset: int
+    lcd_dc_pin: str
+    lcd_cs_pin: str
+    lcd_reset_pin: str
+    lcd_baudrate: int
+    lcd_font_path: str
+    lcd_font_size: int
     ptt_gpio: int
     silence_rms_threshold: float
     dry_run: bool
     codex_slots: tuple[CodexSlot, ...]
     codex_sandbox: str
+    codex_bypass_sandbox: bool
     codex_approval_policy: str
     codex_extra_args: tuple[str, ...]
     codex_progress_voice: bool = True
@@ -110,11 +122,23 @@ def load_settings() -> Settings:
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
+        lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
+        lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),
+        lcd_height=int(os.environ.get("ARGOS_LCD_HEIGHT", "284")),
+        lcd_x_offset=int(os.environ.get("ARGOS_LCD_X_OFFSET", "82")),
+        lcd_y_offset=int(os.environ.get("ARGOS_LCD_Y_OFFSET", "18")),
+        lcd_dc_pin=os.environ.get("ARGOS_LCD_DC_PIN", "D25"),
+        lcd_cs_pin=os.environ.get("ARGOS_LCD_CS_PIN", "D5"),
+        lcd_reset_pin=os.environ.get("ARGOS_LCD_RESET_PIN", "D24"),
+        lcd_baudrate=int(os.environ.get("ARGOS_LCD_BAUDRATE", "4000000")),
+        lcd_font_path=os.environ.get("ARGOS_LCD_FONT_PATH", ""),
+        lcd_font_size=int(os.environ.get("ARGOS_LCD_FONT_SIZE", "16")),
         ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_slots=_load_codex_slots(),
         codex_sandbox=os.environ.get("ARGOS_CODEX_SANDBOX", "workspace-write"),
+        codex_bypass_sandbox=_bool_env("ARGOS_CODEX_BYPASS_SANDBOX", False),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),
         codex_extra_args=extra_args,
         codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),

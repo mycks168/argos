@@ -17,11 +17,23 @@ def _settings():
         audio_output_card="",
         audio_output_volume=90,
         audio_sample_rate=16000,
+        lcd_enabled=False,
+        lcd_width=76,
+        lcd_height=284,
+        lcd_x_offset=82,
+        lcd_y_offset=18,
+        lcd_dc_pin="D25",
+        lcd_cs_pin="D5",
+        lcd_reset_pin="D24",
+        lcd_baudrate=4_000_000,
+        lcd_font_path="",
+        lcd_font_size=16,
         ptt_gpio=17,
         silence_rms_threshold=10,
         dry_run=True,
         codex_slots=(CodexSlot("作業", "/tmp", "", ""),),
         codex_sandbox="workspace-write",
+        codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=(),
     )
@@ -206,6 +218,18 @@ def test_ptt_and_status_methods(monkeypatch, capsys):
     assert app._recorder.cancelled
     assert app._audio.cancelled
     assert "次に切り替えました" in capsys.readouterr().out
+
+
+def test_status_message_is_shown_on_lcd(monkeypatch, capsys):
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    shown = []
+    app._lcd = type("FakeLcd", (), {"show_text": lambda self, text: shown.append(text)})()
+
+    app._speak_status("表示テスト")
+
+    assert shown == ["表示テスト"]
+    assert "表示テスト" in capsys.readouterr().out
 
 
 def test_busy_button_press_cancels_audio_and_starts_recording(monkeypatch):

@@ -20,11 +20,23 @@ def _settings(tmp_path):
         audio_output_card="",
         audio_output_volume=90,
         audio_sample_rate=16000,
+        lcd_enabled=False,
+        lcd_width=76,
+        lcd_height=284,
+        lcd_x_offset=82,
+        lcd_y_offset=18,
+        lcd_dc_pin="D25",
+        lcd_cs_pin="D5",
+        lcd_reset_pin="D24",
+        lcd_baudrate=4_000_000,
+        lcd_font_path="",
+        lcd_font_size=16,
         ptt_gpio=17,
         silence_rms_threshold=200,
         dry_run=True,
         codex_slots=(CodexSlot("作業", str(tmp_path), str(tmp_path / "codex-home"), "gpt-5"),),
         codex_sandbox="workspace-write",
+        codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=("--json",),
     )
@@ -290,3 +302,17 @@ def test_slot_switch_and_reset(tmp_path):
     assert client.current_name == "一番"
     assert client.next_slot() == "二番"
     client.reset_current()
+
+
+def test_bypass_sandbox_adds_codex_bypass_flag(tmp_path):
+    settings = Settings(**{**_settings(tmp_path).__dict__, "codex_bypass_sandbox": True})
+    client = CodexCliClient(settings)
+    conversation = client._conversations[0]
+
+    first_command = client._build_command(conversation, "/tmp/out.txt")
+    conversation.session_id = "019e7232-e37d-7ab1-a2f4-9d0d70dfe633"
+    resume_command = client._build_command(conversation, "/tmp/out.txt")
+
+    assert "--dangerously-bypass-approvals-and-sandbox" in first_command
+    assert "--dangerously-bypass-approvals-and-sandbox" in resume_command
+    assert "-s" not in first_command

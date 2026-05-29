@@ -59,6 +59,8 @@ sudo systemctl restart argos.service
 
 Codex の応答は `--json` の JSONL イベントから取得し、句読点や改行で分割して VOICEVOX に順次投入します。キャンセル時は再生中の音声と未再生チャンクを破棄します。
 
+`ARGOS_LCD_ENABLED=true` の場合、読み上げる文を ST7789 LCD にも表示します。日本語表示には IPA 系フォントを使います。
+
 既定の区切り文字:
 
 - `。`
@@ -77,10 +79,15 @@ Codex を呼び出した直後は、作業を始めたことを短い音声で�
 設定:
 
 ```text
+ARGOS_CODEX_BYPASS_SANDBOX=false
 ARGOS_CODEX_PROGRESS_VOICE=true
 ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS=8
 ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS=20
+ARGOS_LCD_ENABLED=false
+ARGOS_LCD_FONT_PATH=/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf
 ```
+
+GPIO や SPI など、Codex がホストのデバイスを直接触る必要がある場合は `ARGOS_CODEX_BYPASS_SANDBOX=true` にします。この場合、Codex CLI に `--dangerously-bypass-approvals-and-sandbox` を渡します。
 
 ## 必要な外部サービス
 

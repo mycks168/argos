@@ -52,3 +52,29 @@ def test_load_codex_progress_settings(monkeypatch):
     assert settings.codex_progress_voice is False
     assert settings.codex_progress_first_delay_seconds == 3
     assert settings.codex_progress_interval_seconds == 7
+
+
+def test_load_codex_bypass_sandbox(monkeypatch):
+    monkeypatch.setenv("ARGOS_CODEX_BYPASS_SANDBOX", "true")
+
+    settings = load_settings()
+
+    assert settings.codex_bypass_sandbox is True
+
+
+def test_load_lcd_settings(monkeypatch):
+    monkeypatch.setenv("ARGOS_LCD_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_LCD_WIDTH", "76")
+    monkeypatch.setenv("ARGOS_LCD_HEIGHT", "284")
+    monkeypatch.setenv("ARGOS_LCD_X_OFFSET", "82")
+    monkeypatch.setenv("ARGOS_LCD_Y_OFFSET", "18")
+    monkeypatch.setenv("ARGOS_LCD_FONT_PATH", "/tmp/ipag.ttf")
+
+    settings = load_settings()
+
+    assert settings.lcd_enabled is True
+    assert settings.lcd_width == 76
+    assert settings.lcd_height == 284
+    assert settings.lcd_x_offset == 82
+    assert settings.lcd_y_offset == 18
+    assert settings.lcd_font_path == "/tmp/ipag.ttf"

@@ -14,6 +14,7 @@ from argos.config import Settings
 from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
+from argos.hardware.lcd import St7789TextDisplay
 from argos.services.codex.cli import CodexCliClient
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
@@ -93,6 +94,7 @@ class ArgosApp:
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
         self._voicevox = VoicevoxClient(settings.voicevox_url, settings.voicevox_speaker, settings.voicevox_sample_rate)
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
+        self._lcd = self._create_lcd_display(settings)
         self._button = ButtonPtt(
             on_press=self._on_ptt_press,
             on_release=self._on_ptt_release,
@@ -104,6 +106,16 @@ class ArgosApp:
         self._cancel_generation = 0
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
+
+    def _create_lcd_display(self, settings: Settings) -> St7789TextDisplay | None:
+        """設定に応じてLCD表示器を初期化する。"""
+        if not settings.lcd_enabled:
+            return None
+        try:
+            return St7789TextDisplay.create(settings)
+        except Exception:
+            log.exception("LCD表示を初期化できないため無効化します")
+            return None
 
     def run(self) -> None:
         """ARGOS を起動し、終了シグナルまで待機する。"""
@@ -211,6 +223,7 @@ class ArgosApp:
         if self._settings.dry_run:
             print(f"ARGOS> {text}")
             return
+        self._show_lcd(text)
         normalized = self._tts_filter.normalize(text)
         wav_data = self._voicevox.synthesize(normalized)
         self._audio.play_wav(wav_data)
@@ -287,6 +300,7 @@ class ArgosApp:
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return
+            self._show_lcd(chunk)
             normalized = self._tts_filter.normalize(chunk)
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
@@ -311,6 +325,7 @@ class ArgosApp:
     def _speak_status(self, text: str) -> None:
         """短い状態メッセージを読み上げる。"""
         log.info("状態通知: %s", text)
+        self._show_lcd(text)
         if self._settings.dry_run:
             print(f"ARGOS> {text}")
             return
@@ -319,6 +334,15 @@ class ArgosApp:
             self._audio.play_wav(self._voicevox.synthesize(normalized))
         except Exception:
             log.exception("状態通知の読み上げに失敗しました")
+
+    def _show_lcd(self, text: str) -> None:
+        """LCDが有効ならテキストを表示する。"""
+        if self._lcd is None:
+            return
+        try:
+            self._lcd.show_text(text)
+        except Exception:
+            log.exception("LCD表示に失敗しました")
 
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""
