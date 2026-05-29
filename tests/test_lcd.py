@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from argos.config import Settings, CodexSlot
-from argos.hardware.lcd import St7789TextDisplay, load_ipa_font, render_text_image, wrap_text
+from argos.hardware.lcd import St7789TextDisplay, disable_color_inversion, load_ipa_font, render_text_image, wrap_text
 
 
 def _settings():
@@ -93,3 +93,13 @@ def test_text_display_keeps_recent_history():
 
     assert display._lines[-1] == "五行目です"
     assert len(display._lines) <= 3
+
+
+def test_disable_color_inversion_sends_st7789_command():
+    """黒背景を正しく出すため色反転OFFコマンドを送る。"""
+    calls = []
+    display = type("FakeSt7789", (), {"write": lambda self, command, data: calls.append((command, data))})()
+
+    disable_color_inversion(display)
+
+    assert calls == [(0x20, None)]

@@ -19,6 +19,7 @@ IPA_FONT_CANDIDATES = (
     "/usr/share/fonts/opentype/ipafont-gothic/ipag.ttf",
     "/usr/share/fonts/opentype/ipaexfont-gothic/ipaexg.ttf",
 )
+ST7789_INVERSION_OFF = 0x20
 
 
 class Display(Protocol):
@@ -83,7 +84,7 @@ def create_st7789_display(settings: Settings) -> Display:
     cs = digitalio.DigitalInOut(_board_pin(board, settings.lcd_cs_pin))
     dc = digitalio.DigitalInOut(_board_pin(board, settings.lcd_dc_pin))
     reset = digitalio.DigitalInOut(_board_pin(board, settings.lcd_reset_pin))
-    return st7789.ST7789(
+    display = st7789.ST7789(
         spi,
         cs=cs,
         dc=dc,
@@ -94,6 +95,13 @@ def create_st7789_display(settings: Settings) -> Display:
         y_offset=settings.lcd_y_offset,
         baudrate=settings.lcd_baudrate,
     )
+    disable_color_inversion(display)
+    return display
+
+
+def disable_color_inversion(display: object) -> None:
+    """ST7789 の色反転を無効にして黒背景を黒く表示する。"""
+    display.write(ST7789_INVERSION_OFF, None)
 
 
 def render_text_image(text: str, settings: Settings, font: ImageFont.FreeTypeFont) -> Image.Image:
