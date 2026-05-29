@@ -40,3 +40,15 @@ def test_load_tts_delimiters(monkeypatch):
     settings = load_settings()
 
     assert settings.tts_delimiters == "。！？、"
+
+
+def test_load_codex_progress_settings(monkeypatch):
+    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
+    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")
+    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "7")
+
+    settings = load_settings()
+
+    assert settings.codex_progress_voice is False
+    assert settings.codex_progress_first_delay_seconds == 3
+    assert settings.codex_progress_interval_seconds == 7

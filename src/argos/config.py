@@ -54,6 +54,9 @@ class Settings:
     codex_sandbox: str
     codex_approval_policy: str
     codex_extra_args: tuple[str, ...]
+    codex_progress_voice: bool = True
+    codex_progress_first_delay_seconds: float = 8.0
+    codex_progress_interval_seconds: float = 20.0
 
 
 def _load_codex_slots() -> tuple[CodexSlot, ...]:
@@ -114,6 +117,13 @@ def load_settings() -> Settings:
         codex_sandbox=os.environ.get("ARGOS_CODEX_SANDBOX", "workspace-write"),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),
         codex_extra_args=extra_args,
+        codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
+        codex_progress_first_delay_seconds=float(
+            os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")
+        ),
+        codex_progress_interval_seconds=float(
+            os.environ.get("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "20")
+        ),
     )
 
 

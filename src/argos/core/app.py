@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import random
 import signal
 import threading
 import time
@@ -21,6 +22,63 @@ from argos.services.tts.voicevox import VoicevoxClient
 
 
 log = logging.getLogger(__name__)
+
+
+CODEX_PROGRESS_START_PHRASES = (
+    "わかった。今やってるから、少し待ってね。",
+    "受け取ったよ。すぐ始めるね。",
+    "了解。確認しながら進めるね。",
+    "今からやってみるね。ちょっと待ってて。",
+)
+
+CODEX_PROGRESS_WAIT_PHRASES = (
+    "ちょっと時間かかってるけど、続けてるよ。",
+    "もう少しだけ待ってね。今も確認してるよ。",
+    "まだ進めてる途中だよ。少し待っててね。",
+    "時間かかってるけど、止まってないよ。",
+)
+
+
+class CodexProgressAnnouncer:
+    """Codex 待機中の進捗音声を管理する。"""
+
+    def __init__(
+        self,
+        speak_status,
+        first_delay_seconds: float,
+        interval_seconds: float,
+    ) -> None:
+        """読み上げ関数と通知間隔を初期化する。"""
+        self._speak_status = speak_status
+        self._first_delay_seconds = first_delay_seconds
+        self._interval_seconds = interval_seconds
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
+        self._speak_random(CODEX_PROGRESS_START_PHRASES)
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """待機通知を停止する。"""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1)
+
+    def _run(self) -> None:
+        """一定時間ごとに待機中メッセージを読み上げる。"""
+        if self._stop.wait(self._first_delay_seconds):
+            return
+        while not self._stop.is_set():
+            self._speak_random(CODEX_PROGRESS_WAIT_PHRASES)
+            if self._stop.wait(self._interval_seconds):
+                return
+
+    def _speak_random(self, phrases: tuple[str, ...]) -> None:
+        """候補からランダムに1つ読み上げる。"""
+        self._speak_status(random.choice(phrases))
 
 
 class ArgosApp:
@@ -136,8 +194,15 @@ class ArgosApp:
     def _handle_text(self, text: str) -> None:
         """テキストを Codex に送り、応答を読み上げる。"""
         log.info("ユーザ発話: %s", text)
-        response = self._speak_response_stream(self._codex.ask_stream(text))
-        log.info("Codex 応答: %s", response[:300])
+        announcer = self._start_codex_progress()
+        try:
+            response = self._speak_response_stream(
+                self._stop_progress_on_first_delta(self._codex.ask_stream(text), announcer)
+            )
+            log.info("Codex 応答: %s", response[:300])
+        finally:
+            if announcer is not None:
+                announcer.stop()
 
     def _speak_response(self, text: str) -> None:
         """Codex 応答を tts-filter と VOICEVOX に通して再生する。"""
@@ -187,6 +252,31 @@ class ArgosApp:
         tts_queue.put(None)
         worker.join(timeout=300)
         return full_response
+
+    def _start_codex_progress(self) -> CodexProgressAnnouncer | None:
+        """設定に応じてCodex待機中の進捗音声を開始する。"""
+        if not self._settings.codex_progress_voice:
+            return None
+        announcer = CodexProgressAnnouncer(
+            speak_status=self._speak_status,
+            first_delay_seconds=self._settings.codex_progress_first_delay_seconds,
+            interval_seconds=self._settings.codex_progress_interval_seconds,
+        )
+        announcer.start()
+        return announcer
+
+    def _stop_progress_on_first_delta(
+        self,
+        deltas: Iterable[str],
+        announcer: CodexProgressAnnouncer | None,
+    ) -> Iterable[str]:
+        """Codex本文が届いた時点で進捗音声を止める。"""
+        stopped = False
+        for delta in deltas:
+            if not stopped and announcer is not None:
+                announcer.stop()
+                stopped = True
+            yield delta
 
     def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int) -> None:
         """VOICEVOX チャンクを順に合成して再生する。"""

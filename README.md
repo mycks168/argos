@@ -68,6 +68,16 @@ Codex の応答は `--json` の JSONL イベントから取得し、句読点や
 
 Codex CLI が途中イベントを出した場合は、その差分から順に処理します。CLI 側が最終回答までイベントを出さない場合でも、最終回答は上記の区切りで分割して読み上げます。
 
+Codex を呼び出した直後は、作業を始めたことを短い音声で通知します。応答が遅い場合は、待機中であることを一定間隔で追加通知します。通知文はAI名を出さず、「今やってるから、少し待ってね」のように音声で聞きやすい親しみのある言い方を複数候補からランダムに選びます。
+
+設定:
+
+```text
+ARGOS_CODEX_PROGRESS_VOICE=true
+ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS=8
+ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS=20
+```
+
 ## 必要な外部サービス
 
 - stt-gateway: `POST /transcribe`

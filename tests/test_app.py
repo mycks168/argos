@@ -1,5 +1,5 @@
 from argos.config import CodexSlot, Settings
-from argos.core.app import ArgosApp
+from argos.core.app import ArgosApp, CodexProgressAnnouncer
 
 
 def _settings():
@@ -110,17 +110,21 @@ def _patch_app(monkeypatch):
 
 def test_handle_text_dry_run(monkeypatch, capsys):
     _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.random.choice", lambda phrases: phrases[0])
     app = ArgosApp(_settings())
 
     app._handle_text("依頼")
 
     assert app._codex.asked == ["依頼"]
-    assert "ARGOS> 応答" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "今やってるから、少し待ってね" in output
+    assert "ARGOS> 応答" in output
 
 
 def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
     _patch_app(monkeypatch)
     monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    monkeypatch.setattr("argos.core.app.random.choice", lambda phrases: phrases[0])
     app = ArgosApp(_settings())
 
     app._process_recording()
@@ -128,6 +132,33 @@ def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
     assert app._codex.asked == ["こんにちは"]
     assert app._button.state.value == "idle"
     assert "ARGOS> 応答" in capsys.readouterr().out
+
+
+def test_codex_progress_announcer_speaks_start_and_wait(monkeypatch):
+    spoken = []
+    monkeypatch.setattr("argos.core.app.random.choice", lambda phrases: phrases[0])
+    announcer = CodexProgressAnnouncer(
+        speak_status=spoken.append,
+        first_delay_seconds=0.01,
+        interval_seconds=10,
+    )
+
+    announcer.start()
+    import time
+
+    time.sleep(0.05)
+    announcer.stop()
+
+    assert spoken[0] == "わかった。今やってるから、少し待ってね。"
+    assert spoken[1] == "ちょっと時間かかってるけど、続けてるよ。"
+
+
+def test_codex_progress_can_be_disabled(monkeypatch):
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "codex_progress_voice": False})
+    app = ArgosApp(settings)
+
+    assert app._start_codex_progress() is None
 
 
 def test_ptt_and_status_methods(monkeypatch, capsys):
