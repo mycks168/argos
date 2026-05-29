@@ -37,6 +37,7 @@ class St7789TextDisplay:
         self._settings = settings
         self._font = font
         self._lock = threading.Lock()
+        self._lines: list[str] = []
 
     @classmethod
     def create(cls, settings: Settings) -> "St7789TextDisplay":
@@ -49,8 +50,12 @@ class St7789TextDisplay:
         """日本語テキストをLCDへ表示する。"""
         if not text:
             return
-        image = render_text_image(text, self._settings, self._font)
         with self._lock:
+            logical_size = (self._settings.lcd_height, self._settings.lcd_width)
+            max_lines = max_display_lines(logical_size, self._font)
+            self._lines.extend(wrap_text(text, self._font, logical_size[0] - 12))
+            self._lines = self._lines[-max_lines:]
+            image = render_lines_image(self._lines, self._settings, self._font)
             self._display.image(image, rotation=0)
 
 
@@ -94,15 +99,25 @@ def create_st7789_display(settings: Settings) -> Display:
 def render_text_image(text: str, settings: Settings, font: ImageFont.FreeTypeFont) -> Image.Image:
     """LCDへ送る横向きテキスト画像を作成する。"""
     logical_size = (settings.lcd_height, settings.lcd_width)
+    lines = wrap_text(text, font, logical_size[0] - 12)
+    return render_lines_image(lines[-max_display_lines(logical_size, font):], settings, font)
+
+
+def render_lines_image(lines: list[str], settings: Settings, font: ImageFont.FreeTypeFont) -> Image.Image:
+    """複数行の履歴をLCDへ送る横向き画像として作成する。"""
+    logical_size = (settings.lcd_height, settings.lcd_width)
     image = Image.new("RGB", logical_size, "#101820")
     draw = ImageDraw.Draw(image)
     draw.rectangle((0, 0, logical_size[0] - 1, logical_size[1] - 1), outline="#f4d35e")
-    lines = wrap_text(text, font, logical_size[0] - 12)
     line_height = font.size + 3
-    max_lines = max(1, (logical_size[1] - 10) // line_height)
-    for index, line in enumerate(lines[:max_lines]):
+    for index, line in enumerate(lines):
         draw.text((6, 5 + index * line_height), line, fill="#f8f9fa", font=font)
     return image.rotate(90, expand=True)
+
+
+def max_display_lines(logical_size: tuple[int, int], font: ImageFont.FreeTypeFont) -> int:
+    """LCDに表示できる最大行数を返す。"""
+    return max(1, (logical_size[1] - 10) // (font.size + 3))
 
 
 def wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:

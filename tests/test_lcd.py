@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from argos.config import Settings, CodexSlot
-from argos.hardware.lcd import load_ipa_font, render_text_image, wrap_text
+from argos.hardware.lcd import St7789TextDisplay, load_ipa_font, render_text_image, wrap_text
 
 
 def _settings():
@@ -65,3 +65,31 @@ def test_render_text_image_returns_physical_lcd_size():
     image = render_text_image("こんにちは、ARGOSです", settings, font)
 
     assert image.size == (76, 284)
+
+
+class FakeDisplay:
+    """LCDへ送られた画像を記録する。"""
+
+    def __init__(self):
+        """送信履歴を初期化する。"""
+        self.images = []
+
+    def image(self, image, rotation=0):
+        """画像と回転指定を保存する。"""
+        self.images.append((image, rotation))
+
+
+def test_text_display_keeps_recent_history():
+    """複数回の表示で直近行だけを履歴として保持する。"""
+    settings = _settings()
+    font = load_ipa_font("", settings.lcd_font_size)
+    display = St7789TextDisplay(FakeDisplay(), settings, font)
+
+    display.show_text("一行目です")
+    display.show_text("二行目です")
+    display.show_text("三行目です")
+    display.show_text("四行目です")
+    display.show_text("五行目です")
+
+    assert display._lines[-1] == "五行目です"
+    assert len(display._lines) <= 3
