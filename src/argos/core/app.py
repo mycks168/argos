@@ -65,7 +65,7 @@ class CodexProgressAnnouncer:
         """待機通知を停止する。"""
         self._stop.set()
         if self._thread is not None:
-            self._thread.join(timeout=1)
+            self._thread.join()
 
     def _run(self) -> None:
         """一定時間ごとに待機中メッセージを読み上げる。"""

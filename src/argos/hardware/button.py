@@ -57,16 +57,19 @@ class ButtonPtt:
 
     def handle_press(self) -> None:
         """物理ボタン押下イベントを処理する。"""
+        callback = None
         with self._lock:
             self._press_started_at = time.monotonic()
             if self._state == PttState.BUSY:
-                self._state = PttState.IDLE
-                self._on_cancel()
+                self._state = PttState.LISTENING
+                callback = self._on_press
+            elif self._state != PttState.IDLE:
                 return
-            if self._state != PttState.IDLE:
-                return
-            self._state = PttState.LISTENING
-        self._on_press()
+            else:
+                self._state = PttState.LISTENING
+                callback = self._on_press
+        if callback:
+            callback()
 
     def handle_release(self) -> None:
         """物理ボタン解放イベントを処理する。"""
@@ -89,4 +92,3 @@ class ButtonPtt:
                 callback = self._on_release
         if callback:
             callback()
-

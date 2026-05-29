@@ -153,6 +153,39 @@ def test_codex_progress_announcer_speaks_start_and_wait(monkeypatch):
     assert spoken[1] == "ちょっと時間かかってるけど、続けてるよ。"
 
 
+def test_codex_progress_stop_waits_for_current_status(monkeypatch):
+    import threading
+    import time
+
+    calls = []
+    speaking = threading.Event()
+    allow_finish = threading.Event()
+    monkeypatch.setattr("argos.core.app.random.choice", lambda phrases: phrases[0])
+
+    def speak_status(text):
+        calls.append(text)
+        if len(calls) == 2:
+            speaking.set()
+            allow_finish.wait(timeout=1)
+
+    announcer = CodexProgressAnnouncer(
+        speak_status=speak_status,
+        first_delay_seconds=0.01,
+        interval_seconds=10,
+    )
+
+    announcer.start()
+    assert speaking.wait(timeout=1)
+    stopper = threading.Thread(target=announcer.stop)
+    stopper.start()
+    time.sleep(0.03)
+
+    assert stopper.is_alive()
+    allow_finish.set()
+    stopper.join(timeout=1)
+    assert not stopper.is_alive()
+
+
 def test_codex_progress_can_be_disabled(monkeypatch):
     _patch_app(monkeypatch)
     settings = Settings(**{**_settings().__dict__, "codex_progress_voice": False})
@@ -173,6 +206,18 @@ def test_ptt_and_status_methods(monkeypatch, capsys):
     assert app._recorder.cancelled
     assert app._audio.cancelled
     assert "次に切り替えました" in capsys.readouterr().out
+
+
+def test_busy_button_press_cancels_audio_and_starts_recording(monkeypatch):
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._button.mark_busy()
+    app._button.handle_press()
+
+    assert app._audio.cancelled
+    assert app._recorder.started
+    assert app._button.state.value == "listening"
 
 
 def test_stream_response_splits_tts_chunks(monkeypatch):

@@ -39,7 +39,7 @@ def test_double_click_switches_without_recording(monkeypatch):
     assert button.state == PttState.IDLE
 
 
-def test_busy_press_cancels():
+def test_busy_press_starts_listening():
     events = []
     button = ButtonPtt(
         on_press=lambda: events.append("press"),
@@ -51,6 +51,24 @@ def test_busy_press_cancels():
     button.mark_busy()
     button.handle_press()
 
-    assert events == ["cancel"]
-    assert button.state == PttState.IDLE
+    assert events == ["press"]
+    assert button.state == PttState.LISTENING
 
+
+def test_busy_press_can_continue_to_recording_release(monkeypatch):
+    events = []
+    times = iter([20.0, 21.0])
+    monkeypatch.setattr("argos.hardware.button.time.monotonic", lambda: next(times))
+    button = ButtonPtt(
+        on_press=lambda: events.append("press"),
+        on_release=lambda: events.append("release"),
+        on_double_click=lambda: events.append("double"),
+        on_cancel=lambda: events.append("cancel"),
+    )
+
+    button.mark_busy()
+    button.handle_press()
+    button.handle_release()
+
+    assert events == ["press", "release"]
+    assert button.state == PttState.BUSY
