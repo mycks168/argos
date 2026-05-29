@@ -156,7 +156,7 @@ class ArgosApp:
 
     def _on_cancel(self) -> None:
         """処理中の音声入出力をキャンセルする。"""
-        log.info("キャンセル要求")
+        log.info("キャンセル要求: 録音破棄と再生停止")
         self._recorder.cancel()
         self._cancel_active_audio()
 

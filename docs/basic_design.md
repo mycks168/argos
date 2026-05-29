@@ -65,12 +65,16 @@ codex exec --skip-git-repo-check -C <cwd> -s <sandbox> -o <output> -
 同一スロットの継続発話:
 
 ```bash
-codex exec resume --last --all --skip-git-repo-check -o <output> -
+codex exec resume --all --skip-git-repo-check -o <output> <session_id> -
 ```
+
+ARGOS は Codex CLI の `session_meta.payload.id` を読み取り、`CODEX_HOME` 直下の `argos-sessions.json` にスロットごとに保存する。Codex CLI の標準出力に `session_meta` が出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルから同じ `cwd` のセッションIDを補完して保存する。サービス再起動後は保存済みのセッションIDを指定して `codex exec resume` を実行する。保存済みIDがない実行中プロセス内の継続発話では、従来どおり `--last --all` を使う。
+
+起動時と Codex CLI 実行時には、スロット名、セッション保存先、`CODEX_HOME`、実行コマンド、保存済みセッションIDの有無をログに出す。Codex CLI から新しいセッションIDを受け取った場合、またはセッションファイルから補完した場合も、保存先と合わせてログに出す。
 
 Codex が質問を返した場合は、その応答を読み上げる。次回の PTT 入力は同じスロットの継続発話として送られるため、音声で回答できる。
 
-`codex exec` には対話版の `-a/--ask-for-approval` は渡さない。初回のみ `-C` と `-s` を指定し、継続時は `codex exec resume` の対応オプションだけを使う。
+`codex exec` には対話版の `-a/--ask-for-approval` は渡さない。初回のみ `-C` と `-s` を指定し、継続時は `codex exec resume` の対応オプションだけを使う。`/reset` ではメモリ上の継続状態と保存済みセッションIDの両方を削除する。
 
 ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`agent_message` または `task_complete` から応答テキストを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
 
@@ -84,9 +88,13 @@ Codex 呼び出し直後は、ARGOS が短い進捗メッセージを読み上�
 - `LISTENING`: PTT 押下中、録音中
 - `BUSY`: STT、Codex、TTS の処理中
 
-短押し2回は録音として扱わず、Codex スロット切替に使う。
+短押し1回は録音を破棄する。短押し2回は録音として扱わず、Codex スロット切替に使う。
 
-`BUSY` 中にPTTを押した場合は、再生中の音声をキャンセルしてすぐ `LISTENING` に遷移する。ユーザがそのまま押し続けると録音を継続し、PTT解放時に通常どおり文字起こしとCodex実行へ進む。
+`BUSY` 中にPTTを押した場合は、再生中の音声をキャンセルしてすぐ `LISTENING` に遷移する。短押しで離した場合は録音を破棄し、TTSキャンセルだけの操作として扱う。ユーザがそのまま押し続けると録音を継続し、PTT解放時に通常どおり文字起こしとCodex実行へ進む。
+
+前回のSTT、Codex、TTS処理が終了したときは、状態がまだ `BUSY` の場合だけ `IDLE` に戻す。処理終了と同じタイミングで次のPTT録音が始まって `LISTENING` になっている場合は、その状態を維持して解放イベントで録音を停止できるようにする。
+
+GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
 
 ## systemd ユニット
 

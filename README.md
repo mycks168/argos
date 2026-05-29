@@ -48,8 +48,12 @@ sudo systemctl restart argos.service
 
 - PTT ON: 録音開始
 - PTT OFF: 録音停止、文字起こし、Codex 実行、読み上げ
+- 短押し1回: 録音を破棄
 - 短押し2回: Codex スロット切替
-- 処理中に押下: 再生中の音声を止め、そのまま録音開始
+- 処理中に短押し: 再生中の音声を止め、録音は破棄
+- 処理中に押し続ける: 再生中の音声を止め、そのまま録音開始
+
+処理中の読み上げを止めて次の録音を始めた場合、前の処理の終了タイミングでは録音中状態を維持し、ボタン解放で録音停止と送信へ進みます。
 
 ## 読み上げ
 
@@ -84,5 +88,7 @@ ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS=20
 - tts-filter: `POST /normalize`
 - VOICEVOX Engine: `POST /audio_query` と `POST /synthesis`
 - Codex CLI: `codex exec` と `codex exec resume`
+
+Codex のセッションIDは `CODEX_HOME/argos-sessions.json` にスロットごとに保存します。`--json` の標準出力にセッションIDが出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルからIDを補完します。サービス再起動後も保存済みIDを使って同じセッションを再開します。`/reset` を入力すると、現在スロットの保存済みIDも削除します。
 
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

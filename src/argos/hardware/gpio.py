@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import queue
 import threading
+import time
 from collections.abc import Callable
 
 
@@ -29,10 +31,15 @@ class GpioPttInput:
                 "GPIO pin factory を初期化できません。`uv sync` で lgpio を導入し、"
                 "必要なら `GPIOZERO_PIN_FACTORY=lgpio uv run argos` で起動してください。"
             ) from exc
-        self._button.when_pressed = self._handle_press
-        self._button.when_released = self._handle_release
         self._on_press = on_press
         self._on_release = on_release
+        self._pin = pin
+        self._events: queue.SimpleQueue[Callable[[], None]] = queue.SimpleQueue()
+        self._last_pressed = bool(self._button.is_pressed)
+        self._poller = threading.Thread(target=self._poll_loop, daemon=True)
+        self._worker = threading.Thread(target=self._dispatch_loop, daemon=True)
+        self._poller.start()
+        self._worker.start()
         threading.Timer(1.5, self._enable).start()
         log.info("GPIO%d を PTT 入力として初期化しました", pin)
 
@@ -49,3 +56,23 @@ class GpioPttInput:
         """gpiozero の解放イベントをアプリへ渡す。"""
         if self._ready:
             self._on_release()
+
+    def _poll_loop(self) -> None:
+        """GPIO状態をポーリングして押下と解放の取り逃がしを減らす。"""
+        while True:
+            pressed = bool(self._button.is_pressed)
+            if self._ready and pressed != self._last_pressed:
+                self._last_pressed = pressed
+                if pressed:
+                    log.info("GPIO%d PTT press edge", self._pin)
+                    self._events.put(self._handle_press)
+                else:
+                    log.info("GPIO%d PTT release edge", self._pin)
+                    self._events.put(self._handle_release)
+            time.sleep(0.02)
+
+    def _dispatch_loop(self) -> None:
+        """GPIOイベントを順番にアプリへ渡す。"""
+        while True:
+            callback = self._events.get()
+            callback()

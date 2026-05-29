@@ -23,7 +23,7 @@ def _settings(tmp_path):
         ptt_gpio=17,
         silence_rms_threshold=200,
         dry_run=True,
-        codex_slots=(CodexSlot("作業", str(tmp_path), "/tmp/codex-home", "gpt-5"),),
+        codex_slots=(CodexSlot("作業", str(tmp_path), str(tmp_path / "codex-home"), "gpt-5"),),
         codex_sandbox="workspace-write",
         codex_approval_policy="on-request",
         codex_extra_args=("--json",),
@@ -56,6 +56,13 @@ def test_ask_starts_and_resumes(monkeypatch, tmp_path):
                 [
                     json.dumps(
                         {
+                            "type": "session_meta",
+                            "payload": {"id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846"},
+                        }
+                    )
+                    + "\n",
+                    json.dumps(
+                        {
                             "type": "event_msg",
                             "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
                         }
@@ -84,6 +91,8 @@ def test_ask_starts_and_resumes(monkeypatch, tmp_path):
     assert calls[0][0][:2] == ["codex", "exec"]
     assert "resume" not in calls[0][0]
     assert calls[1][0][:3] == ["codex", "exec", "resume"]
+    assert "--last" not in calls[1][0]
+    assert "019e71e4-27fb-74d1-82a2-9b0ab58f0846" in calls[1][0]
     assert "-a" not in calls[0][0]
     assert "-C" in calls[0][0]
     assert "-s" in calls[0][0]
@@ -91,7 +100,147 @@ def test_ask_starts_and_resumes(monkeypatch, tmp_path):
     assert "-s" not in calls[1][0]
     assert calls[0][1] == "こんにちは"
     assert calls[0][2] == str(tmp_path)
-    assert calls[0][3]["CODEX_HOME"] == "/tmp/codex-home"
+    assert calls[0][3]["CODEX_HOME"] == str(tmp_path / "codex-home")
+
+
+def test_ask_resumes_persisted_session_after_restart(monkeypatch, tmp_path):
+    calls = []
+
+    class FakeStdin:
+        def __init__(self):
+            self.value = ""
+
+        def write(self, text):
+            self.value += text
+
+        def close(self):
+            pass
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self, command, cwd, env):
+            self.command = command
+            self.stdin = FakeStdin()
+            self.stderr = FakeStderr()
+            self.stdout = iter(
+                [
+                    json.dumps(
+                        {
+                            "type": "session_meta",
+                            "payload": {"id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846"},
+                        }
+                    )
+                    + "\n",
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
+                        }
+                    )
+                    + "\n",
+                ]
+            )
+            self.cwd = cwd
+            self.env = env
+
+        def wait(self, timeout=None):
+            output_file = self.command[self.command.index("-o") + 1]
+            Path(output_file).write_text("応答です", encoding="utf-8")
+            calls.append((self.command, self.stdin.value, self.cwd, self.env))
+            return 0
+
+    def fake_popen(command, stdin, stdout, stderr, text, cwd, env):
+        return FakeProc(command, cwd, env)
+
+    monkeypatch.setattr("argos.services.codex.cli.subprocess.Popen", fake_popen)
+    settings = _settings(tmp_path)
+
+    assert CodexCliClient(settings).ask("初回") == "応答です"
+    assert CodexCliClient(settings).ask("再起動後") == "応答です"
+
+    assert "resume" not in calls[0][0]
+    assert calls[1][0][:3] == ["codex", "exec", "resume"]
+    assert "019e71e4-27fb-74d1-82a2-9b0ab58f0846" in calls[1][0]
+    assert calls[1][1] == "再起動後"
+
+
+def test_ask_saves_session_id_from_session_file(monkeypatch, tmp_path):
+    calls = []
+    session_id = "019e7227-f7ad-74a3-98ee-fb8c5ac4c165"
+
+    class FakeStdin:
+        def __init__(self):
+            self.value = ""
+
+        def write(self, text):
+            self.value += text
+
+        def close(self):
+            pass
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self, command, cwd, env):
+            self.command = command
+            self.stdin = FakeStdin()
+            self.stderr = FakeStderr()
+            self.stdout = iter(
+                [
+                    json.dumps(
+                        {
+                            "type": "event_msg",
+                            "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
+                        }
+                    )
+                    + "\n",
+                ]
+            )
+            self.cwd = cwd
+            self.env = env
+
+        def wait(self, timeout=None):
+            output_file = self.command[self.command.index("-o") + 1]
+            Path(output_file).write_text("応答です", encoding="utf-8")
+            session_file = (
+                Path(self.env["CODEX_HOME"])
+                / "sessions"
+                / "2026"
+                / "05"
+                / "29"
+                / f"rollout-2026-05-29T14-14-42-{session_id}.jsonl"
+            )
+            session_file.parent.mkdir(parents=True, exist_ok=True)
+            session_file.write_text(
+                json.dumps(
+                    {
+                        "type": "session_meta",
+                        "payload": {"id": session_id, "cwd": self.cwd, "originator": "codex_exec"},
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            calls.append((self.command, self.stdin.value, self.cwd, self.env))
+            return 0
+
+    def fake_popen(command, stdin, stdout, stderr, text, cwd, env):
+        return FakeProc(command, cwd, env)
+
+    monkeypatch.setattr("argos.services.codex.cli.subprocess.Popen", fake_popen)
+    settings = _settings(tmp_path)
+
+    assert CodexCliClient(settings).ask("初回") == "応答です"
+    assert CodexCliClient(settings).ask("再起動後") == "応答です"
+
+    assert "resume" not in calls[0][0]
+    assert calls[1][0][:3] == ["codex", "exec", "resume"]
+    assert session_id in calls[1][0]
 
 
 def test_ask_raises_on_codex_error(monkeypatch, tmp_path):
@@ -131,8 +280,8 @@ def test_slot_switch_and_reset(tmp_path):
         **{
             **settings.__dict__,
             "codex_slots": (
-                CodexSlot("一番", str(tmp_path), "", ""),
-                CodexSlot("二番", str(tmp_path), "", ""),
+                CodexSlot("一番", str(tmp_path), str(tmp_path / "home-a"), ""),
+                CodexSlot("二番", str(tmp_path), str(tmp_path / "home-b"), ""),
             ),
         }
     )

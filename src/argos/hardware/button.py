@@ -51,9 +51,10 @@ class ButtonPtt:
             self._state = PttState.BUSY
 
     def mark_idle(self) -> None:
-        """待機状態へ戻す。"""
+        """処理中なら待機状態へ戻す。"""
         with self._lock:
-            self._state = PttState.IDLE
+            if self._state == PttState.BUSY:
+                self._state = PttState.IDLE
 
     def handle_press(self) -> None:
         """物理ボタン押下イベントを処理する。"""
@@ -73,6 +74,7 @@ class ButtonPtt:
 
     def handle_release(self) -> None:
         """物理ボタン解放イベントを処理する。"""
+        callbacks = []
         with self._lock:
             if self._state != PttState.LISTENING:
                 return
@@ -81,14 +83,14 @@ class ButtonPtt:
             if duration < DOUBLE_CLICK_MAX_PRESS_SEC:
                 gap = now - self._last_quick_release_at
                 self._state = PttState.IDLE
+                callbacks.append(self._on_cancel)
                 if gap < DOUBLE_CLICK_MAX_GAP_SEC:
                     self._last_quick_release_at = 0.0
-                    callback = self._on_double_click
+                    callbacks.append(self._on_double_click)
                 else:
                     self._last_quick_release_at = now
-                    callback = None
             else:
                 self._state = PttState.BUSY
-                callback = self._on_release
-        if callback:
+                callbacks.append(self._on_release)
+        for callback in callbacks:
             callback()

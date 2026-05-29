@@ -47,6 +47,7 @@ class Recorder:
     def start(self) -> None:
         """録音を開始する。"""
         if self.is_recording:
+            log.warning("録音開始をスキップしました: 既に arecord が動作中です")
             return
         Path(WAV_PATH).parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -102,7 +103,9 @@ class Recorder:
         """録音を破棄して停止する。"""
         proc = self._proc
         if proc is None:
+            log.info("録音キャンセル: 動作中の arecord はありません")
             return
+        log.info("録音キャンセル: arecord を停止します")
         try:
             proc.kill()
             proc.wait(timeout=2)
