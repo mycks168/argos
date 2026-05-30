@@ -7,8 +7,12 @@ if pgrep -f "[c]hromium.*--kiosk.*http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}
 fi
 
 exec chromium \
-  --user-data-dir="${HOME}/.config/argos-dashboard-chromium" \
+  --user-data-dir="${HOME}/.config/argos-dashboard-chromium-kiosk" \
   --password-store=basic \
+  --lang=ja \
+  --disable-extensions \
+  --disable-features=Translate,TranslateUI \
+  --disable-translate \
   --kiosk \
   --noerrdialogs \
   --disable-infobars \

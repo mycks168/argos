@@ -11,8 +11,8 @@
       background: #070b0f;
       color: #edf3f7;
     }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; background: #070b0f; overflow: hidden; }
+    *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
+    body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
     .dashboard {
       display: grid;
       grid-template-columns: minmax(250px, 0.82fr) minmax(660px, 2fr) minmax(320px, 1fr);
@@ -87,6 +87,8 @@
     const notifications = document.getElementById("notifications");
     const status = document.getElementById("status");
     const statusLabel = document.getElementById("status-label");
+    let previousMessages = "";
+    let previousNotifications = "";
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -99,13 +101,19 @@
       status.dataset.code = state.status.code;
       statusLabel.textContent = state.status.label;
       const recentMessages = state.messages.slice(-6);
-      messages.innerHTML = recentMessages.length ? recentMessages.map(item => `
+      const nextMessages = JSON.stringify(recentMessages);
+      if (nextMessages !== previousMessages) {
+        messages.innerHTML = recentMessages.length ? recentMessages.map(item => `
         <article class="message" data-role="${escapeHtml(item.role)}">
           <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"} ${item.streaming ? "..." : ""}</div>
           <div class="text">${escapeHtml(item.text)}</div>
         </article>`).join("") : `<div class="empty">会話待機中</div>`;
+        previousMessages = nextMessages;
+      }
       const recentNotices = state.notifications.slice(-4).reverse();
-      notifications.innerHTML = recentNotices.length ? recentNotices.map(item => `
+      const nextNotifications = JSON.stringify(recentNotices);
+      if (nextNotifications !== previousNotifications) {
+        notifications.innerHTML = recentNotices.length ? recentNotices.map(item => `
         <article class="notice" data-priority="${escapeHtml(item.priority)}">
           <div class="meta">${escapeHtml(item.source || "INFO")}</div>
           ${item.link_url
@@ -114,6 +122,8 @@
           ${item.text ? `<div class="notice-text">${escapeHtml(item.text)}</div>` : ""}
           ${item.image_url ? `<img class="notice-image" src="${escapeHtml(item.image_url)}" alt="">` : ""}
         </article>`).join("") : `<div class="empty">新しい通知はありません</div>`;
+        previousNotifications = nextNotifications;
+      }
     }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});

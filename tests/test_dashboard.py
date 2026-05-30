@@ -81,6 +81,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         with urlopen(base_url + "/", timeout=2) as response:
             html = response.read().decode("utf-8")
         assert "ARGOS Dashboard" in html
+        assert "cursor: none" in html
+        assert "cursor: none !important" in html
+        assert "nextNotifications !== previousNotifications" in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

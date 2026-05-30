@@ -1,3 +1,4 @@
+import json
 from configparser import ConfigParser
 from pathlib import Path
 
@@ -28,3 +29,20 @@ def test_argos_service_is_enabled_for_system_boot():
     assert unit["Unit"]["After"] == "network-online.target sound.target"
     assert unit["Service"]["Restart"] == "on-failure"
     assert unit["Install"]["WantedBy"] == "multi-user.target"
+
+
+def test_dashboard_kiosk_disables_translation_ui():
+    """キオスク画面ではChromiumの翻訳UIを表示しない。"""
+    script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
+
+    assert "--lang=ja" in script
+    assert "--disable-extensions" in script
+    assert "--disable-features=Translate,TranslateUI" in script
+    assert "--disable-translate" in script
+
+
+def test_dashboard_chromium_policy_disables_translation():
+    """Chromium管理ポリシーで翻訳バーを無効化する。"""
+    policy_path = Path(__file__).parents[1] / "chromium" / "argos-dashboard.json"
+
+    assert json.loads(policy_path.read_text())["TranslateEnabled"] is False
