@@ -16,6 +16,8 @@ from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.codex.cli import CodexCliClient
+from argos.services.dashboard.server import DashboardServer
+from argos.services.dashboard.state import DashboardState
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
@@ -95,6 +97,8 @@ class ArgosApp:
         self._voicevox = VoicevoxClient(settings.voicevox_url, settings.voicevox_speaker, settings.voicevox_sample_rate)
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
         self._lcd = self._create_lcd_display(settings)
+        self._dashboard_state = DashboardState()
+        self._dashboard_server = self._create_dashboard_server(settings)
         self._button = ButtonPtt(
             on_press=self._on_ptt_press,
             on_release=self._on_ptt_release,
@@ -117,11 +121,25 @@ class ArgosApp:
             log.exception("LCD表示を初期化できないため無効化します")
             return None
 
+    def _create_dashboard_server(self, settings: Settings) -> DashboardServer | None:
+        """設定に応じてHDMIダッシュボードサーバーを作成する。"""
+        if not settings.dashboard_enabled:
+            return None
+        return DashboardServer(
+            state=self._dashboard_state,
+            host=settings.dashboard_host,
+            port=settings.dashboard_port,
+            token=settings.dashboard_token,
+        )
+
     def run(self) -> None:
         """ARGOS を起動し、終了シグナルまで待機する。"""
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
         log.info("ARGOS 起動: 現在の Codex スロット=%s", self._codex.current_name)
+        if self._dashboard_server is not None:
+            self._dashboard_server.start()
+        self._dashboard_state.set_status("ready", "待機中")
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -151,12 +169,14 @@ class ArgosApp:
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         log.info("PTT ON: 録音開始")
+        self._dashboard_state.set_status("listening", "録音中")
         self._cancel_active_audio()
         self._recorder.start()
 
     def _on_ptt_release(self) -> None:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
         log.info("PTT OFF: 録音停止と処理開始")
+        self._dashboard_state.set_status("thinking", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
         self._worker.start()
 
@@ -199,20 +219,27 @@ class ArgosApp:
             self._handle_text(transcript)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
+            self._dashboard_state.set_status("error", "処理エラー")
             self._speak_status(f"処理に失敗しました。{exc}")
         finally:
             self._button.mark_idle()
+            self._dashboard_state.set_status("ready", "待機中")
 
     def _handle_text(self, text: str) -> None:
         """テキストを Codex に送り、応答を読み上げる。"""
         log.info("ユーザ発話: %s", text)
+        self._dashboard_state.add_message("user", text)
+        self._dashboard_state.set_status("thinking", "考え中")
         announcer = self._start_codex_progress()
+        dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speak_response_stream(
-                self._stop_progress_on_first_delta(self._codex.ask_stream(text), announcer)
+                self._stop_progress_on_first_delta(self._codex.ask_stream(text), announcer),
+                dashboard_message_id=dashboard_message_id,
             )
             log.info("Codex 応答: %s", response[:300])
         finally:
+            self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
 
@@ -228,7 +255,7 @@ class ArgosApp:
         wav_data = self._voicevox.synthesize(normalized)
         self._audio.play_wav(wav_data)
 
-    def _speak_response_stream(self, deltas: Iterable[str]) -> str:
+    def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "") -> str:
         """応答差分を句読点で分割し、VOICEVOX へ順次投入する。"""
         full_response = ""
         chunker = TextChunker(self._settings.tts_delimiters)
@@ -236,6 +263,8 @@ class ArgosApp:
             print("ARGOS> ", end="", flush=True)
             for delta in deltas:
                 full_response += delta
+                if dashboard_message_id:
+                    self._dashboard_state.append_message(dashboard_message_id, delta)
                 print(delta, end="", flush=True)
             print()
             return full_response
@@ -250,6 +279,8 @@ class ArgosApp:
                 log.info("キャンセル済みのため Codex 応答読み上げを中断します")
                 break
             full_response += delta
+            if dashboard_message_id:
+                self._dashboard_state.append_message(dashboard_message_id, delta)
             log.info("Codex 応答差分: %s", delta[:120])
             for chunk in chunker.push(delta):
                 if self._current_cancel_generation() != stream_generation:
@@ -301,6 +332,7 @@ class ArgosApp:
                 self._drain_tts_queue(tts_queue)
                 return
             self._show_lcd(chunk)
+            self._dashboard_state.set_status("speaking", "読み上げ中")
             normalized = self._tts_filter.normalize(chunk)
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
@@ -350,3 +382,5 @@ class ArgosApp:
         self._shutdown.set()
         self._recorder.cancel()
         self._cancel_active_audio()
+        if self._dashboard_server is not None:
+            self._dashboard_server.stop()

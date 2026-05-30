@@ -89,6 +89,46 @@ ARGOS_LCD_FONT_PATH=/usr/share/fonts/opentype/ipafont-gothic/ipagp.ttf
 
 GPIO や SPI など、Codex がホストのデバイスを直接触る必要がある場合は `ARGOS_CODEX_BYPASS_SANDBOX=true` にします。この場合、Codex CLI に `--dangerously-bypass-approvals-and-sandbox` を渡します。
 
+## HDMI ダッシュボード
+
+`ARGOS_DASHBOARD_ENABLED=true` にすると、横長HDMI画面向けのダッシュボードを起動します。
+
+```text
+ARGOS_DASHBOARD_ENABLED=true
+ARGOS_DASHBOARD_HOST=0.0.0.0
+ARGOS_DASHBOARD_PORT=8765
+ARGOS_DASHBOARD_TOKEN=<ランダムなトークン>
+```
+
+ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、会話履歴、外部通知を表示します。1920x440では3列、狭い画面では通知欄が下へ回り込みます。
+
+ChromiumでHDMI画面へ全画面表示する場合:
+
+```bash
+./scripts/open-dashboard-kiosk.sh
+```
+
+キオスク画面は専用のChromiumプロフィールを使います。OSキーリングは使用しません。
+
+デスクトップログイン時に自動表示する場合:
+
+```bash
+./scripts/install-dashboard-autostart.sh
+```
+
+外部サービスから通知を追加する場合:
+
+```bash
+curl -X POST http://<raspberry-pi>:8765/api/events \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"notification","source":"mail","title":"新着メール","text":"確認が必要です"}'
+```
+
+通知では `image_url` と `link_url` も指定できます。会話追加は `user_message` または `agent_message`、状態更新は `status`、通知削除は `clear_notifications` を `type` に指定します。
+
+`ARGOS_DASHBOARD_HOST=0.0.0.0` ではLAN内の他端末から画面も閲覧できます。会話履歴を含むため、インターネットへ直接公開しないでください。
+
 ## 必要な外部サービス
 
 - stt-gateway: `POST /transcribe`

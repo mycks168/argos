@@ -78,3 +78,17 @@ def test_load_lcd_settings(monkeypatch):
     assert settings.lcd_x_offset == 82
     assert settings.lcd_y_offset == 18
     assert settings.lcd_font_path == "/tmp/ipag.ttf"
+
+
+def test_load_dashboard_settings(monkeypatch):
+    monkeypatch.setenv("ARGOS_DASHBOARD_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_DASHBOARD_HOST", "0.0.0.0")
+    monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
+    monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
+
+    settings = load_settings()
+
+    assert settings.dashboard_enabled is True
+    assert settings.dashboard_host == "0.0.0.0"
+    assert settings.dashboard_port == 9876
+    assert settings.dashboard_token == "secret"

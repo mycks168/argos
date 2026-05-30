@@ -28,6 +28,10 @@ def _settings():
         lcd_baudrate=4_000_000,
         lcd_font_path="",
         lcd_font_size=16,
+        dashboard_enabled=False,
+        dashboard_host="127.0.0.1",
+        dashboard_port=8765,
+        dashboard_token="",
         ptt_gpio=17,
         silence_rms_threshold=10,
         dry_run=True,
@@ -128,6 +132,9 @@ def test_handle_text_dry_run(monkeypatch, capsys):
     app._handle_text("依頼")
 
     assert app._codex.asked == ["依頼"]
+    snapshot = app._dashboard_state.snapshot()
+    assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
+    assert snapshot["messages"][1]["text"] == "応答"
     output = capsys.readouterr().out
     assert "今やってるから、少し待ってね" in output
     assert "ARGOS> 応答" in output

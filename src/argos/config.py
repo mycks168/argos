@@ -58,6 +58,10 @@ class Settings:
     lcd_baudrate: int
     lcd_font_path: str
     lcd_font_size: int
+    dashboard_enabled: bool
+    dashboard_host: str
+    dashboard_port: int
+    dashboard_token: str
     ptt_gpio: int
     silence_rms_threshold: float
     dry_run: bool
@@ -133,6 +137,10 @@ def load_settings() -> Settings:
         lcd_baudrate=int(os.environ.get("ARGOS_LCD_BAUDRATE", "4000000")),
         lcd_font_path=os.environ.get("ARGOS_LCD_FONT_PATH", ""),
         lcd_font_size=int(os.environ.get("ARGOS_LCD_FONT_SIZE", "16")),
+        dashboard_enabled=_bool_env("ARGOS_DASHBOARD_ENABLED", False),
+        dashboard_host=os.environ.get("ARGOS_DASHBOARD_HOST", "127.0.0.1"),
+        dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
+        dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
