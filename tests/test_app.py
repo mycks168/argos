@@ -136,7 +136,7 @@ def test_handle_text_dry_run(monkeypatch, capsys):
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
     assert snapshot["messages"][1]["text"] == "応答"
     output = capsys.readouterr().out
-    assert "今やってるから、少し待ってね" in output
+    assert "わかった。少し待ってね" in output
     assert "ARGOS> 応答" in output
 
 
@@ -168,8 +168,8 @@ def test_codex_progress_announcer_speaks_start_and_wait(monkeypatch):
     time.sleep(0.05)
     announcer.stop()
 
-    assert spoken[0] == "わかった。今やってるから、少し待ってね。"
-    assert spoken[1] == "ちょっと時間かかってるけど、続けてるよ。"
+    assert spoken[0] == "わかった。少し待ってね。"
+    assert spoken[1] == "ちょっと時間かかってるけど、もう少し待ってね。"
 
 
 def test_codex_progress_stop_waits_for_current_status(monkeypatch):
