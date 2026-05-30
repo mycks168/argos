@@ -69,16 +69,22 @@ def test_apply_event_rejects_unknown_type():
         _apply_event(DashboardState(), {"type": "unknown"})
 
 
-def test_dashboard_server_serves_html_and_authenticated_events():
+def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path):
     """画面配信とBearer認証付きイベントAPIを利用できる。"""
     state = DashboardState()
-    server = DashboardServer(state, "127.0.0.1", 0, "secret")
+    snapshot_path = tmp_path / "camera-latest.jpg"
+    snapshot_path.write_bytes(b"jpeg-data")
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path)
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
         with urlopen(base_url + "/", timeout=2) as response:
             html = response.read().decode("utf-8")
         assert "ARGOS Dashboard" in html
+
+        with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
+            assert response.headers["Content-Type"] == "image/jpeg"
+            assert response.read() == b"jpeg-data"
 
         status, body = _read_json(base_url + "/api/events", "POST", {"type": "notification", "title": "テスト"}, "secret")
         assert status == 201

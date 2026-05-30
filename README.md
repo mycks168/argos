@@ -102,6 +102,8 @@ ARGOS_DASHBOARD_TOKEN=<ランダムなトークン>
 
 ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、会話履歴、外部通知を表示します。1920x440では3列、狭い画面では通知欄が下へ回り込みます。
 
+`/tmp/argos/camera-latest.jpg` に静止画を置くと、`/camera/latest.jpg` で配信できます。通知の `image_url` にこのURLを指定すると、カメラ画像も表示できます。
+
 ChromiumでHDMI画面へ全画面表示する場合:
 
 ```bash
@@ -110,11 +112,13 @@ ChromiumでHDMI画面へ全画面表示する場合:
 
 キオスク画面は専用のChromiumプロフィールを使います。OSキーリングは使用しません。
 
-デスクトップログイン時に自動表示する場合:
+ユーザーsystemdで自動表示する場合:
 
 ```bash
 ./scripts/install-dashboard-autostart.sh
 ```
+
+インストール後は `systemctl --user status argos-dashboard-kiosk.service` で状態を確認できます。
 
 外部サービスから通知を追加する場合:
 

@@ -1,0 +1,15 @@
+[Unit]
+Description=ARGOS dashboard Chromium kiosk
+After=graphical-session.target
+
+[Service]
+Type=simple
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=%h/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=@PROJECT_DIR@/scripts/open-dashboard-kiosk.sh
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# デスクトップログイン時にHDMIダッシュボードを自動表示する。
+# ユーザーsystemdでHDMIダッシュボードを自動表示する。
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-autostart_dir="${HOME}/.config/autostart"
-mkdir -p "${autostart_dir}"
+unit_dir="${HOME}/.config/systemd/user"
+unit_path="${unit_dir}/argos-dashboard-kiosk.service"
+mkdir -p "${unit_dir}"
 sed "s|@PROJECT_DIR@|${project_dir}|g" \
-  "${project_dir}/desktop/argos-dashboard.desktop" \
-  > "${autostart_dir}/argos-dashboard.desktop"
-echo "installed: ${autostart_dir}/argos-dashboard.desktop"
+  "${project_dir}/systemd/argos-dashboard-kiosk.service" \
+  > "${unit_path}"
+rm -f "${HOME}/.config/autostart/argos-dashboard.desktop"
+systemctl --user daemon-reload
+systemctl --user enable --now argos-dashboard-kiosk.service
+echo "installed: ${unit_path}"

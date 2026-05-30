@@ -9,6 +9,7 @@ import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
@@ -17,17 +18,26 @@ from argos.services.dashboard.state import DashboardState
 
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 256 * 1024
+DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
 
 
 class DashboardServer:
     """ダッシュボード画面、API、SSEを別スレッドで提供する。"""
 
-    def __init__(self, state: DashboardState, host: str, port: int, token: str) -> None:
+    def __init__(
+        self,
+        state: DashboardState,
+        host: str,
+        port: int,
+        token: str,
+        camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
+    ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
         self._host = host
         self._port = port
         self._token = token
+        self._camera_snapshot_path = camera_snapshot_path
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -40,7 +50,7 @@ class DashboardServer:
 
     def start(self) -> None:
         """HTTPサーバーをバックグラウンドで起動する。"""
-        handler = _create_handler(self._state, self._token)
+        handler = _create_handler(self._state, self._token, self._camera_snapshot_path)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -58,7 +68,7 @@ class DashboardServer:
         self._thread = None
 
 
-def _create_handler(state: DashboardState, token: str) -> type[BaseHTTPRequestHandler]:
+def _create_handler(state: DashboardState, token: str, camera_snapshot_path: Path) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
     class DashboardHandler(BaseHTTPRequestHandler):
@@ -75,6 +85,8 @@ def _create_handler(state: DashboardState, token: str) -> type[BaseHTTPRequestHa
                 self._send_json(state.snapshot())
             elif path == "/api/stream":
                 self._send_sse()
+            elif path == "/camera/latest.jpg":
+                self._send_camera_snapshot()
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
@@ -134,6 +146,20 @@ def _create_handler(state: DashboardState, token: str) -> type[BaseHTTPRequestHa
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_camera_snapshot(self) -> None:
+            """最新のカメラ静止画を返す。"""
+            try:
+                image = camera_snapshot_path.read_bytes()
+            except FileNotFoundError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(image)))
+            self.end_headers()
+            self.wfile.write(image)
 
         def _send_sse(self) -> None:
             """状態更新をServer-Sent Eventsで配信する。"""

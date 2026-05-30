@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=ARGOS Dashboard
-Comment=Open the ARGOS HDMI dashboard in Chromium kiosk mode
-Exec=@PROJECT_DIR@/scripts/open-dashboard-kiosk.sh
-Terminal=false
-X-GNOME-Autostart-enabled=true
