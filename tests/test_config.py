@@ -42,6 +42,15 @@ def test_load_tts_delimiters(monkeypatch):
     assert settings.tts_delimiters == "。！？、"
 
 
+def test_load_voicevox_speed_scale(monkeypatch):
+    """VOICEVOXの話速設定を読み込む。"""
+    monkeypatch.setenv("VOICEVOX_SPEED_SCALE", "1.1")
+
+    settings = load_settings()
+
+    assert settings.voicevox_speed_scale == 1.1
+
+
 def test_load_codex_progress_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")

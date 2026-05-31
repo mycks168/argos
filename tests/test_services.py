@@ -69,9 +69,9 @@ def test_voicevox_synthesize(monkeypatch):
         return Response(content=b"wave-bytes")
 
     monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
-    client = VoicevoxClient("http://voicevox", 2, 48000)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1)
 
     assert client.synthesize("こんにちは") == b"wave-bytes"
     assert calls[0][0] == "http://voicevox/audio_query"
     assert calls[1][1]["json"]["outputSamplingRate"] == 48000
-
+    assert calls[1][1]["json"]["speedScale"] == 1.1

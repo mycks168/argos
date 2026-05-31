@@ -96,7 +96,12 @@ class ArgosApp:
         self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language)
         self._codex = CodexCliClient(settings)
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
-        self._voicevox = VoicevoxClient(settings.voicevox_url, settings.voicevox_speaker, settings.voicevox_sample_rate)
+        self._voicevox = VoicevoxClient(
+            settings.voicevox_url,
+            settings.voicevox_speaker,
+            settings.voicevox_sample_rate,
+            settings.voicevox_speed_scale,
+        )
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()

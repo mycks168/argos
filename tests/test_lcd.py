@@ -14,6 +14,7 @@ def _settings():
         voicevox_url="http://voicevox",
         voicevox_speaker=2,
         voicevox_sample_rate=48000,
+        voicevox_speed_scale=1.0,
         audio_input_device="in",
         audio_output_device="out",
         audio_output_card="",

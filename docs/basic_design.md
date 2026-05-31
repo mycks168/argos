@@ -52,7 +52,7 @@ VOICEVOX Engine は次の順で呼び出す。
 1. `POST /audio_query?text=<text>&speaker=<speaker>`
 2. `POST /synthesis?speaker=<speaker>`
 
-`audio_query` の JSON に `outputSamplingRate` を設定してから `synthesis` に渡す。
+`audio_query` の JSON に `outputSamplingRate` と `VOICEVOX_SPEED_SCALE` で指定した `speedScale` を設定してから `synthesis` に渡す。
 
 ### ST7789 LCD
 

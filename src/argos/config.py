@@ -42,6 +42,7 @@ class Settings:
     voicevox_url: str
     voicevox_speaker: int
     voicevox_sample_rate: int
+    voicevox_speed_scale: float
     audio_input_device: str
     audio_output_device: str
     audio_output_card: str
@@ -121,6 +122,7 @@ def load_settings() -> Settings:
         voicevox_url=os.environ.get("VOICEVOX_URL", "http://localhost:50021"),
         voicevox_speaker=int(os.environ.get("VOICEVOX_SPEAKER", "2")),
         voicevox_sample_rate=int(os.environ.get("VOICEVOX_SAMPLE_RATE", "48000")),
+        voicevox_speed_scale=float(os.environ.get("VOICEVOX_SPEED_SCALE", "1.0")),
         audio_input_device=os.environ.get("AUDIO_DEVICE", "plughw:CARD=Microphone,DEV=0"),
         audio_output_device=os.environ.get("AUDIO_OUTPUT_DEVICE", "default"),
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
