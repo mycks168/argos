@@ -35,7 +35,14 @@
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
     .status[data-code="error"] .status-dot { background: #ff6b6b; }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
-    .messages { height: calc(100vh - 43px); justify-content: end; }
+    .messages {
+      height: calc(100vh - 43px);
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      scrollbar-width: none;
+      touch-action: pan-y;
+    }
+    .messages::-webkit-scrollbar { display: none; }
     .message { border-left: 3px solid #526775; padding: 4px 0 4px 12px; }
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
@@ -89,6 +96,7 @@
     const statusLabel = document.getElementById("status-label");
     let previousMessages = "";
     let previousNotifications = "";
+    let followLatestMessage = true;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -97,18 +105,28 @@
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
       document.getElementById("date").textContent = now.toLocaleDateString("ja-JP", {month:"long", day:"numeric", weekday:"short"});
     }
+    function isNearLatestMessage() {
+      return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
+    }
+    messages.addEventListener("scroll", () => {
+      followLatestMessage = isNearLatestMessage();
+    }, {passive: true});
     function render(state) {
       status.dataset.code = state.status.code;
       statusLabel.textContent = state.status.label;
-      const recentMessages = state.messages.slice(-6);
-      const nextMessages = JSON.stringify(recentMessages);
+      const visibleMessages = state.messages;
+      const nextMessages = JSON.stringify(visibleMessages);
       if (nextMessages !== previousMessages) {
-        messages.innerHTML = recentMessages.length ? recentMessages.map(item => `
+        const shouldFollow = followLatestMessage || isNearLatestMessage();
+        messages.innerHTML = visibleMessages.length ? visibleMessages.map(item => `
         <article class="message" data-role="${escapeHtml(item.role)}">
           <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"} ${item.streaming ? "..." : ""}</div>
           <div class="text">${escapeHtml(item.text)}</div>
         </article>`).join("") : `<div class="empty">会話待機中</div>`;
         previousMessages = nextMessages;
+        if (shouldFollow) {
+          messages.scrollTop = messages.scrollHeight;
+        }
       }
       const recentNotices = state.notifications.slice(-4).reverse();
       const nextNotifications = JSON.stringify(recentNotices);

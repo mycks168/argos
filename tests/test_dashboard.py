@@ -84,6 +84,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "cursor: none" in html
         assert "cursor: none !important" in html
         assert "nextNotifications !== previousNotifications" in html
+        assert "touch-action: pan-y" in html
+        assert "followLatestMessage" in html
+        assert "const visibleMessages = state.messages;" in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
