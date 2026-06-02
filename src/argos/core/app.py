@@ -220,13 +220,18 @@ class ArgosApp:
             if level < self._settings.silence_rms_threshold:
                 log.info("無音として破棄しました: RMS=%.1f", level)
                 return
-            transcript = self._stt.transcribe(wav_path)
+            try:
+                transcript = self._stt.transcribe(wav_path)
+            except Exception as exc:
+                log.exception("文字起こしに失敗しました")
+                self._report_error("文字起こし", exc)
+                return
             if not transcript:
                 return
             self._handle_text(transcript)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
-            self._dashboard_state.set_status("error", "処理エラー")
+            self._report_error("録音", exc)
             self._speak_status(f"処理に失敗しました。{exc}")
         finally:
             self._button.mark_idle()
@@ -245,6 +250,9 @@ class ArgosApp:
                 dashboard_message_id=dashboard_message_id,
             )
             log.info("Codex 応答: %s", response[:300])
+        except Exception as exc:
+            log.exception("Codex 応答の取得に失敗しました")
+            self._report_error("Codex", exc)
         finally:
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
@@ -258,9 +266,23 @@ class ArgosApp:
             print(f"ARGOS> {text}")
             return
         self._show_lcd(text)
-        normalized = self._tts_filter.normalize(text)
-        wav_data = self._voicevox.synthesize(normalized)
-        self._audio.play_wav(wav_data)
+        try:
+            normalized = self._tts_filter.normalize(text)
+        except Exception as exc:
+            log.exception("TTSフィルターに失敗しました")
+            self._report_error("TTSフィルター", exc)
+            return
+        try:
+            wav_data = self._voicevox.synthesize(normalized)
+        except Exception as exc:
+            log.exception("VOICEVOXに失敗しました")
+            self._report_error("VOICEVOX", exc)
+            return
+        try:
+            self._audio.play_wav(wav_data)
+        except Exception as exc:
+            log.exception("音声再生に失敗しました")
+            self._report_error("音声再生", exc)
 
     def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "") -> str:
         """応答差分を句読点で分割し、VOICEVOX へ順次投入する。"""
@@ -340,15 +362,33 @@ class ArgosApp:
                 return
             self._show_lcd(chunk)
             self._dashboard_state.set_status("speaking", "読み上げ中")
-            normalized = self._tts_filter.normalize(chunk)
+            try:
+                normalized = self._tts_filter.normalize(chunk)
+            except Exception as exc:
+                log.exception("TTSフィルターに失敗しました")
+                self._report_error("TTSフィルター", exc)
+                self._drain_tts_queue(tts_queue)
+                return
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return
-            wav_data = self._voicevox.synthesize(normalized)
+            try:
+                wav_data = self._voicevox.synthesize(normalized)
+            except Exception as exc:
+                log.exception("VOICEVOXに失敗しました")
+                self._report_error("VOICEVOX", exc)
+                self._drain_tts_queue(tts_queue)
+                return
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return
-            self._audio.play_wav(wav_data)
+            try:
+                self._audio.play_wav(wav_data)
+            except Exception as exc:
+                log.exception("音声再生に失敗しました")
+                self._report_error("音声再生", exc)
+                self._drain_tts_queue(tts_queue)
+                return
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return
@@ -370,9 +410,27 @@ class ArgosApp:
             return
         try:
             normalized = self._tts_filter.normalize(text)
-            self._audio.play_wav(self._voicevox.synthesize(normalized))
-        except Exception:
-            log.exception("状態通知の読み上げに失敗しました")
+        except Exception as exc:
+            log.exception("状態通知のTTSフィルターに失敗しました")
+            self._report_error("TTSフィルター", exc)
+            return
+        try:
+            wav_data = self._voicevox.synthesize(normalized)
+        except Exception as exc:
+            log.exception("状態通知のVOICEVOXに失敗しました")
+            self._report_error("VOICEVOX", exc)
+            return
+        try:
+            self._audio.play_wav(wav_data)
+        except Exception as exc:
+            log.exception("状態通知の音声再生に失敗しました")
+            self._report_error("音声再生", exc)
+
+    def _report_error(self, source: str, exc: Exception) -> None:
+        """内部エラーをダッシュボードへ短い通知として表示する。"""
+        text = str(exc).strip() or exc.__class__.__name__
+        self._dashboard_state.set_status("error", "処理エラー")
+        self._dashboard_state.add_error_notification(source, text[:300])
 
     def _show_lcd(self, text: str) -> None:
         """LCDが有効ならテキストを表示する。"""

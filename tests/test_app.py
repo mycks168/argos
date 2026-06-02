@@ -283,3 +283,70 @@ def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
 
     assert response == "一文目。二文目。三文目。"
     assert played == ["正規化:一文目。".encode()]
+
+
+def test_speak_response_plays_normalized_voice(monkeypatch):
+    """単発応答を正規化して読み上げる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+
+    app._speak_response("返答")
+
+    assert app._audio.played == ["正規化:返答".encode()]
+
+
+def test_stream_voicevox_error_is_shown_on_dashboard(monkeypatch):
+    """本文読み上げ中のVOICEVOX障害を画面通知で確認できる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+
+    app._speak_response_stream(["読み上げ。"])
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "error"
+    assert snapshot["notifications"][0]["title"] == "VOICEVOX エラー"
+
+
+def test_speak_response_audio_error_is_shown_on_dashboard(monkeypatch):
+    """音声再生障害を画面通知で確認できる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._audio.play_wav = lambda _wav: (_ for _ in ()).throw(RuntimeError("再生できません"))
+
+    app._speak_response("返答")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][0]["title"] == "音声再生 エラー"
+
+
+def test_status_voicevox_error_is_shown_on_dashboard(monkeypatch):
+    """VOICEVOX障害を画面通知で確認できる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+
+    app._speak_status("確認中")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "error"
+    assert snapshot["notifications"][0]["title"] == "VOICEVOX エラー"
+    assert snapshot["notifications"][0]["text"] == "接続できません"
+
+
+def test_stt_error_is_shown_on_dashboard(monkeypatch):
+    """文字起こし障害を画面通知で確認できる。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app = ArgosApp(_settings())
+    app._stt.transcribe = lambda _wav: (_ for _ in ()).throw(RuntimeError("応答なし"))
+
+    app._process_recording()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][0]["title"] == "文字起こし エラー"
+    assert snapshot["notifications"][0]["text"] == "応答なし"

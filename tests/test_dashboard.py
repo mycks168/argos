@@ -47,6 +47,19 @@ def test_dashboard_state_notifies_subscribers():
     state.unsubscribe(subscriber)
 
 
+def test_dashboard_state_deduplicates_consecutive_internal_errors():
+    """同一の内部エラーが連続しても通知を増やさない。"""
+    state = DashboardState()
+
+    first_id = state.add_error_notification("VOICEVOX", "接続できません")
+    second_id = state.add_error_notification("VOICEVOX", "接続できません")
+
+    snapshot = state.snapshot()
+    assert first_id == second_id
+    assert len(snapshot["notifications"]) == 1
+    assert snapshot["notifications"][0]["priority"] == "high"
+
+
 def test_apply_event_supports_messages_status_and_clear():
     """外部APIから会話、状態、通知削除を更新できる。"""
     state = DashboardState()

@@ -107,6 +107,30 @@ class DashboardState:
             self._publish_locked()
         return notification_id
 
+    def add_error_notification(self, source: str, text: str) -> str:
+        """内部エラーを通知し、直前と同じ内容なら重複追加しない。"""
+        title = f"{source} エラー"
+        with self._lock:
+            if self._notifications:
+                latest = self._notifications[-1]
+                if latest["title"] == title and latest["text"] == text and latest["priority"] == "high":
+                    return str(latest["id"])
+            notification_id = uuid.uuid4().hex
+            self._notifications.append(
+                {
+                    "id": notification_id,
+                    "title": title,
+                    "text": text,
+                    "source": source,
+                    "priority": "high",
+                    "image_url": "",
+                    "link_url": "",
+                    "created_at": _now_iso(),
+                }
+            )
+            self._publish_locked()
+        return notification_id
+
     def clear_notifications(self) -> None:
         """外部通知をすべて削除する。"""
         with self._lock:
