@@ -15,11 +15,14 @@ from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
+from argos.services.auth import AuthGate
 from argos.services.codex.cli import CodexCliClient
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
+from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
-from argos.services.startup import build_startup_chime
+from argos.services.security_alert import SecurityAlertDispatcher
+from argos.services.startup import build_auth_warning_tone, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
@@ -109,6 +112,21 @@ class ArgosApp:
         self._dashboard_state = DashboardState()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
+        self._auth = AuthGate(
+            settings.auth_enabled,
+            settings.auth_keyword_hash,
+            settings.auth_trust_seconds,
+            settings.auth_failure_threshold,
+        )
+        self._face_auth = FaceAuthVerifier(
+            settings.auth_face_enabled,
+            settings.auth_face_samples_dir,
+            settings.auth_face_capture_command,
+            settings.auth_face_capture_path,
+            settings.auth_face_threshold,
+            settings.auth_face_min_matches,
+        )
+        self._security_alert = SecurityAlertDispatcher(settings.auth_alert_command)
         self._button = ButtonPtt(
             on_press=self._on_ptt_press,
             on_release=self._on_ptt_release,
@@ -116,6 +134,8 @@ class ArgosApp:
             on_cancel=self._on_cancel,
         )
         self._shutdown = threading.Event()
+        self._auth_warning_stop = threading.Event()
+        self._auth_warning_thread: threading.Thread | None = None
         self._cancel_lock = threading.Lock()
         self._cancel_generation = 0
         self._worker: threading.Thread | None = None
@@ -150,6 +170,9 @@ class ArgosApp:
         if self._dashboard_server is not None:
             self._dashboard_server.start()
         self._run_startup_sequence()
+        self._try_face_auth("起動時")
+        self._set_ready_or_locked()
+        self._announce_auth_required()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -174,8 +197,9 @@ class ArgosApp:
                 self._codex.reset_current()
                 self._speak_status("現在のセッションを新規会話にしました")
                 continue
-            self._greet_on_interaction()
-            self._handle_text(text)
+            if self._ensure_authenticated(text):
+                self._greet_on_interaction()
+                self._handle_text(text)
 
     def _run_startup_sequence(self) -> None:
         """起動状態を画面へ出し、設定に応じて起動音を鳴らす。"""
@@ -200,6 +224,117 @@ class ArgosApp:
         greeting = self._greeting.greeting_on_interaction()
         if greeting:
             self._speak_status(greeting)
+
+    def _set_ready_or_locked(self) -> None:
+        """認証状態に応じて待機表示またはロック表示へ切り替える。"""
+        if self._auth.enabled and not self._auth.is_authenticated():
+            self._dashboard_state.set_status("locked", "ロック中")
+            return
+        self._dashboard_state.set_status("ready", "待機中")
+
+    def _announce_auth_required(self) -> None:
+        """起動後に未認証なら本人確認を促す。"""
+        if self._auth.enabled and not self._auth.is_authenticated():
+            self._dashboard_state.set_status("locked", "ロック中")
+            self._dashboard_state.add_error_notification("本人確認", "本人確認をしてください。")
+            self._speak_status("本人確認をしてください。")
+            self._start_auth_warning_timer(self._settings.auth_warning_delay_seconds)
+
+    def _ensure_authenticated(self, transcript: str) -> bool:
+        """未認証時は音声キーワードだけを検証し、Codex送信を止める。"""
+        if self._auth.is_authenticated():
+            self._auth.mark_activity()
+            self._stop_auth_warning()
+            return True
+        if self._try_face_auth("顔認証"):
+            return True
+        result = self._auth.verify_keyword(transcript)
+        if result.authenticated:
+            self._stop_auth_warning()
+            self._dashboard_state.set_status("ready", "待機中")
+            self._speak_status(result.message)
+            return False
+        self._dashboard_state.set_status("locked", "ロック中")
+        self._dashboard_state.add_error_notification("本人確認", result.message)
+        if result.alert:
+            self._dispatch_security_alert("本人確認", "本人確認に複数回失敗しました。")
+        return False
+
+    def _try_face_auth(self, source: str) -> bool:
+        """顔認証が有効なら照合し、成功時は認証状態を延長する。"""
+        if not self._auth.enabled or not self._face_auth.enabled or self._auth.is_authenticated():
+            return False
+        self._dashboard_state.set_status("authenticating", "本人確認中")
+        result = self._face_auth.verify()
+        if result.authenticated:
+            self._auth.mark_activity()
+            self._stop_auth_warning()
+            self._dashboard_state.set_status("ready", "待機中")
+            return True
+        detail = result.message
+        if result.score is not None:
+            detail = f"{detail} スコア={result.score}"
+        self._dashboard_state.add_error_notification(source, detail)
+        return False
+
+    def _dispatch_security_alert(self, source: str, message: str, image_path: str = "") -> None:
+        """警戒通知をダッシュボードと外部アクションへ送る。"""
+        self._dashboard_state.set_status("alert", "警戒中")
+        self._dashboard_state.add_error_notification("警戒", message)
+        self._start_auth_warning_timer(0, force_alert=True)
+        result = self._security_alert.dispatch(source, message, image_path)
+        if result.executed and not result.succeeded:
+            self._dashboard_state.add_error_notification("警戒通知", result.message)
+
+    def _start_auth_warning_timer(self, delay_seconds: float, force_alert: bool = False) -> None:
+        """未認証が続いた場合に警告音を繰り返すタイマーを開始する。"""
+        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
+            return
+        if self._auth_warning_thread is not None and self._auth_warning_thread.is_alive():
+            return
+        self._auth_warning_stop.clear()
+        self._auth_warning_thread = threading.Thread(
+            target=self._run_auth_warning,
+            args=(delay_seconds, force_alert),
+            daemon=True,
+        )
+        self._auth_warning_thread.start()
+
+    def _run_auth_warning(self, delay_seconds: float, force_alert: bool) -> None:
+        """本人確認が終わるまで警告音を繰り返す。"""
+        if self._auth_warning_stop.wait(max(0.0, delay_seconds)):
+            return
+        started_at = time.monotonic()
+        alert_announced = False
+        while not self._auth_warning_stop.is_set() and not self._auth.is_authenticated():
+            alert_mode = force_alert or time.monotonic() - started_at + delay_seconds >= self._settings.auth_alert_delay_seconds
+            if alert_mode:
+                self._dashboard_state.set_status("alert", "警戒中")
+                text = "警戒モードに入りました。本人確認してください。" if not alert_announced else "警戒モードです。本人確認してください。"
+                alert_announced = True
+            else:
+                self._dashboard_state.set_status("locked", "ロック中")
+                text = "本人確認してください。"
+            self._play_auth_warning_sound()
+            self._speak_status(text)
+            if self._auth_warning_stop.wait(self._settings.auth_warning_interval_seconds):
+                return
+
+    def _stop_auth_warning(self) -> None:
+        """本人確認完了時に警告音タイマーを止める。"""
+        self._auth_warning_stop.set()
+        if self._auth_warning_thread is not None and self._auth_warning_thread is not threading.current_thread():
+            self._auth_warning_thread.join(timeout=2)
+
+    def _play_auth_warning_sound(self) -> None:
+        """本人確認失敗時の警告音を鳴らす。"""
+        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
+            return
+        try:
+            self._audio.play_wav(build_auth_warning_tone(self._settings.voicevox_sample_rate))
+        except Exception as exc:
+            log.exception("本人確認警告音の再生に失敗しました")
+            self._report_error("本人確認警告音", exc)
 
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
@@ -256,15 +391,16 @@ class ArgosApp:
                 return
             if not transcript:
                 return
-            self._greet_on_interaction()
-            self._handle_text(transcript)
+            if self._ensure_authenticated(transcript):
+                self._greet_on_interaction()
+                self._handle_text(transcript)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
             self._report_error("録音", exc)
             self._speak_status(f"処理に失敗しました。{exc}")
         finally:
             self._button.mark_idle()
-            self._dashboard_state.set_status("ready", "待機中")
+            self._set_ready_or_locked()
 
     def _handle_text(self, text: str) -> None:
         """テキストを Codex に送り、応答を読み上げる。"""
@@ -478,5 +614,6 @@ class ArgosApp:
             self._greeting.mark_active()
         self._recorder.cancel()
         self._cancel_active_audio()
+        self._stop_auth_warning()
         if self._dashboard_server is not None:
             self._dashboard_server.stop()

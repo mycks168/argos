@@ -104,6 +104,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "showSplash()" in html
         assert 'data-code="booting"' in html
         assert 'stream.addEventListener("open", refresh)' in html
+        assert 'data-code="locked"' in html
+        assert 'data-code="alert"' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

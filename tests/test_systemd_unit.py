@@ -46,3 +46,19 @@ def test_dashboard_chromium_policy_disables_translation():
     policy_path = Path(__file__).parents[1] / "chromium" / "argos-dashboard.json"
 
     assert json.loads(policy_path.read_text())["TranslateEnabled"] is False
+
+
+def test_hash_auth_keyword_script_exists():
+    """音声キーワードをハッシュ化する補助スクリプトがある。"""
+    script = Path(__file__).parents[1] / "scripts" / "hash-auth-keyword.py"
+
+    assert script.exists()
+    assert "hash_keyword" in script.read_text()
+
+
+def test_enroll_face_auth_script_exists():
+    """顔認証の登録スクリプトがある。"""
+    script = Path(__file__).parents[1] / "scripts" / "enroll-face-auth.py"
+
+    assert script.exists()
+    assert "FaceAuthVerifier" in script.read_text()
