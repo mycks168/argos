@@ -78,6 +78,8 @@ Codex を呼び出した直後は、作業を始めたことを短い音声で�
 
 最初の発話処理時は、前回の利用時刻に応じて短い挨拶を読み上げます。10分以内の再利用では挨拶を省略し、日付が変わった場合は時間帯に合わせて挨拶します。状態は `ARGOS_GREETING_STATE_PATH` のJSONへ保存します。
 
+ARGOS 起動時は、HDMIダッシュボードに短いスプラッシュアニメーションを表示し、VOICEVOXを使わない合成起動音を1回再生します。`ARGOS_STARTUP_SPLASH_ENABLED` と `ARGOS_STARTUP_SOUND_ENABLED` で無効化できます。
+
 設定:
 
 ```text

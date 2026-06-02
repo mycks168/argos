@@ -19,6 +19,7 @@ from argos.services.codex.cli import CodexCliClient
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
 from argos.services.greeting import GreetingManager
+from argos.services.startup import build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
@@ -148,7 +149,7 @@ class ArgosApp:
         log.info("ARGOS 起動: 現在の Codex スロット=%s", self._codex.current_name)
         if self._dashboard_server is not None:
             self._dashboard_server.start()
-        self._dashboard_state.set_status("ready", "待機中")
+        self._run_startup_sequence()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -175,6 +176,22 @@ class ArgosApp:
                 continue
             self._greet_on_interaction()
             self._handle_text(text)
+
+    def _run_startup_sequence(self) -> None:
+        """起動状態を画面へ出し、設定に応じて起動音を鳴らす。"""
+        if self._settings.startup_splash_enabled:
+            self._dashboard_state.set_status("booting", "起動中")
+        else:
+            self._dashboard_state.set_status("ready", "待機中")
+        if self._settings.startup_sound_enabled and not self._settings.dry_run:
+            try:
+                self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
+            except Exception as exc:
+                log.exception("起動音の再生に失敗しました")
+                self._report_error("起動音", exc)
+        if self._settings.startup_splash_enabled and self._settings.startup_splash_seconds > 0:
+            time.sleep(self._settings.startup_splash_seconds)
+        self._dashboard_state.set_status("ready", "待機中")
 
     def _greet_on_interaction(self) -> None:
         """設定に応じて発話処理前の挨拶を読み上げる。"""

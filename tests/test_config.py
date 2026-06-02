@@ -64,7 +64,7 @@ def test_load_codex_progress_settings(monkeypatch):
 
 
 def test_load_greeting_settings(monkeypatch):
-    """起動時挨拶の設定を読み込む。"""
+    """発話時挨拶の設定を読み込む。"""
     monkeypatch.setenv("ARGOS_GREETING_ENABLED", "false")
     monkeypatch.setenv("ARGOS_GREETING_STATE_PATH", "/tmp/greeting.json")
 
@@ -72,6 +72,19 @@ def test_load_greeting_settings(monkeypatch):
 
     assert settings.greeting_enabled is False
     assert settings.greeting_state_path == "/tmp/greeting.json"
+
+
+def test_load_startup_settings(monkeypatch):
+    """起動演出の設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_STARTUP_SPLASH_ENABLED", "false")
+    monkeypatch.setenv("ARGOS_STARTUP_SPLASH_SECONDS", "1.5")
+    monkeypatch.setenv("ARGOS_STARTUP_SOUND_ENABLED", "false")
+
+    settings = load_settings()
+
+    assert settings.startup_splash_enabled is False
+    assert settings.startup_splash_seconds == 1.5
+    assert settings.startup_sound_enabled is False
 
 
 def test_load_codex_bypass_sandbox(monkeypatch):

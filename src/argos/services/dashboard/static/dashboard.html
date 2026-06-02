@@ -13,6 +13,52 @@
     }
     *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
     body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
+    .splash {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: grid;
+      place-items: center;
+      background:
+        linear-gradient(90deg, rgba(230,57,70,0.18), transparent 18%, transparent 82%, rgba(244,211,94,0.14)),
+        repeating-linear-gradient(180deg, rgba(255,255,255,0.04) 0 1px, transparent 1px 18px),
+        #05090d;
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(1.03);
+      transition: opacity 260ms ease, transform 420ms ease;
+    }
+    .splash.is-active { opacity: 1; transform: scale(1); }
+    .splash-frame {
+      position: relative;
+      width: min(620px, 84vw);
+      padding: 30px 34px;
+      border: 1px solid rgba(237,243,247,0.5);
+      background: rgba(11,17,23,0.82);
+      overflow: hidden;
+    }
+    .splash-frame::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-left: 4px solid #e63946;
+      animation: splash-scan 1.7s ease-in-out infinite;
+    }
+    .splash-kicker { color: #f4d35e; font-size: 13px; font-weight: 700; letter-spacing: 0; }
+    .splash-title { margin-top: 6px; font-size: 66px; font-weight: 800; line-height: 0.95; }
+    .splash-subtitle { margin-top: 12px; color: #aebdc6; font-size: 18px; }
+    .splash-bars { display: grid; grid-template-columns: 1.2fr 0.7fr 1.6fr; gap: 8px; margin-top: 22px; }
+    .splash-bars span { height: 4px; background: #edf3f7; animation: splash-pulse 900ms ease-in-out infinite alternate; }
+    .splash-bars span:nth-child(2) { background: #e63946; animation-delay: 180ms; }
+    .splash-bars span:nth-child(3) { background: #f4d35e; animation-delay: 360ms; }
+    @keyframes splash-scan {
+      0%, 100% { box-shadow: inset 0 0 0 rgba(105,183,228,0); }
+      50% { box-shadow: inset 0 -90px 120px rgba(105,183,228,0.12); }
+    }
+    @keyframes splash-pulse {
+      from { transform: scaleX(0.18); opacity: 0.55; transform-origin: left; }
+      to { transform: scaleX(1); opacity: 1; transform-origin: left; }
+    }
     .dashboard {
       display: grid;
       grid-template-columns: minmax(250px, 0.82fr) minmax(660px, 2fr) minmax(320px, 1fr);
@@ -33,6 +79,7 @@
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
+    .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="error"] .status-dot { background: #ff6b6b; }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
@@ -70,6 +117,14 @@
   </style>
 </head>
 <body>
+  <div id="splash" class="splash" aria-hidden="true">
+    <div class="splash-frame">
+      <div class="splash-kicker">AUTONOMOUS ROAD GUARDIAN</div>
+      <div class="splash-title">ARGOS</div>
+      <div class="splash-subtitle">Voice agent system online</div>
+      <div class="splash-bars"><span></span><span></span><span></span></div>
+    </div>
+  </div>
   <main class="dashboard">
     <section>
       <p class="eyebrow">VOICE AGENT</p>
@@ -92,11 +147,13 @@
   <script>
     const messages = document.getElementById("messages");
     const notifications = document.getElementById("notifications");
+    const splash = document.getElementById("splash");
     const status = document.getElementById("status");
     const statusLabel = document.getElementById("status-label");
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    let splashTimer = null;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -111,9 +168,17 @@
     messages.addEventListener("scroll", () => {
       followLatestMessage = isNearLatestMessage();
     }, {passive: true});
+    function showSplash() {
+      splash.classList.add("is-active");
+      window.clearTimeout(splashTimer);
+      splashTimer = window.setTimeout(() => splash.classList.remove("is-active"), 3000);
+    }
     function render(state) {
       status.dataset.code = state.status.code;
       statusLabel.textContent = state.status.label;
+      if (state.status.code === "booting") {
+        showSplash();
+      }
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
       if (nextMessages !== previousMessages) {
@@ -149,8 +214,10 @@
     }
     updateClock();
     setInterval(updateClock, 1000);
+    showSplash();
     refresh();
     const stream = new EventSource("/api/stream");
+    stream.addEventListener("open", refresh);
     stream.addEventListener("update", refresh);
   </script>
 </body>
