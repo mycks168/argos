@@ -41,6 +41,8 @@ def _settings():
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=(),
+        greeting_enabled=False,
+        greeting_state_path="",
     )
 
 
@@ -152,6 +154,25 @@ def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
     assert app._codex.asked == ["こんにちは"]
     assert app._button.state.value == "idle"
     assert "ARGOS> 応答" in capsys.readouterr().out
+
+
+def test_process_recording_greets_on_first_interaction(monkeypatch, capsys, tmp_path):
+    """起動時ではなく最初の発話処理時に挨拶する。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "greeting_enabled": True,
+            "greeting_state_path": str(tmp_path / "greeting.json"),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._process_recording()
+
+    output = capsys.readouterr().out
+    assert any(greeting in output for greeting in ("おはよう。", "こんにちは。", "こんばんは。"))
 
 
 def test_codex_progress_announcer_speaks_start_and_wait(monkeypatch):

@@ -74,6 +74,8 @@ class Settings:
     codex_progress_voice: bool = True
     codex_progress_first_delay_seconds: float = 8.0
     codex_progress_interval_seconds: float = 20.0
+    greeting_enabled: bool = True
+    greeting_state_path: str = "~/.local/state/argos/greeting-state.json"
 
 
 def _load_codex_slots() -> tuple[CodexSlot, ...]:
@@ -157,6 +159,11 @@ def load_settings() -> Settings:
         ),
         codex_progress_interval_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "20")
+        ),
+        greeting_enabled=_bool_env("ARGOS_GREETING_ENABLED", True),
+        greeting_state_path=os.environ.get(
+            "ARGOS_GREETING_STATE_PATH",
+            "~/.local/state/argos/greeting-state.json",
         ),
     )
 

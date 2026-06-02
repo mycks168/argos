@@ -18,6 +18,7 @@ from argos.hardware.lcd import St7789TextDisplay
 from argos.services.codex.cli import CodexCliClient
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
+from argos.services.greeting import GreetingManager
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
@@ -106,6 +107,7 @@ class ArgosApp:
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
         self._dashboard_server = self._create_dashboard_server(settings)
+        self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
         self._button = ButtonPtt(
             on_press=self._on_ptt_press,
             on_release=self._on_ptt_release,
@@ -171,7 +173,16 @@ class ArgosApp:
                 self._codex.reset_current()
                 self._speak_status("現在のセッションを新規会話にしました")
                 continue
+            self._greet_on_interaction()
             self._handle_text(text)
+
+    def _greet_on_interaction(self) -> None:
+        """設定に応じて発話処理前の挨拶を読み上げる。"""
+        if self._greeting is None:
+            return
+        greeting = self._greeting.greeting_on_interaction()
+        if greeting:
+            self._speak_status(greeting)
 
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
@@ -228,6 +239,7 @@ class ArgosApp:
                 return
             if not transcript:
                 return
+            self._greet_on_interaction()
             self._handle_text(transcript)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
@@ -445,6 +457,8 @@ class ArgosApp:
         """終了シグナルを受けて停止する。"""
         log.info("終了シグナルを受信しました: %s", signum)
         self._shutdown.set()
+        if self._greeting is not None:
+            self._greeting.mark_active()
         self._recorder.cancel()
         self._cancel_active_audio()
         if self._dashboard_server is not None:
