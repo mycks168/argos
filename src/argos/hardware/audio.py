@@ -97,6 +97,7 @@ class Recorder:
                 log.debug("arecord は SIGINT 停止時に code=%s を返しましたが、WAV は作成済みです", proc.returncode)
             else:
                 raise RuntimeError(f"arecord が失敗しました。device={self._device}, code={proc.returncode}, stderr={stderr}")
+        _repair_wav_header(WAV_PATH)
         return WAV_PATH
 
     def cancel(self) -> None:
@@ -163,3 +164,30 @@ class AudioPlayer:
 def _is_expected_arecord_interrupt(stderr: str) -> bool:
     """arecord を SIGINT 停止した時の既知 stderr か判定する。"""
     return "Aborted by signal Interrupt" in stderr or "Interrupted system call" in stderr
+
+
+def _repair_wav_header(wav_path: str) -> None:
+    """arecord停止時に残る不正なWAVフレーム数を実データ量に合わせて修復する。"""
+    try:
+        with wave.open(wav_path, "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            frame_rate = wav_file.getframerate()
+            declared_frames = wav_file.getnframes()
+            raw = wav_file.readframes(declared_frames)
+    except (wave.Error, OSError):
+        return
+    bytes_per_frame = channels * sample_width
+    if bytes_per_frame <= 0:
+        return
+    actual_frames = len(raw) // bytes_per_frame
+    if actual_frames == declared_frames:
+        return
+    tmp_path = f"{wav_path}.repair"
+    with wave.open(tmp_path, "wb") as repaired:
+        repaired.setnchannels(channels)
+        repaired.setsampwidth(sample_width)
+        repaired.setframerate(frame_rate)
+        repaired.writeframes(raw[: actual_frames * bytes_per_frame])
+    os.replace(tmp_path, wav_path)
+    log.info("WAVヘッダを修復しました: declared=%s actual=%s", declared_frames, actual_frames)

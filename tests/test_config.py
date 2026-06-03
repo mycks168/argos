@@ -66,6 +66,19 @@ def test_load_kokoro_settings(monkeypatch):
     assert settings.kokoro_sample_rate == 24000
 
 
+def test_load_whisper_settings(monkeypatch):
+    """faster-whisperフォールバック設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_WHISPER_MODEL_SIZE", "small")
+    monkeypatch.setenv("ARGOS_WHISPER_DEVICE", "cpu")
+    monkeypatch.setenv("ARGOS_WHISPER_COMPUTE_TYPE", "int8")
+
+    settings = load_settings()
+
+    assert settings.whisper_model_size == "small"
+    assert settings.whisper_device == "cpu"
+    assert settings.whisper_compute_type == "int8"
+
+
 def test_load_codex_progress_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")

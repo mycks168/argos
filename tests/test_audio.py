@@ -1,4 +1,6 @@
-from argos.hardware.audio import AudioPlayer, Recorder
+import wave
+
+from argos.hardware.audio import AudioPlayer, Recorder, _repair_wav_header
 
 
 class FakeProc:
@@ -85,6 +87,29 @@ def test_recorder_stop_accepts_arecord_sigint_message(monkeypatch, tmp_path):
     wav_path.write_bytes(b"RIFF" + b"0" * 200)
 
     assert recorder.stop() == str(wav_path)
+
+
+def test_repair_wav_header_fixes_arecord_interrupted_size(tmp_path):
+    """arecordの中断で残る過大なWAVフレーム数を修復する。"""
+    wav_path = tmp_path / "broken.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes((1000).to_bytes(2, "little", signed=True) * 1600)
+    with wav_path.open("r+b") as wav_file:
+        wav_file.seek(4)
+        wav_file.write((0x7FFFFFFF).to_bytes(4, "little"))
+        wav_file.seek(40)
+        wav_file.write((0x7FFFFFFF).to_bytes(4, "little"))
+
+    with wave.open(str(wav_path), "rb") as wav_file:
+        assert wav_file.getnframes() > 1_000_000
+
+    _repair_wav_header(str(wav_path))
+
+    with wave.open(str(wav_path), "rb") as wav_file:
+        assert wav_file.getnframes() == 1600
 
 
 def test_audio_player_play_and_cancel(monkeypatch):

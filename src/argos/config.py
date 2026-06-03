@@ -102,6 +102,9 @@ class Settings:
     kokoro_speed: float = 1.0
     kokoro_repo_id: str = "hexgrad/Kokoro-82M"
     kokoro_sample_rate: int = 24000
+    whisper_model_size: str = "small"
+    whisper_device: str = "auto"
+    whisper_compute_type: str = "int8"
 
 
 def _load_codex_slots() -> tuple[CodexSlot, ...]:
@@ -142,7 +145,7 @@ def load_settings() -> Settings:
     """環境変数と .env から設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
     return Settings(
-        stt_gateway_url=os.environ.get("STT_GATEWAY_URL", "http://localhost:23000"),
+        stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
@@ -220,6 +223,9 @@ def load_settings() -> Settings:
         kokoro_speed=float(os.environ.get("ARGOS_KOKORO_SPEED", "1.0")),
         kokoro_repo_id=os.environ.get("ARGOS_KOKORO_REPO_ID", "hexgrad/Kokoro-82M"),
         kokoro_sample_rate=int(os.environ.get("ARGOS_KOKORO_SAMPLE_RATE", "24000")),
+        whisper_model_size=os.environ.get("ARGOS_WHISPER_MODEL_SIZE", "small"),
+        whisper_device=os.environ.get("ARGOS_WHISPER_DEVICE", "auto"),
+        whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
     )
 
 

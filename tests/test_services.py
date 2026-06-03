@@ -6,6 +6,7 @@ from pathlib import Path
 
 from argos.hardware.audio import check_audio_level
 from argos.services.stt.gateway import SttGatewayClient
+from argos.services.stt.whisper import FasterWhisperClient
 from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
@@ -46,6 +47,32 @@ def test_stt_gateway_transcribe(monkeypatch, tmp_path):
     monkeypatch.setattr(client._session, "post", fake_post)
 
     assert client.transcribe(str(wav_path)) == "こんにちは"
+
+
+def test_faster_whisper_transcribe(monkeypatch, tmp_path):
+    """faster-whisperでWAVを文字起こしする。"""
+    wav_path = tmp_path / "sample.wav"
+    wav_path.write_bytes(b"RIFFdata")
+    calls = []
+
+    class Segment:
+        def __init__(self, text):
+            self.text = text
+
+    class FakeWhisperModel:
+        def __init__(self, model_size, device, compute_type):
+            calls.append(("init", model_size, device, compute_type))
+
+        def transcribe(self, wav_path, language):
+            calls.append(("transcribe", wav_path, language))
+            return [Segment("こんにちは"), Segment("世界")], object()
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", types.SimpleNamespace(WhisperModel=FakeWhisperModel))
+    client = FasterWhisperClient("small", "ja", "auto", "int8")
+
+    assert client.transcribe(str(wav_path)) == "こんにちは世界"
+    assert calls[0] == ("init", "small", "auto", "int8")
+    assert calls[1] == ("transcribe", str(wav_path), "ja")
 
 
 def test_tts_filter_normalize(monkeypatch):

@@ -24,6 +24,7 @@ from argos.services.greeting import GreetingManager
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_auth_warning_tone, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
+from argos.services.stt.whisper import FasterWhisperClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.kokoro import KokoroClient
@@ -100,6 +101,12 @@ class ArgosApp:
         self._settings = settings
         self._recorder = Recorder(settings.audio_input_device, settings.audio_sample_rate)
         self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language)
+        self._local_stt = FasterWhisperClient(
+            settings.whisper_model_size,
+            settings.stt_language,
+            settings.whisper_device,
+            settings.whisper_compute_type,
+        )
         self._codex = CodexCliClient(settings)
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
         self._voicevox = VoicevoxClient(
@@ -395,7 +402,7 @@ class ArgosApp:
                 log.info("無音として破棄しました: RMS=%.1f", level)
                 return
             try:
-                transcript = self._stt.transcribe(wav_path)
+                transcript = self._transcribe_wav(wav_path)
             except Exception as exc:
                 log.exception("文字起こしに失敗しました")
                 self._report_error("文字起こし", exc)
@@ -412,6 +419,16 @@ class ArgosApp:
         finally:
             self._button.mark_idle()
             self._set_ready_or_locked()
+
+    def _transcribe_wav(self, wav_path: str) -> str:
+        """stt-gatewayを優先し、未設定または失敗時はfaster-whisperで文字起こしする。"""
+        if self._settings.stt_gateway_url.strip():
+            try:
+                return self._stt.transcribe(wav_path)
+            except Exception as exc:
+                log.exception("stt-gatewayに失敗しました。faster-whisperへフォールバックします")
+                self._report_error("stt-gateway", exc)
+        return self._local_stt.transcribe(wav_path)
 
     def _handle_text(self, text: str) -> None:
         """テキストを Codex に送り、応答を読み上げる。"""

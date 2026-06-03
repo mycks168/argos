@@ -24,6 +24,10 @@
 }
 ```
 
+`STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。
+
+faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_WHISPER_COMPUTE_TYPE` で調整する。既定モデルは `small`。faster-whisper を使う環境では `uv sync --extra whisper` を実行する。
+
 ### tts-filter
 
 `POST /normalize` に JSON を送信する。

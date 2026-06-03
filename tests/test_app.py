@@ -82,6 +82,14 @@ class FakeStt:
         return "こんにちは"
 
 
+class FakeLocalStt:
+    def __init__(self, *args):
+        pass
+
+    def transcribe(self, wav):
+        return "ローカル認識"
+
+
 class FakeCodex:
     def __init__(self, *args):
         self.current_name = "作業"
@@ -131,6 +139,7 @@ def _patch_app(monkeypatch):
     monkeypatch.setattr("argos.core.app.Recorder", FakeRecorder)
     monkeypatch.setattr("argos.core.app.AudioPlayer", FakeAudio)
     monkeypatch.setattr("argos.core.app.SttGatewayClient", FakeStt)
+    monkeypatch.setattr("argos.core.app.FasterWhisperClient", FakeLocalStt)
     monkeypatch.setattr("argos.core.app.CodexCliClient", FakeCodex)
     monkeypatch.setattr("argos.core.app.TtsFilterClient", FakeFilter)
     monkeypatch.setattr("argos.core.app.VoicevoxClient", FakeVoicevox)
@@ -614,9 +623,39 @@ def test_stt_error_is_shown_on_dashboard(monkeypatch):
     monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
     app = ArgosApp(_settings())
     app._stt.transcribe = lambda _wav: (_ for _ in ()).throw(RuntimeError("応答なし"))
+    app._local_stt.transcribe = lambda _wav: (_ for _ in ()).throw(RuntimeError("ローカル失敗"))
 
     app._process_recording()
 
     snapshot = app._dashboard_state.snapshot()
-    assert snapshot["notifications"][0]["title"] == "文字起こし エラー"
-    assert snapshot["notifications"][0]["text"] == "応答なし"
+    assert [notification["title"] for notification in snapshot["notifications"]] == [
+        "stt-gateway エラー",
+        "文字起こし エラー",
+    ]
+    assert snapshot["notifications"][1]["text"] == "ローカル失敗"
+
+
+def test_stt_falls_back_to_local_whisper_on_gateway_error(monkeypatch):
+    """stt-gateway障害時はfaster-whisperで文字起こしを継続する。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app = ArgosApp(_settings())
+    app._stt.transcribe = lambda _wav: (_ for _ in ()).throw(RuntimeError("応答なし"))
+
+    app._process_recording()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][0]["title"] == "stt-gateway エラー"
+    assert app._codex.asked == ["ローカル認識"]
+
+
+def test_stt_uses_local_whisper_when_gateway_url_is_empty(monkeypatch):
+    """STTゲートウェイURLが空ならfaster-whisperで文字起こしする。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    settings = Settings(**{**_settings().__dict__, "stt_gateway_url": ""})
+    app = ArgosApp(settings)
+
+    app._process_recording()
+
+    assert app._codex.asked == ["ローカル認識"]
