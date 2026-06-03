@@ -26,6 +26,7 @@ from argos.services.startup import build_auth_warning_tone, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
+from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
 
 
@@ -106,6 +107,12 @@ class ArgosApp:
             settings.voicevox_speaker,
             settings.voicevox_sample_rate,
             settings.voicevox_speed_scale,
+        )
+        self._kokoro = KokoroClient(
+            settings.kokoro_voice,
+            settings.kokoro_speed,
+            settings.kokoro_repo_id,
+            settings.kokoro_sample_rate,
         )
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
         self._lcd = self._create_lcd_display(settings)
@@ -428,7 +435,7 @@ class ArgosApp:
                 announcer.stop()
 
     def _speak_response(self, text: str) -> None:
-        """Codex 応答を tts-filter と VOICEVOX に通して再生する。"""
+        """Codex 応答を tts-filter と TTS に通して再生する。"""
         if not text:
             return
         if self._settings.dry_run:
@@ -442,10 +449,9 @@ class ArgosApp:
             self._report_error("TTSフィルター", exc)
             return
         try:
-            wav_data = self._voicevox.synthesize(normalized)
+            wav_data = self._synthesize_tts(normalized)
         except Exception as exc:
-            log.exception("VOICEVOXに失敗しました")
-            self._report_error("VOICEVOX", exc)
+            log.exception("TTSに失敗しました")
             return
         try:
             self._audio.play_wav(wav_data)
@@ -454,7 +460,7 @@ class ArgosApp:
             self._report_error("音声再生", exc)
 
     def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "") -> str:
-        """応答差分を句読点で分割し、VOICEVOX へ順次投入する。"""
+        """応答差分を句読点で分割し、TTS へ順次投入する。"""
         full_response = ""
         chunker = TextChunker(self._settings.tts_delimiters)
         if self._settings.dry_run:
@@ -482,14 +488,14 @@ class ArgosApp:
             log.info("Codex 応答差分: %s", delta[:120])
             for chunk in chunker.push(delta):
                 if self._current_cancel_generation() != stream_generation:
-                    log.info("キャンセル済みのため VOICEVOX チャンク投入を停止します")
+                    log.info("キャンセル済みのため TTS チャンク投入を停止します")
                     break
-                log.info("VOICEVOX チャンク投入: %s", chunk[:80])
+                log.info("TTS チャンク投入: %s", chunk[:80])
                 tts_queue.put(chunk)
 
         rest = chunker.flush()
         if rest and self._current_cancel_generation() == stream_generation:
-            log.info("VOICEVOX 最終チャンク投入: %s", rest[:80])
+            log.info("TTS 最終チャンク投入: %s", rest[:80])
             tts_queue.put(rest)
         tts_queue.put(None)
         worker.join(timeout=300)
@@ -521,7 +527,7 @@ class ArgosApp:
             yield delta
 
     def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int) -> None:
-        """VOICEVOX チャンクを順に合成して再生する。"""
+        """TTS チャンクを順に合成して再生する。"""
         while True:
             chunk = tts_queue.get()
             if chunk is None:
@@ -542,10 +548,9 @@ class ArgosApp:
                 self._drain_tts_queue(tts_queue)
                 return
             try:
-                wav_data = self._voicevox.synthesize(normalized)
+                wav_data = self._synthesize_tts(normalized)
             except Exception as exc:
-                log.exception("VOICEVOXに失敗しました")
-                self._report_error("VOICEVOX", exc)
+                log.exception("TTSに失敗しました")
                 self._drain_tts_queue(tts_queue)
                 return
             if self._current_cancel_generation() != generation:
@@ -584,16 +589,30 @@ class ArgosApp:
             self._report_error("TTSフィルター", exc)
             return
         try:
-            wav_data = self._voicevox.synthesize(normalized)
+            wav_data = self._synthesize_tts(normalized)
         except Exception as exc:
-            log.exception("状態通知のVOICEVOXに失敗しました")
-            self._report_error("VOICEVOX", exc)
+            log.exception("状態通知のTTSに失敗しました")
             return
         try:
             self._audio.play_wav(wav_data)
         except Exception as exc:
             log.exception("状態通知の音声再生に失敗しました")
             self._report_error("音声再生", exc)
+
+    def _synthesize_tts(self, text: str) -> bytes:
+        """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""
+        if self._settings.voicevox_url.strip():
+            try:
+                return self._voicevox.synthesize(text)
+            except Exception as exc:
+                log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
+                self._report_error("VOICEVOX", exc)
+        try:
+            return self._kokoro.synthesize(text)
+        except Exception as exc:
+            log.exception("Kokoroに失敗しました")
+            self._report_error("Kokoro", exc)
+            raise
 
     def _report_error(self, source: str, exc: Exception) -> None:
         """内部エラーをダッシュボードへ短い通知として表示する。"""

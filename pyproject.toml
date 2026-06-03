@@ -20,6 +20,11 @@ dev = [
 face = [
     "opencv-python-headless",
 ]
+kokoro = [
+    "kokoro>=0.9.4",
+    "misaki[ja]>=0.9.4",
+    "soundfile>=0.13.1",
+]
 
 [project.scripts]
 argos = "argos.main:main"
