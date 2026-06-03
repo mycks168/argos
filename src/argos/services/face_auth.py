@@ -222,19 +222,14 @@ def detect_faces(image_path: Path, cv2_module: Any = _CV2_AUTO) -> FaceDetection
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if hasattr(cv2, "equalizeHist"):
         gray = cv2.equalizeHist(gray)
-    best_rotation = 0
-    best_faces: Any = ()
     for rotation, candidate in _face_detection_candidates(gray, cv2):
         faces = classifier.detectMultiScale(candidate, scaleFactor=1.03, minNeighbors=2, minSize=(50, 50))
-        if len(faces) > len(best_faces):
-            best_rotation = rotation
-            best_faces = faces
-    best_faces = _significant_faces(best_faces)
-    count = len(best_faces)
-    if count == 0:
-        return FaceDetectionResult(True, 0, "顔が検出できません。")
-    boxes = tuple(tuple(int(value) for value in face) for face in best_faces)
-    return FaceDetectionResult(True, count, f"顔を{count}件検出しました。", boxes, best_rotation)
+        significant_faces = _significant_faces(faces)
+        if significant_faces:
+            boxes = tuple(tuple(int(value) for value in face) for face in significant_faces)
+            count = len(boxes)
+            return FaceDetectionResult(True, count, f"顔を{count}件検出しました。", boxes, rotation)
+    return FaceDetectionResult(True, 0, "顔が検出できません。")
 
 
 def _significant_faces(faces: Any) -> list[tuple[int, int, int, int]]:
