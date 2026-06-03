@@ -79,6 +79,25 @@ class Settings:
     startup_splash_enabled: bool = True
     startup_splash_seconds: float = 3.0
     startup_sound_enabled: bool = True
+    auth_enabled: bool = False
+    auth_keyword_hash: str = ""
+    auth_trust_seconds: int = 1800
+    auth_failure_threshold: int = 3
+    auth_face_enabled: bool = False
+    auth_face_samples_dir: str = "~/.local/share/argos/face-auth"
+    auth_face_capture_command: str = "rpicam-still --nopreview --timeout 700 --width 640 --height 480 -o {path}"
+    auth_face_capture_path: str = "/tmp/argos/auth-face.jpg"
+    auth_face_image_rotation: int = 0
+    auth_face_threshold: int = 68
+    auth_face_min_matches: int = 1
+    auth_face_detection_enabled: bool = True
+    auth_face_min_detected_faces: int = 1
+    auth_face_max_detected_faces: int = 1
+    auth_alert_command: str = ""
+    auth_warning_sound_enabled: bool = True
+    auth_warning_delay_seconds: float = 10.0
+    auth_alert_delay_seconds: float = 30.0
+    auth_warning_interval_seconds: float = 10.0
 
 
 def _load_codex_slots() -> tuple[CodexSlot, ...]:
@@ -171,6 +190,28 @@ def load_settings() -> Settings:
         startup_splash_enabled=_bool_env("ARGOS_STARTUP_SPLASH_ENABLED", True),
         startup_splash_seconds=float(os.environ.get("ARGOS_STARTUP_SPLASH_SECONDS", "3")),
         startup_sound_enabled=_bool_env("ARGOS_STARTUP_SOUND_ENABLED", True),
+        auth_enabled=_bool_env("ARGOS_AUTH_ENABLED", False),
+        auth_keyword_hash=os.environ.get("ARGOS_AUTH_KEYWORD_HASH", ""),
+        auth_trust_seconds=int(os.environ.get("ARGOS_AUTH_TRUST_SECONDS", "1800")),
+        auth_failure_threshold=int(os.environ.get("ARGOS_AUTH_FAILURE_THRESHOLD", "3")),
+        auth_face_enabled=_bool_env("ARGOS_AUTH_FACE_ENABLED", False),
+        auth_face_samples_dir=os.environ.get("ARGOS_AUTH_FACE_SAMPLES_DIR", "~/.local/share/argos/face-auth"),
+        auth_face_capture_command=os.environ.get(
+            "ARGOS_AUTH_FACE_CAPTURE_COMMAND",
+            "rpicam-still --nopreview --timeout 700 --width 640 --height 480 -o {path}",
+        ),
+        auth_face_capture_path=os.environ.get("ARGOS_AUTH_FACE_CAPTURE_PATH", "/tmp/argos/auth-face.jpg"),
+        auth_face_image_rotation=int(os.environ.get("ARGOS_AUTH_FACE_IMAGE_ROTATION", "0")),
+        auth_face_threshold=int(os.environ.get("ARGOS_AUTH_FACE_THRESHOLD", "68")),
+        auth_face_min_matches=int(os.environ.get("ARGOS_AUTH_FACE_MIN_MATCHES", "1")),
+        auth_face_detection_enabled=_bool_env("ARGOS_AUTH_FACE_DETECTION_ENABLED", True),
+        auth_face_min_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MIN_DETECTED_FACES", "1")),
+        auth_face_max_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MAX_DETECTED_FACES", "1")),
+        auth_alert_command=os.environ.get("ARGOS_AUTH_ALERT_COMMAND", ""),
+        auth_warning_sound_enabled=_bool_env("ARGOS_AUTH_WARNING_SOUND_ENABLED", True),
+        auth_warning_delay_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_DELAY_SECONDS", "10")),
+        auth_alert_delay_seconds=float(os.environ.get("ARGOS_AUTH_ALERT_DELAY_SECONDS", "30")),
+        auth_warning_interval_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_INTERVAL_SECONDS", "10")),
     )
 
 

@@ -80,6 +80,29 @@ Codex を呼び出した直後は、作業を始めたことを短い音声で�
 
 ARGOS 起動時は、HDMIダッシュボードに短いスプラッシュアニメーションを表示し、VOICEVOXを使わない合成起動音を1回再生します。`ARGOS_STARTUP_SPLASH_ENABLED` と `ARGOS_STARTUP_SOUND_ENABLED` で無効化できます。
 
+## 本人確認
+
+`ARGOS_AUTH_ENABLED=true` にすると、本人確認が済むまで発話をCodexへ送りません。現段階では音声キーワード解除に対応しています。キーワードは平文では保存せず、次のコマンドでハッシュ化して `.env` の `ARGOS_AUTH_KEYWORD_HASH` に設定します。
+
+```bash
+uv run scripts/hash-auth-keyword.py
+```
+
+ロック中の発話は文字起こしだけに使い、キーワードが一致した場合はロックを解除します。解除キーワードそのものはCodexへ送りません。
+
+カメラ照合を使う場合は、まず顔サンプルを登録します。
+
+```bash
+uv run scripts/check-face-detection.py
+uv run scripts/enroll-face-auth.py --count 5
+```
+
+最初に `check-face-detection.py` で顔が1件検出されるか確認します。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存します。その後、`.env` で `ARGOS_AUTH_FACE_ENABLED=true` にします。起動時とロック中の発話時にカメラ照合を試し、成功した場合はその発話をそのままCodexへ送ります。失敗した場合は音声キーワードで解除できます。
+顔検出にはOpenCVが必要です。未導入の場合、顔認証は失敗扱いになり、音声キーワード解除へ戻ります。
+カメラが横向きに写る場合は `ARGOS_AUTH_FACE_IMAGE_ROTATION=90` のように設定します。
+
+起動後に未認証の場合は「本人確認をしてください。」と案内します。`ARGOS_AUTH_WARNING_DELAY_SECONDS` の秒数が過ぎても未認証なら、警告音と本人確認案内を繰り返します。`ARGOS_AUTH_ALERT_DELAY_SECONDS` を超えると「警戒モードに入りました」と案内し、画面を「警戒中」にします。本人確認の失敗が続いた場合は、`ARGOS_AUTH_ALERT_COMMAND` に設定したコマンドも実行できます。
+
 設定:
 
 ```text

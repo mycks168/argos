@@ -40,6 +40,27 @@ def build_startup_chime(sample_rate: int = 48000) -> bytes:
         return buffer.getvalue()
 
 
+def build_auth_warning_tone(sample_rate: int = 48000) -> bytes:
+    """本人確認待ちを知らせる短い警告音を生成する。"""
+    duration_seconds = 1.2
+    frame_count = int(sample_rate * duration_seconds)
+    frames = bytearray()
+    for index in range(frame_count):
+        t = index / sample_rate
+        pulse = 1.0 if int(t / 0.18) % 2 == 0 else 0.35
+        fade = min(t / 0.04, 1.0) * min((duration_seconds - t) / 0.12, 1.0)
+        tone = math.sin(2 * math.pi * 740.0 * t) + 0.35 * math.sin(2 * math.pi * 988.0 * t)
+        sample = int(7000 * fade * pulse * tone)
+        frames.extend(struct.pack("<h", max(-32768, min(32767, sample))))
+    with io.BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(sample_rate)
+            wav_file.writeframes(bytes(frames))
+        return buffer.getvalue()
+
+
 def _voice_envelope(t: float, start: float, duration: float, attack: float, release: float) -> float:
     """指定区間の音量包絡を返す。"""
     local_time = t - start

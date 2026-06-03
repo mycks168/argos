@@ -1,5 +1,6 @@
 from argos.config import CodexSlot, Settings
 from argos.core.app import ArgosApp, CodexProgressAnnouncer
+from argos.services.auth import hash_keyword
 
 
 def _settings():
@@ -173,6 +174,220 @@ def test_process_recording_greets_on_first_interaction(monkeypatch, capsys, tmp_
 
     output = capsys.readouterr().out
     assert any(greeting in output for greeting in ("おはよう。", "こんにちは。", "こんばんは。"))
+
+
+def test_locked_recording_does_not_reach_codex(monkeypatch):
+    """未認証の発話はCodexへ送らない。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: "違う言葉"
+
+    app._process_recording()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert app._codex.asked == []
+    assert snapshot["status"]["code"] == "locked"
+    assert snapshot["notifications"][0]["title"] == "本人確認 エラー"
+
+
+def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
+    """起動後に未認証なら本人確認を促す。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._announce_auth_required()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "locked"
+    assert snapshot["status"]["label"] == "ロック中"
+    assert "本人確認をしてください。" in capsys.readouterr().out
+
+
+def test_auth_warning_repeats_until_authenticated(monkeypatch):
+    """未認証が続いたら案内を繰り返し、認証後に止める。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_warning_delay_seconds": 0,
+            "auth_alert_delay_seconds": 30,
+            "auth_warning_interval_seconds": 0.01,
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._start_auth_warning_timer(0)
+    import time
+
+    time.sleep(0.03)
+    app._auth.verify_keyword("解除")
+    app._stop_auth_warning()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert app._audio.played
+    assert snapshot["status"]["code"] == "locked"
+
+
+def test_auth_warning_enters_alert_mode_after_delay(monkeypatch):
+    """警戒モード遅延を超えたら警戒中に切り替える。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_warning_delay_seconds": 0,
+            "auth_alert_delay_seconds": 0,
+            "auth_warning_interval_seconds": 0.05,
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._start_auth_warning_timer(0)
+    import time
+
+    time.sleep(0.03)
+    app._stop_auth_warning()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "alert"
+    assert snapshot["status"]["label"] == "警戒中"
+
+
+def test_keyword_unlock_does_not_send_keyword_to_codex(monkeypatch, capsys):
+    """音声キーワードは解除だけに使い、Codexへ送らない。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: "解除"
+
+    app._process_recording()
+
+    assert app._codex.asked == []
+    assert "本人確認しました。" in capsys.readouterr().out
+
+
+def test_authenticated_recording_reaches_codex(monkeypatch):
+    """認証済みの発話はCodexへ送る。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+    app._auth.verify_keyword("解除")
+
+    app._process_recording()
+
+    assert app._codex.asked == ["こんにちは"]
+
+
+def test_face_auth_success_allows_current_recording(monkeypatch):
+    """顔認証が成功した発話はそのままCodexへ送る。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": True,
+        }
+    )
+    app = ArgosApp(settings)
+    app._face_auth.verify = lambda: type(
+        "Result",
+        (),
+        {"authenticated": True, "message": "顔認証しました。", "score": 0},
+    )()
+
+    app._process_recording()
+
+    assert app._codex.asked == ["こんにちは"]
+
+
+def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):
+    """顔認証失敗後も音声キーワードで解除できる。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": True,
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: "解除"
+    app._face_auth.verify = lambda: type(
+        "Result",
+        (),
+        {"authenticated": False, "message": "顔認証に失敗しました。", "score": 99},
+    )()
+
+    app._process_recording()
+
+    assert app._codex.asked == []
+    assert "本人確認しました。" in capsys.readouterr().out
+
+
+def test_repeated_auth_failure_dispatches_security_alert(monkeypatch):
+    """本人確認失敗がしきい値に達したら警戒アクションを呼ぶ。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_failure_threshold": 1,
+        }
+    )
+    app = ArgosApp(settings)
+    calls = []
+
+    def dispatch(source, message, image_path=""):
+        """テスト用の警戒通知を記録する。"""
+        calls.append((source, message, image_path))
+        return type("Result", (), {"executed": True, "succeeded": True, "message": "ok"})()
+
+    app._security_alert.dispatch = dispatch
+    app._stt.transcribe = lambda _wav: "違う言葉"
+
+    app._process_recording()
+
+    assert calls == [("本人確認", "本人確認に複数回失敗しました。", "")]
 
 
 def test_codex_progress_announcer_speaks_start_and_wait(monkeypatch):
