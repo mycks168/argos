@@ -5,10 +5,12 @@ from __future__ import annotations
 import logging
 import queue
 import random
+import shutil
 import signal
 import threading
 import time
 from collections.abc import Iterable
+from pathlib import Path
 
 from argos.config import Settings
 from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
@@ -32,6 +34,8 @@ from argos.services.tts.voicevox import VoicevoxClient
 
 
 log = logging.getLogger(__name__)
+FACE_AUTH_FAILURE_IMAGE_PATH = Path("/tmp/argos/camera-latest.jpg")
+FACE_AUTH_FAILURE_IMAGE_URL = "/camera/latest.jpg"
 
 
 CODEX_PROGRESS_START_PHRASES = (
@@ -292,8 +296,31 @@ class ArgosApp:
         detail = result.message
         if result.score is not None:
             detail = f"{detail} スコア={result.score}"
-        self._dashboard_state.add_error_notification(source, detail)
+        self._report_face_auth_failure(source, detail, getattr(result, "image_path", ""))
         return False
+
+    def _report_face_auth_failure(self, source: str, detail: str, image_path: str = "") -> None:
+        """顔認証失敗を、撮影画像があれば画像付き通知として表示する。"""
+        image_url = ""
+        if image_path:
+            try:
+                source_path = Path(image_path)
+                if source_path.exists():
+                    FACE_AUTH_FAILURE_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source_path, FACE_AUTH_FAILURE_IMAGE_PATH)
+                    image_url = f"{FACE_AUTH_FAILURE_IMAGE_URL}?t={int(time.time() * 1000)}"
+            except OSError:
+                log.exception("顔認証失敗画像の通知コピーに失敗しました")
+        if image_url:
+            self._dashboard_state.add_notification(
+                title=f"{source} エラー",
+                text=detail,
+                source=source,
+                priority="high",
+                image_url=image_url,
+            )
+            return
+        self._dashboard_state.add_error_notification(source, detail)
 
     def _dispatch_security_alert(self, source: str, message: str, image_path: str = "") -> None:
         """警戒通知をダッシュボードと外部アクションへ送る。"""

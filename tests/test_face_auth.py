@@ -121,3 +121,53 @@ def test_detect_faces_counts_faces(tmp_path):
 
     assert result.available is True
     assert result.face_count == 1
+
+
+def test_detect_faces_prefers_original_orientation(tmp_path):
+    """元画像で顔が見つかった場合は回転候補の誤検出を採用しない。"""
+    image_path = tmp_path / "capture.jpg"
+    _write_image(image_path, (20, 20, 20))
+    original = object()
+    rotated = object()
+
+    class FakeCascade:
+        """顔検出器のテストダブル。"""
+
+        def __init__(self, _path):
+            """パスを受け取る。"""
+
+        def detectMultiScale(self, candidate, **_kwargs):
+            """元画像と回転画像で異なる顔候補を返す。"""
+            if candidate is original:
+                return [(344, 203, 129, 129)]
+            return [(329, 91, 54, 54), (372, 258, 97, 97)]
+
+    class FakeCv2:
+        """回転候補を持つOpenCVモジュールのテストダブル。"""
+
+        COLOR_BGR2GRAY = 0
+        ROTATE_90_CLOCKWISE = 90
+        ROTATE_180 = 180
+        ROTATE_90_COUNTERCLOCKWISE = 270
+        CascadeClassifier = FakeCascade
+        data = type("Data", (), {"haarcascades": str(tmp_path)})()
+
+        @staticmethod
+        def imread(_path):
+            """画像読み込み結果を返す。"""
+            return original
+
+        @staticmethod
+        def cvtColor(image, _mode):
+            """グレースケール画像を返す。"""
+            return image
+
+        @staticmethod
+        def rotate(_image, _rotation):
+            """回転画像を返す。"""
+            return rotated
+
+    result = detect_faces(image_path, cv2_module=FakeCv2)
+
+    assert result.rotation == 0
+    assert result.boxes == ((344, 203, 129, 129),)

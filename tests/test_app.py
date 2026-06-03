@@ -380,6 +380,44 @@ def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):
     assert "本人確認しました。" in capsys.readouterr().out
 
 
+def test_face_auth_failure_notification_has_image(monkeypatch, tmp_path):
+    """顔認証失敗時は撮影画像を通知に付ける。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    latest_path = tmp_path / "camera-latest.jpg"
+    captured_path = tmp_path / "auth-face.jpg"
+    captured_path.write_bytes(b"jpg")
+    monkeypatch.setattr("argos.core.app.FACE_AUTH_FAILURE_IMAGE_PATH", latest_path)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": True,
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: "違う言葉"
+    app._face_auth.verify = lambda: type(
+        "Result",
+        (),
+        {
+            "authenticated": False,
+            "message": "顔認証に失敗しました。",
+            "score": 99,
+            "image_path": str(captured_path),
+        },
+    )()
+
+    app._process_recording()
+
+    snapshot = app._dashboard_state.snapshot()
+    face_notice = snapshot["notifications"][0]
+    assert face_notice["title"] == "顔認証 エラー"
+    assert face_notice["image_url"].startswith("/camera/latest.jpg?t=")
+    assert latest_path.read_bytes() == b"jpg"
+
+
 def test_repeated_auth_failure_dispatches_security_alert(monkeypatch):
     """本人確認失敗がしきい値に達したら警戒アクションを呼ぶ。"""
     _patch_app(monkeypatch)
