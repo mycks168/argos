@@ -51,6 +51,21 @@ def test_load_voicevox_speed_scale(monkeypatch):
     assert settings.voicevox_speed_scale == 1.1
 
 
+def test_load_kokoro_settings(monkeypatch):
+    """Kokoroフォールバック設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_KOKORO_VOICE", "jf_alpha")
+    monkeypatch.setenv("ARGOS_KOKORO_SPEED", "1.2")
+    monkeypatch.setenv("ARGOS_KOKORO_REPO_ID", "repo")
+    monkeypatch.setenv("ARGOS_KOKORO_SAMPLE_RATE", "24000")
+
+    settings = load_settings()
+
+    assert settings.kokoro_voice == "jf_alpha"
+    assert settings.kokoro_speed == 1.2
+    assert settings.kokoro_repo_id == "repo"
+    assert settings.kokoro_sample_rate == 24000
+
+
 def test_load_codex_progress_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")

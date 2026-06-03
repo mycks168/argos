@@ -98,6 +98,10 @@ class Settings:
     auth_warning_delay_seconds: float = 10.0
     auth_alert_delay_seconds: float = 30.0
     auth_warning_interval_seconds: float = 10.0
+    kokoro_voice: str = "jf_alpha"
+    kokoro_speed: float = 1.0
+    kokoro_repo_id: str = "hexgrad/Kokoro-82M"
+    kokoro_sample_rate: int = 24000
 
 
 def _load_codex_slots() -> tuple[CodexSlot, ...]:
@@ -143,7 +147,7 @@ def load_settings() -> Settings:
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),
-        voicevox_url=os.environ.get("VOICEVOX_URL", "http://localhost:50021"),
+        voicevox_url=os.environ.get("VOICEVOX_URL", ""),
         voicevox_speaker=int(os.environ.get("VOICEVOX_SPEAKER", "2")),
         voicevox_sample_rate=int(os.environ.get("VOICEVOX_SAMPLE_RATE", "48000")),
         voicevox_speed_scale=float(os.environ.get("VOICEVOX_SPEED_SCALE", "1.0")),
@@ -212,6 +216,10 @@ def load_settings() -> Settings:
         auth_warning_delay_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_DELAY_SECONDS", "10")),
         auth_alert_delay_seconds=float(os.environ.get("ARGOS_AUTH_ALERT_DELAY_SECONDS", "30")),
         auth_warning_interval_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_INTERVAL_SECONDS", "10")),
+        kokoro_voice=os.environ.get("ARGOS_KOKORO_VOICE", "jf_alpha"),
+        kokoro_speed=float(os.environ.get("ARGOS_KOKORO_SPEED", "1.0")),
+        kokoro_repo_id=os.environ.get("ARGOS_KOKORO_REPO_ID", "hexgrad/Kokoro-82M"),
+        kokoro_sample_rate=int(os.environ.get("ARGOS_KOKORO_SAMPLE_RATE", "24000")),
     )
 
 

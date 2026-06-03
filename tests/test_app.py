@@ -119,6 +119,14 @@ class FakeVoicevox:
         return text.encode()
 
 
+class FakeKokoro:
+    def __init__(self, *args):
+        pass
+
+    def synthesize(self, text):
+        return f"kokoro:{text}".encode()
+
+
 def _patch_app(monkeypatch):
     monkeypatch.setattr("argos.core.app.Recorder", FakeRecorder)
     monkeypatch.setattr("argos.core.app.AudioPlayer", FakeAudio)
@@ -126,6 +134,7 @@ def _patch_app(monkeypatch):
     monkeypatch.setattr("argos.core.app.CodexCliClient", FakeCodex)
     monkeypatch.setattr("argos.core.app.TtsFilterClient", FakeFilter)
     monkeypatch.setattr("argos.core.app.VoicevoxClient", FakeVoicevox)
+    monkeypatch.setattr("argos.core.app.KokoroClient", FakeKokoro)
 
 
 def test_handle_text_dry_run(monkeypatch, capsys):
@@ -530,6 +539,31 @@ def test_speak_response_plays_normalized_voice(monkeypatch):
     app._speak_response("返答")
 
     assert app._audio.played == ["正規化:返答".encode()]
+
+
+def test_speak_response_uses_kokoro_when_voicevox_url_is_empty(monkeypatch):
+    """VOICEVOX URLが空ならKokoroで読み上げる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False, "voicevox_url": ""})
+    app = ArgosApp(settings)
+
+    app._speak_response("返答")
+
+    assert app._audio.played == ["kokoro:正規化:返答".encode()]
+
+
+def test_speak_response_falls_back_to_kokoro_on_voicevox_error(monkeypatch):
+    """VOICEVOX障害時はKokoroで読み上げを継続する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+
+    app._speak_response("返答")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][0]["title"] == "VOICEVOX エラー"
+    assert app._audio.played == ["kokoro:正規化:返答".encode()]
 
 
 def test_stream_voicevox_error_is_shown_on_dashboard(monkeypatch):

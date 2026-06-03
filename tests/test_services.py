@@ -1,10 +1,13 @@
 import json
+import sys
+import types
 import wave
 from pathlib import Path
 
 from argos.hardware.audio import check_audio_level
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.tts.filter import TtsFilterClient
+from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
 
 
@@ -75,3 +78,37 @@ def test_voicevox_synthesize(monkeypatch):
     assert calls[0][0] == "http://voicevox/audio_query"
     assert calls[1][1]["json"]["outputSamplingRate"] == 48000
     assert calls[1][1]["json"]["speedScale"] == 1.1
+
+
+def test_kokoro_synthesize_uses_japanese_pipeline(monkeypatch):
+    """Kokoroの日本語パイプラインからWAVを生成する。"""
+    calls = []
+
+    class Result:
+        audio = [0.0, 0.1]
+
+    class FakePipeline:
+        def __init__(self, lang_code, repo_id):
+            calls.append(("init", lang_code, repo_id))
+
+        def __call__(self, text, voice, speed):
+            calls.append(("call", text, voice, speed))
+            return [Result()]
+
+    fake_numpy = types.SimpleNamespace(concatenate=lambda parts: parts[0])
+
+    def fake_write(buffer, samples, sample_rate, format, subtype):
+        calls.append(("write", samples, sample_rate, format, subtype))
+        buffer.write(b"wav")
+
+    fake_soundfile = types.SimpleNamespace(write=fake_write)
+    monkeypatch.setitem(sys.modules, "kokoro", types.SimpleNamespace(KPipeline=FakePipeline))
+    monkeypatch.setitem(sys.modules, "numpy", fake_numpy)
+    monkeypatch.setitem(sys.modules, "soundfile", fake_soundfile)
+
+    client = KokoroClient("jf_alpha", 1.2, "repo", 24000)
+
+    assert client.synthesize("こんにちは") == b"wav"
+    assert calls[0] == ("init", "j", "repo")
+    assert calls[1] == ("call", "こんにちは", "jf_alpha", 1.2)
+    assert calls[2] == ("write", [0.0, 0.1], 24000, "WAV", "PCM_16")
