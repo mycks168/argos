@@ -87,8 +87,12 @@ class Settings:
     auth_face_samples_dir: str = "~/.local/share/argos/face-auth"
     auth_face_capture_command: str = "rpicam-still --nopreview --timeout 700 --width 640 --height 480 -o {path}"
     auth_face_capture_path: str = "/tmp/argos/auth-face.jpg"
+    auth_face_image_rotation: int = 0
     auth_face_threshold: int = 68
     auth_face_min_matches: int = 1
+    auth_face_detection_enabled: bool = True
+    auth_face_min_detected_faces: int = 1
+    auth_face_max_detected_faces: int = 1
     auth_alert_command: str = ""
     auth_warning_sound_enabled: bool = True
     auth_warning_delay_seconds: float = 10.0
@@ -197,8 +201,12 @@ def load_settings() -> Settings:
             "rpicam-still --nopreview --timeout 700 --width 640 --height 480 -o {path}",
         ),
         auth_face_capture_path=os.environ.get("ARGOS_AUTH_FACE_CAPTURE_PATH", "/tmp/argos/auth-face.jpg"),
+        auth_face_image_rotation=int(os.environ.get("ARGOS_AUTH_FACE_IMAGE_ROTATION", "0")),
         auth_face_threshold=int(os.environ.get("ARGOS_AUTH_FACE_THRESHOLD", "68")),
         auth_face_min_matches=int(os.environ.get("ARGOS_AUTH_FACE_MIN_MATCHES", "1")),
+        auth_face_detection_enabled=_bool_env("ARGOS_AUTH_FACE_DETECTION_ENABLED", True),
+        auth_face_min_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MIN_DETECTED_FACES", "1")),
+        auth_face_max_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MAX_DETECTED_FACES", "1")),
         auth_alert_command=os.environ.get("ARGOS_AUTH_ALERT_COMMAND", ""),
         auth_warning_sound_enabled=_bool_env("ARGOS_AUTH_WARNING_SOUND_ENABLED", True),
         auth_warning_delay_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_DELAY_SECONDS", "10")),

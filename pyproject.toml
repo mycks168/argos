@@ -17,6 +17,9 @@ dev = [
     "pytest",
     "pytest-cov",
 ]
+face = [
+    "opencv-python-headless",
+]
 
 [project.scripts]
 argos = "argos.main:main"

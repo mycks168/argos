@@ -62,3 +62,12 @@ def test_enroll_face_auth_script_exists():
 
     assert script.exists()
     assert "FaceAuthVerifier" in script.read_text()
+    assert "verifier.detect" in script.read_text()
+
+
+def test_check_face_detection_script_exists():
+    """顔検出確認スクリプトがある。"""
+    script = Path(__file__).parents[1] / "scripts" / "check-face-detection.py"
+
+    assert script.exists()
+    assert "DEFAULT_CAMERA_SNAPSHOT_PATH" in script.read_text()

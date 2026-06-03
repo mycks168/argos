@@ -97,8 +97,12 @@ def test_load_auth_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_AUTH_FACE_SAMPLES_DIR", "/tmp/faces")
     monkeypatch.setenv("ARGOS_AUTH_FACE_CAPTURE_COMMAND", "echo {path}")
     monkeypatch.setenv("ARGOS_AUTH_FACE_CAPTURE_PATH", "/tmp/face.jpg")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_IMAGE_ROTATION", "90")
     monkeypatch.setenv("ARGOS_AUTH_FACE_THRESHOLD", "12")
     monkeypatch.setenv("ARGOS_AUTH_FACE_MIN_MATCHES", "2")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_DETECTION_ENABLED", "false")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_MIN_DETECTED_FACES", "1")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_MAX_DETECTED_FACES", "2")
     monkeypatch.setenv("ARGOS_AUTH_ALERT_COMMAND", "echo alert")
     monkeypatch.setenv("ARGOS_AUTH_WARNING_SOUND_ENABLED", "false")
     monkeypatch.setenv("ARGOS_AUTH_WARNING_DELAY_SECONDS", "4")
@@ -115,8 +119,12 @@ def test_load_auth_settings(monkeypatch):
     assert settings.auth_face_samples_dir == "/tmp/faces"
     assert settings.auth_face_capture_command == "echo {path}"
     assert settings.auth_face_capture_path == "/tmp/face.jpg"
+    assert settings.auth_face_image_rotation == 90
     assert settings.auth_face_threshold == 12
     assert settings.auth_face_min_matches == 2
+    assert settings.auth_face_detection_enabled is False
+    assert settings.auth_face_min_detected_faces == 1
+    assert settings.auth_face_max_detected_faces == 2
     assert settings.auth_alert_command == "echo alert"
     assert settings.auth_warning_sound_enabled is False
     assert settings.auth_warning_delay_seconds == 4

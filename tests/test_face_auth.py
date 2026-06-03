@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from argos.services.face_auth import FaceAuthVerifier, hamming_distance, image_fingerprint
+from argos.services.face_auth import FaceAuthVerifier, detect_faces, hamming_distance, image_fingerprint, rotate_saved_image
 
 
 def _write_image(path: Path, color: tuple[int, int, int]) -> None:
@@ -23,11 +23,22 @@ def test_hamming_distance_counts_different_bits():
     assert hamming_distance("1010", "1001") == 2
 
 
+def test_rotate_saved_image_rotates_file(tmp_path):
+    """撮影画像の回転補正を保存する。"""
+    image_path = tmp_path / "capture.jpg"
+    Image.new("RGB", (20, 10), (80, 120, 160)).save(image_path)
+
+    rotate_saved_image(image_path, 90)
+
+    with Image.open(image_path) as image:
+        assert image.size == (10, 20)
+
+
 def test_enroll_and_verify_matching_image(tmp_path):
     """登録画像と一致する撮影画像なら認証成功にする。"""
     image_path = tmp_path / "capture.jpg"
     _write_image(image_path, (20, 20, 20))
-    verifier = FaceAuthVerifier(True, str(tmp_path / "samples"), "true", str(image_path), 0, 1)
+    verifier = FaceAuthVerifier(True, str(tmp_path / "samples"), "true", str(image_path), 0, 1, False)
     verifier.enroll(image_path)
 
     result = verifier.verify()
@@ -36,13 +47,77 @@ def test_enroll_and_verify_matching_image(tmp_path):
     assert result.score == 0
 
 
-def test_verify_without_samples_fails(tmp_path):
-    """登録サンプルが無い場合は認証失敗にする。"""
+def test_old_fingerprint_version_is_ignored(tmp_path):
+    """古い形式の登録サンプルは照合に使わない。"""
+    samples_dir = tmp_path / "samples"
+    samples_dir.mkdir()
+    (samples_dir / "old.json").write_text('{"version": 1, "fingerprint": "1111"}', encoding="utf-8")
     image_path = tmp_path / "capture.jpg"
     _write_image(image_path, (20, 20, 20))
-    verifier = FaceAuthVerifier(True, str(tmp_path / "samples"), "true", str(image_path), 0, 1)
+    verifier = FaceAuthVerifier(True, str(samples_dir), "true", str(image_path), 0, 1, False)
 
     result = verifier.verify()
 
     assert result.authenticated is False
     assert "登録画像" in result.message
+
+
+def test_verify_without_samples_fails(tmp_path):
+    """登録サンプルが無い場合は認証失敗にする。"""
+    image_path = tmp_path / "capture.jpg"
+    _write_image(image_path, (20, 20, 20))
+    verifier = FaceAuthVerifier(True, str(tmp_path / "samples"), "true", str(image_path), 0, 1, False)
+
+    result = verifier.verify()
+
+    assert result.authenticated is False
+    assert "登録画像" in result.message
+
+
+def test_detect_faces_reports_missing_opencv(tmp_path):
+    """OpenCV未導入なら顔検出不可として返す。"""
+    image_path = tmp_path / "capture.jpg"
+    _write_image(image_path, (20, 20, 20))
+
+    result = detect_faces(image_path, cv2_module=None)
+
+    assert result.available is False
+    assert "OpenCV" in result.message
+
+
+def test_detect_faces_counts_faces(tmp_path):
+    """OpenCVの検出結果から顔数を返す。"""
+    image_path = tmp_path / "capture.jpg"
+    _write_image(image_path, (20, 20, 20))
+
+    class FakeCascade:
+        """顔検出器のテストダブル。"""
+
+        def __init__(self, _path):
+            """パスを受け取る。"""
+
+        def detectMultiScale(self, *_args, **_kwargs):
+            """顔検出結果を返す。"""
+            return [(0, 0, 100, 100)]
+
+    class FakeCv2:
+        """OpenCVモジュールのテストダブル。"""
+
+        COLOR_BGR2GRAY = 0
+        CascadeClassifier = FakeCascade
+        data = type("Data", (), {"haarcascades": str(tmp_path)})()
+
+        @staticmethod
+        def imread(_path):
+            """画像読み込み結果を返す。"""
+            return object()
+
+        @staticmethod
+        def cvtColor(image, _mode):
+            """グレースケール画像を返す。"""
+            return image
+
+    result = detect_faces(image_path, cv2_module=FakeCv2)
+
+    assert result.available is True
+    assert result.face_count == 1

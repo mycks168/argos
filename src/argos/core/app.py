@@ -125,6 +125,10 @@ class ArgosApp:
             settings.auth_face_capture_path,
             settings.auth_face_threshold,
             settings.auth_face_min_matches,
+            settings.auth_face_detection_enabled,
+            settings.auth_face_min_detected_faces,
+            settings.auth_face_max_detected_faces,
+            settings.auth_face_image_rotation,
         )
         self._security_alert = SecurityAlertDispatcher(settings.auth_alert_command)
         self._button = ButtonPtt(
