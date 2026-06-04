@@ -10,6 +10,7 @@
 
 - `file`: WAV ファイル
 - `language`: 既定値 `ja`
+- `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>`。トークン未設定時は送信しない。
 
 レスポンス:
 

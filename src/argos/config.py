@@ -36,6 +36,7 @@ class Settings:
 
     stt_gateway_url: str
     stt_language: str
+    stt_gateway_token: str
     tts_filter_url: str
     tts_filter_token: str
     tts_delimiters: str
@@ -150,6 +151,7 @@ def load_settings() -> Settings:
     return Settings(
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
+        stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),

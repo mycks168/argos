@@ -12,10 +12,11 @@ from urllib3.util.retry import Retry
 class SttGatewayClient:
     """WAV を stt-gateway に送信して文字起こしする。"""
 
-    def __init__(self, base_url: str, language: str) -> None:
-        """API のベース URL と言語を保持する。"""
+    def __init__(self, base_url: str, language: str, bearer_token: str = "") -> None:
+        """API のベース URL、言語、Bearerトークンを保持する。"""
         self._base_url = base_url.rstrip("/")
         self._language = language
+        self._bearer_token = bearer_token
         self._session = requests.Session()
         retry = Retry(total=3, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504], allowed_methods=["POST"])
         adapter = HTTPAdapter(max_retries=retry)
@@ -31,6 +32,7 @@ class SttGatewayClient:
                 f"{self._base_url}/transcribe",
                 files={"file": ("utterance.wav", wav_file, "audio/wav")},
                 data={"language": self._language},
+                headers=self._headers(),
                 timeout=30,
             )
         if response.status_code != 200:
@@ -40,3 +42,8 @@ class SttGatewayClient:
             raise RuntimeError(f"stt-gateway が失敗を返しました: {payload}")
         return str(payload.get("text", "")).strip()
 
+    def _headers(self) -> dict[str, str]:
+        """Bearerトークンがある場合だけ認証ヘッダを返す。"""
+        if not self._bearer_token:
+            return {}
+        return {"Authorization": f"Bearer {self._bearer_token}"}

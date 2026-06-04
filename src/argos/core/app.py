@@ -104,7 +104,7 @@ class ArgosApp:
         """各サービスクライアントと状態機械を初期化する。"""
         self._settings = settings
         self._recorder = Recorder(settings.audio_input_device, settings.audio_sample_rate)
-        self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language)
+        self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
             settings.stt_language,

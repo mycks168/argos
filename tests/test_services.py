@@ -37,11 +37,12 @@ def test_check_audio_level(tmp_path):
 def test_stt_gateway_transcribe(monkeypatch, tmp_path):
     wav_path = tmp_path / "sample.wav"
     wav_path.write_bytes(b"RIFFdata")
-    client = SttGatewayClient("http://stt", "ja")
+    client = SttGatewayClient("http://stt", "ja", "token")
 
-    def fake_post(url, files, data, timeout):
+    def fake_post(url, files, data, headers, timeout):
         assert url == "http://stt/transcribe"
         assert data == {"language": "ja"}
+        assert headers == {"Authorization": "Bearer token"}
         return Response(payload={"ok": True, "text": "こんにちは"})
 
     monkeypatch.setattr(client._session, "post", fake_post)
