@@ -131,6 +131,9 @@ def test_load_auth_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_AUTH_FACE_DETECTION_ENABLED", "false")
     monkeypatch.setenv("ARGOS_AUTH_FACE_MIN_DETECTED_FACES", "1")
     monkeypatch.setenv("ARGOS_AUTH_FACE_MAX_DETECTED_FACES", "2")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_DETECTOR_MODEL_PATH", "/tmp/yunet.onnx")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_RECOGNIZER_MODEL_PATH", "/tmp/sface.onnx")
+    monkeypatch.setenv("ARGOS_AUTH_FACE_SFACE_THRESHOLD", "0.5")
     monkeypatch.setenv("ARGOS_AUTH_ALERT_COMMAND", "echo alert")
     monkeypatch.setenv("ARGOS_AUTH_WARNING_SOUND_ENABLED", "false")
     monkeypatch.setenv("ARGOS_AUTH_WARNING_DELAY_SECONDS", "4")
@@ -153,6 +156,9 @@ def test_load_auth_settings(monkeypatch):
     assert settings.auth_face_detection_enabled is False
     assert settings.auth_face_min_detected_faces == 1
     assert settings.auth_face_max_detected_faces == 2
+    assert settings.auth_face_detector_model_path == "/tmp/yunet.onnx"
+    assert settings.auth_face_recognizer_model_path == "/tmp/sface.onnx"
+    assert settings.auth_face_sface_threshold == 0.5
     assert settings.auth_alert_command == "echo alert"
     assert settings.auth_warning_sound_enabled is False
     assert settings.auth_warning_delay_seconds == 4

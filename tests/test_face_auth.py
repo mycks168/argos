@@ -2,7 +2,14 @@ from pathlib import Path
 
 from PIL import Image
 
-from argos.services.face_auth import FaceAuthVerifier, detect_faces, hamming_distance, image_fingerprint, rotate_saved_image
+from argos.services.face_auth import (
+    FaceAuthVerifier,
+    cosine_similarity,
+    detect_faces,
+    hamming_distance,
+    image_fingerprint,
+    rotate_saved_image,
+)
 
 
 def _write_image(path: Path, color: tuple[int, int, int]) -> None:
@@ -21,6 +28,12 @@ def test_image_fingerprint_is_stable(tmp_path):
 def test_hamming_distance_counts_different_bits():
     """ハミング距離が差分ビット数を返す。"""
     assert hamming_distance("1010", "1001") == 2
+
+
+def test_cosine_similarity_returns_face_score():
+    """SFace特徴量のコサイン類似度を返す。"""
+    assert cosine_similarity([1.0, 0.0], [1.0, 0.0]) == 1.0
+    assert cosine_similarity([1.0, 0.0], [0.0, 1.0]) == 0.0
 
 
 def test_rotate_saved_image_rotates_file(tmp_path):
@@ -121,6 +134,44 @@ def test_detect_faces_counts_faces(tmp_path):
 
     assert result.available is True
     assert result.face_count == 1
+
+
+def test_detect_faces_uses_yunet_model(tmp_path):
+    """YuNetモデルがある場合はDNN顔検出を使う。"""
+    image_path = tmp_path / "capture.jpg"
+    model_path = tmp_path / "yunet.onnx"
+    _write_image(image_path, (20, 20, 20))
+    model_path.write_bytes(b"model")
+
+    class FakeImage:
+        """画像shapeを持つテストダブル。"""
+
+        shape = (480, 640, 3)
+
+    class FakeDetector:
+        """YuNet検出器のテストダブル。"""
+
+        def detect(self, _image):
+            """顔候補を返す。"""
+            return 1, [[10.2, 20.8, 100.1, 120.9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0.95]]
+
+    class FakeCv2:
+        """YuNet対応OpenCVモジュールのテストダブル。"""
+
+        @staticmethod
+        def imread(_path):
+            """画像読み込み結果を返す。"""
+            return FakeImage()
+
+        @staticmethod
+        def FaceDetectorYN_create(*_args):
+            """YuNet検出器を返す。"""
+            return FakeDetector()
+
+    result = detect_faces(image_path, cv2_module=FakeCv2, yunet_model_path=str(model_path))
+
+    assert result.face_count == 1
+    assert result.boxes == ((10, 20, 100, 120),)
 
 
 def test_detect_faces_prefers_original_orientation(tmp_path):

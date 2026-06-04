@@ -25,6 +25,9 @@ def main() -> None:
         settings.auth_face_min_detected_faces,
         settings.auth_face_max_detected_faces,
         settings.auth_face_image_rotation,
+        settings.auth_face_detector_model_path,
+        settings.auth_face_recognizer_model_path,
+        settings.auth_face_sface_threshold,
     )
     image_path = verifier.capture()
     detection = verifier.detect(image_path)

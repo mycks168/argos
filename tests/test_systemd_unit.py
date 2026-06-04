@@ -71,3 +71,11 @@ def test_check_face_detection_script_exists():
 
     assert script.exists()
     assert "DEFAULT_CAMERA_SNAPSHOT_PATH" in script.read_text()
+
+
+def test_download_face_models_script_exists():
+    """顔認証モデル取得スクリプトがある。"""
+    script = Path(__file__).parents[1] / "scripts" / "download-face-models.py"
+
+    assert script.exists()
+    assert "face_detection_yunet_2023mar.onnx" in script.read_text()

@@ -93,6 +93,9 @@ class Settings:
     auth_face_detection_enabled: bool = True
     auth_face_min_detected_faces: int = 1
     auth_face_max_detected_faces: int = 1
+    auth_face_detector_model_path: str = "~/.local/share/argos/face-models/face_detection_yunet_2023mar.onnx"
+    auth_face_recognizer_model_path: str = "~/.local/share/argos/face-models/face_recognition_sface_2021dec.onnx"
+    auth_face_sface_threshold: float = 0.363
     auth_alert_command: str = ""
     auth_warning_sound_enabled: bool = True
     auth_warning_delay_seconds: float = 10.0
@@ -214,6 +217,15 @@ def load_settings() -> Settings:
         auth_face_detection_enabled=_bool_env("ARGOS_AUTH_FACE_DETECTION_ENABLED", True),
         auth_face_min_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MIN_DETECTED_FACES", "1")),
         auth_face_max_detected_faces=int(os.environ.get("ARGOS_AUTH_FACE_MAX_DETECTED_FACES", "1")),
+        auth_face_detector_model_path=os.environ.get(
+            "ARGOS_AUTH_FACE_DETECTOR_MODEL_PATH",
+            "~/.local/share/argos/face-models/face_detection_yunet_2023mar.onnx",
+        ),
+        auth_face_recognizer_model_path=os.environ.get(
+            "ARGOS_AUTH_FACE_RECOGNIZER_MODEL_PATH",
+            "~/.local/share/argos/face-models/face_recognition_sface_2021dec.onnx",
+        ),
+        auth_face_sface_threshold=float(os.environ.get("ARGOS_AUTH_FACE_SFACE_THRESHOLD", "0.363")),
         auth_alert_command=os.environ.get("ARGOS_AUTH_ALERT_COMMAND", ""),
         auth_warning_sound_enabled=_bool_env("ARGOS_AUTH_WARNING_SOUND_ENABLED", True),
         auth_warning_delay_seconds=float(os.environ.get("ARGOS_AUTH_WARNING_DELAY_SECONDS", "10")),
