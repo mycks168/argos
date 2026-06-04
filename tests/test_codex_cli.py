@@ -9,6 +9,7 @@ def _settings(tmp_path):
     return Settings(
         stt_gateway_url="http://stt",
         stt_language="ja",
+        stt_gateway_token="",
         tts_filter_url="",
         tts_filter_token="",
         tts_delimiters="。！？!?",

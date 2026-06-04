@@ -42,6 +42,15 @@ def test_load_tts_delimiters(monkeypatch):
     assert settings.tts_delimiters == "。！？、"
 
 
+def test_load_stt_gateway_token(monkeypatch):
+    """STTゲートウェイのBearerトークンを読み込む。"""
+    monkeypatch.setenv("STT_GATEWAY_BEARER_TOKEN", "stt-token")
+
+    settings = load_settings()
+
+    assert settings.stt_gateway_token == "stt-token"
+
+
 def test_load_voicevox_speed_scale(monkeypatch):
     """VOICEVOXの話速設定を読み込む。"""
     monkeypatch.setenv("VOICEVOX_SPEED_SCALE", "1.1")
