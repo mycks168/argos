@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 
-from argos.config import CodexSlot, Settings
+from argos.config import AgentSlot, Settings
 from argos.services.codex.cli import CodexCliClient
 
 
 def _settings(tmp_path):
     return Settings(
+        agent_provider="codex",
+        agent_state_path=str(tmp_path / "argos-state" / "agent-sessions.json"),
         stt_gateway_url="http://stt",
         stt_language="ja",
         stt_gateway_token="",
@@ -40,7 +42,9 @@ def _settings(tmp_path):
         ptt_gpio=17,
         silence_rms_threshold=200,
         dry_run=True,
-        codex_slots=(CodexSlot("作業", str(tmp_path), str(tmp_path / "codex-home"), "gpt-5"),),
+        agent_slots=(AgentSlot("作業", "codex", str(tmp_path)),),
+        codex_home=str(tmp_path / "codex-home"),
+        codex_model="gpt-5",
         codex_sandbox="workspace-write",
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
@@ -297,9 +301,9 @@ def test_slot_switch_and_reset(tmp_path):
     settings = Settings(
         **{
             **settings.__dict__,
-            "codex_slots": (
-                CodexSlot("一番", str(tmp_path), str(tmp_path / "home-a"), ""),
-                CodexSlot("二番", str(tmp_path), str(tmp_path / "home-b"), ""),
+            "agent_slots": (
+                AgentSlot("一番", "codex", str(tmp_path)),
+                AgentSlot("二番", "codex", str(tmp_path)),
             ),
         }
     )

@@ -2,36 +2,65 @@ from argos.config import load_settings
 
 
 def test_load_default_slot(monkeypatch):
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
-    monkeypatch.setenv("ARGOS_CODEX_CWD", "/tmp/work")
-    monkeypatch.setenv("ARGOS_CODEX_SLOT_NAME", "作業")
+    monkeypatch.setenv("ARGOS_AGENT_CWD", "/tmp/work")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_NAME", "作業")
 
     settings = load_settings()
 
-    assert settings.codex_slots[0].name == "作業"
-    assert settings.codex_slots[0].cwd == "/tmp/work"
+    assert settings.agent_slots[0].name == "作業"
+    assert settings.agent_slots[0].provider == "codex"
+    assert settings.agent_slots[0].cwd == "/tmp/work"
+
+
+def test_load_agent_provider(monkeypatch):
+    """LLMエージェントプロバイダーを読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_PROVIDER", "codex")
+
+    settings = load_settings()
+
+    assert settings.agent_provider == "codex"
 
 
 def test_load_default_slot_uses_pi_home(monkeypatch):
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
+    monkeypatch.delenv("ARGOS_AGENT_CWD", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_CWD", raising=False)
-    monkeypatch.setenv("ARGOS_CODEX_SLOT_NAME", "作業")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_NAME", "作業")
 
     settings = load_settings()
 
-    assert settings.codex_slots[0].cwd == "/home/pi"
+    assert settings.agent_slots[0].cwd == "/home/pi"
 
 
 def test_load_numbered_slots(monkeypatch):
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_1", "一番,codex,/tmp/a")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_2", "二番,antigravity,/tmp/b")
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_3", raising=False)
+
+    settings = load_settings()
+
+    assert [slot.name for slot in settings.agent_slots] == ["一番", "二番"]
+    assert settings.agent_slots[0].provider == "codex"
+    assert settings.agent_slots[1].provider == "antigravity"
+    assert settings.agent_slots[1].cwd == "/tmp/b"
+
+
+def test_load_legacy_codex_slots(monkeypatch):
+    """旧ARGOS_CODEX_SLOT形式を互換読み込みする。"""
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.setenv("ARGOS_CODEX_SLOT_1", "一番,/tmp/a,/tmp/home-a,gpt-5")
     monkeypatch.setenv("ARGOS_CODEX_SLOT_2", "二番,/tmp/b,,")
     monkeypatch.delenv("ARGOS_CODEX_SLOT_3", raising=False)
 
     settings = load_settings()
 
-    assert [slot.name for slot in settings.codex_slots] == ["一番", "二番"]
-    assert settings.codex_slots[0].codex_home == "/tmp/home-a"
-    assert settings.codex_slots[1].cwd == "/tmp/b"
+    assert [slot.name for slot in settings.agent_slots] == ["一番", "二番"]
+    assert [slot.provider for slot in settings.agent_slots] == ["codex", "codex"]
+    assert settings.agent_slots[0].cwd == "/tmp/a"
+    assert settings.agent_slots[1].cwd == "/tmp/b"
 
 
 def test_load_tts_delimiters(monkeypatch):

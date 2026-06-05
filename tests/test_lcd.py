@@ -1,11 +1,13 @@
 from pathlib import Path
 
-from argos.config import Settings, CodexSlot
+from argos.config import Settings, AgentSlot
 from argos.hardware.lcd import St7789TextDisplay, disable_color_inversion, load_ipa_font, render_text_image, wrap_text
 
 
 def _settings():
     return Settings(
+        agent_provider="codex",
+        agent_state_path="~/.argos/agent-sessions.json",
         stt_gateway_url="http://stt",
         stt_language="ja",
         stt_gateway_token="",
@@ -39,7 +41,9 @@ def _settings():
         ptt_gpio=17,
         silence_rms_threshold=200,
         dry_run=True,
-        codex_slots=(CodexSlot("作業", "/tmp", "", ""),),
+        agent_slots=(AgentSlot("作業", "codex", "/tmp"),),
+        codex_home="",
+        codex_model="",
         codex_sandbox="workspace-write",
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",

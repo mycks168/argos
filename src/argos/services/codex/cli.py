@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from collections.abc import Generator
 from pathlib import Path
 
-from argos.config import CodexSlot, Settings
+from argos.config import AgentSlot, Settings
 
 
 log = logging.getLogger(__name__)
@@ -23,17 +23,18 @@ log = logging.getLogger(__name__)
 class CodexConversation:
     """Codex CLI の会話スロット状態。"""
 
-    slot: CodexSlot
+    slot: AgentSlot
     started: bool = False
     session_id: str = ""
 
 
 class CodexSessionStore:
-    """Codex セッションIDをスロットごとに保存する。"""
+    """Codex セッションIDをArgos管理ファイルに保存する。"""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, fallback_paths: tuple[Path, ...] = ()) -> None:
         """保存先ファイルを初期化する。"""
         self._path = path
+        self._fallback_paths = fallback_paths
 
     def load(self, key: str) -> str:
         """指定スロットの保存済みセッションIDを返す。"""
@@ -68,32 +69,61 @@ class CodexSessionStore:
 
     def _read(self) -> dict[str, str]:
         """保存ファイルをJSONとして読み込む。"""
+        for path in (self._path, *self._fallback_paths):
+            data = self._read_path(path)
+            if data:
+                return data
+        return {}
+
+    def _read_path(self, path: Path) -> dict[str, str]:
+        """指定ファイルをJSONとして読み込む。"""
         try:
-            raw = self._path.read_text(encoding="utf-8")
+            raw = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             return {}
         except OSError:
-            log.exception("Codex セッションIDの読み込みに失敗しました: %s", self._path)
+            log.exception("Codex セッションIDの読み込みに失敗しました: %s", path)
             return {}
         try:
             data = json.loads(raw)
         except json.JSONDecodeError:
-            log.warning("Codex セッションID保存ファイルが壊れています: %s", self._path)
+            log.warning("Codex セッションID保存ファイルが壊れています: %s", path)
             return {}
         if not isinstance(data, dict):
             return {}
         return {str(key): value for key, value in data.items() if isinstance(value, str)}
 
 
-def _session_store_path(slot: CodexSlot) -> Path:
-    """スロットの CODEX_HOME に対応するセッション保存ファイルを返す。"""
-    codex_home = slot.codex_home or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
-    return Path(codex_home).expanduser() / "argos-sessions.json"
+def _session_store_path(settings: Settings) -> Path:
+    """Argosのセッション保存ファイルを返す。"""
+    return Path(settings.agent_state_path).expanduser()
 
 
-def _slot_key(slot: CodexSlot) -> str:
+def _legacy_session_store_paths(settings: Settings) -> tuple[Path, ...]:
+    """旧CODEX_HOME配下のセッション保存候補を返す。"""
+    homes = [
+        settings.codex_home,
+        os.environ.get("CODEX_HOME", ""),
+        str(Path.home() / ".codex"),
+    ]
+    paths = []
+    for home in homes:
+        if home:
+            path = Path(home).expanduser() / "argos-sessions.json"
+            if path not in paths:
+                paths.append(path)
+    return tuple(paths)
+
+
+def _slot_key(slot: AgentSlot) -> str:
     """保存用にスロット設定から安定したキーを作る。"""
-    raw = "\0".join((slot.name, slot.cwd, slot.codex_home, slot.model))
+    raw = "\0".join((slot.name, slot.provider, slot.cwd))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _legacy_slot_key(slot: AgentSlot, settings: Settings) -> str:
+    """旧Codexスロット形式の保存キーを作る。"""
+    raw = "\0".join((slot.name, slot.cwd, settings.codex_home, settings.codex_model))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -103,14 +133,14 @@ class CodexCliClient:
     def __init__(self, settings: Settings) -> None:
         """設定から会話スロットを初期化する。"""
         self._settings = settings
-        self._stores: dict[str, CodexSessionStore] = {}
+        self._store = CodexSessionStore(_session_store_path(settings), _legacy_session_store_paths(settings))
         self._conversations: list[CodexConversation] = []
-        for slot in settings.codex_slots:
-            store_path = _session_store_path(slot)
-            store = CodexSessionStore(store_path)
-            self._stores[slot.codex_home] = store
+        for slot in settings.agent_slots:
+            if slot.provider.lower() != "codex":
+                raise ValueError(f"Codexクライアントでは扱えないスロットです: {slot.name} provider={slot.provider}")
+            store_path = _session_store_path(settings)
             slot_key = _slot_key(slot)
-            session_id = store.load(slot_key)
+            session_id = self._store.load(slot_key) or self._store.load(_legacy_slot_key(slot, settings))
             log.info(
                 "Codex セッション保存設定: slot=%s path=%s key=%s loaded=%s",
                 slot.name,
@@ -144,7 +174,7 @@ class CodexCliClient:
         try:
             command = self._build_command(conversation, output_path.name)
             env = self._build_env(conversation.slot)
-            store_path = _session_store_path(conversation.slot)
+            store_path = _session_store_path(self._settings)
             log.info(
                 "Codex CLI 実行: slot=%s cwd=%s codex_home=%s store=%s command=%s",
                 conversation.slot.name,
@@ -179,7 +209,7 @@ class CodexCliClient:
                         session_id,
                         store_path,
                     )
-                    self._stores[conversation.slot.codex_home].save(_slot_key(conversation.slot), session_id)
+                    self._store.save(_slot_key(conversation.slot), session_id)
                 delta = _extract_text_delta(event, emitted)
                 if not delta:
                     continue
@@ -191,7 +221,7 @@ class CodexCliClient:
             if return_code != 0:
                 raise RuntimeError(f"codex-cli エラー {return_code}: {stderr[-1000:]}")
             if not conversation.session_id:
-                session_id = _load_recent_session_id(conversation.slot, started_at)
+                session_id = _load_recent_session_id(conversation.slot, self._settings, started_at)
                 if session_id:
                     conversation.session_id = session_id
                     log.info(
@@ -200,7 +230,7 @@ class CodexCliClient:
                         session_id,
                         store_path,
                     )
-                    self._stores[conversation.slot.codex_home].save(_slot_key(conversation.slot), session_id)
+                    self._store.save(_slot_key(conversation.slot), session_id)
             conversation.started = True
             text = Path(output_path.name).read_text(encoding="utf-8").strip()
             if text and not text.startswith(emitted):
@@ -223,7 +253,7 @@ class CodexCliClient:
         conversation = self._conversations[self._index]
         conversation.started = False
         conversation.session_id = ""
-        self._stores[conversation.slot.codex_home].clear(_slot_key(conversation.slot))
+        self._store.clear(_slot_key(conversation.slot))
 
     def _build_command(self, conversation: CodexConversation, output_path: str) -> list[str]:
         """Codex CLI のコマンドラインを構築する。"""
@@ -242,8 +272,8 @@ class CodexCliClient:
             if not self._settings.codex_bypass_sandbox:
                 base.extend(["-s", self._settings.codex_sandbox])
             prompt_args = ["-"]
-        if slot.model:
-            base.extend(["-m", slot.model])
+        if self._settings.codex_model:
+            base.extend(["-m", self._settings.codex_model])
         extra_args = list(self._settings.codex_extra_args)
         if "--json" not in extra_args:
             extra_args.append("--json")
@@ -259,11 +289,11 @@ class CodexCliClient:
             base.append("--dangerously-bypass-approvals-and-sandbox")
         return base
 
-    def _build_env(self, slot: CodexSlot) -> dict[str, str]:
+    def _build_env(self, slot: AgentSlot) -> dict[str, str]:
         """Codex 用の環境変数を作成する。"""
         env = os.environ.copy()
-        if slot.codex_home:
-            env["CODEX_HOME"] = slot.codex_home
+        if self._settings.codex_home:
+            env["CODEX_HOME"] = self._settings.codex_home
         return env
 
 
@@ -287,9 +317,10 @@ def _extract_session_id(event: dict) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _load_recent_session_id(slot: CodexSlot, started_at: float) -> str:
+def _load_recent_session_id(slot: AgentSlot, settings: Settings, started_at: float) -> str:
     """直近に更新された Codex セッションファイルからIDを取り出す。"""
-    sessions_dir = _session_store_path(slot).parent / "sessions"
+    codex_home = settings.codex_home or os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+    sessions_dir = Path(codex_home).expanduser() / "sessions"
     if not sessions_dir.exists():
         return ""
     try:

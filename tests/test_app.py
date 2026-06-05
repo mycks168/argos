@@ -1,10 +1,12 @@
-from argos.config import CodexSlot, Settings
+from argos.config import AgentSlot, Settings
 from argos.core.app import ArgosApp, CodexProgressAnnouncer
 from argos.services.auth import hash_keyword
 
 
 def _settings():
     return Settings(
+        agent_provider="codex",
+        agent_state_path="~/.argos/agent-sessions.json",
         stt_gateway_url="http://stt",
         stt_language="ja",
         stt_gateway_token="",
@@ -38,7 +40,9 @@ def _settings():
         ptt_gpio=17,
         silence_rms_threshold=10,
         dry_run=True,
-        codex_slots=(CodexSlot("作業", "/tmp", "", ""),),
+        agent_slots=(AgentSlot("作業", "codex", "/tmp"),),
+        codex_home="",
+        codex_model="",
         codex_sandbox="workspace-write",
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
@@ -141,7 +145,7 @@ def _patch_app(monkeypatch):
     monkeypatch.setattr("argos.core.app.AudioPlayer", FakeAudio)
     monkeypatch.setattr("argos.core.app.SttGatewayClient", FakeStt)
     monkeypatch.setattr("argos.core.app.FasterWhisperClient", FakeLocalStt)
-    monkeypatch.setattr("argos.core.app.CodexCliClient", FakeCodex)
+    monkeypatch.setattr("argos.core.app.create_agent_client", FakeCodex)
     monkeypatch.setattr("argos.core.app.TtsFilterClient", FakeFilter)
     monkeypatch.setattr("argos.core.app.VoicevoxClient", FakeVoicevox)
     monkeypatch.setattr("argos.core.app.KokoroClient", FakeKokoro)
@@ -154,7 +158,7 @@ def test_handle_text_dry_run(monkeypatch, capsys):
 
     app._handle_text("依頼")
 
-    assert app._codex.asked == ["依頼"]
+    assert app._agent.asked == ["依頼"]
     snapshot = app._dashboard_state.snapshot()
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
     assert snapshot["messages"][1]["text"] == "応答"
@@ -171,7 +175,7 @@ def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
 
     app._process_recording()
 
-    assert app._codex.asked == ["こんにちは"]
+    assert app._agent.asked == ["こんにちは"]
     assert app._button.state.value == "idle"
     assert "ARGOS> 応答" in capsys.readouterr().out
 
@@ -212,7 +216,7 @@ def test_locked_recording_does_not_reach_codex(monkeypatch):
     app._process_recording()
 
     snapshot = app._dashboard_state.snapshot()
-    assert app._codex.asked == []
+    assert app._agent.asked == []
     assert snapshot["status"]["code"] == "locked"
     assert snapshot["notifications"][0]["title"] == "本人確認 エラー"
 
@@ -308,7 +312,7 @@ def test_keyword_unlock_does_not_send_keyword_to_codex(monkeypatch, capsys):
 
     app._process_recording()
 
-    assert app._codex.asked == []
+    assert app._agent.asked == []
     assert "本人確認しました。" in capsys.readouterr().out
 
 
@@ -328,7 +332,7 @@ def test_authenticated_recording_reaches_codex(monkeypatch):
 
     app._process_recording()
 
-    assert app._codex.asked == ["こんにちは"]
+    assert app._agent.asked == ["こんにちは"]
 
 
 def test_face_auth_success_allows_current_recording(monkeypatch):
@@ -352,7 +356,7 @@ def test_face_auth_success_allows_current_recording(monkeypatch):
 
     app._process_recording()
 
-    assert app._codex.asked == ["こんにちは"]
+    assert app._agent.asked == ["こんにちは"]
 
 
 def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):
@@ -377,7 +381,7 @@ def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):
 
     app._process_recording()
 
-    assert app._codex.asked == []
+    assert app._agent.asked == []
     assert "本人確認しました。" in capsys.readouterr().out
 
 
@@ -685,7 +689,7 @@ def test_stt_falls_back_to_local_whisper_on_gateway_error(monkeypatch):
 
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["notifications"][0]["title"] == "stt-gateway エラー"
-    assert app._codex.asked == ["ローカル認識"]
+    assert app._agent.asked == ["ローカル認識"]
 
 
 def test_stt_uses_local_whisper_when_gateway_url_is_empty(monkeypatch):
@@ -697,4 +701,4 @@ def test_stt_uses_local_whisper_when_gateway_url_is_empty(monkeypatch):
 
     app._process_recording()
 
-    assert app._codex.asked == ["ローカル認識"]
+    assert app._agent.asked == ["ローカル認識"]

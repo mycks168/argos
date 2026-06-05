@@ -21,19 +21,21 @@ def _bool_env(name: str, default: bool) -> bool:
 
 
 @dataclass(frozen=True)
-class CodexSlot:
-    """Codex の会話スロット設定。"""
+class AgentSlot:
+    """LLMエージェントの会話スロット設定。"""
 
     name: str
+    provider: str
     cwd: str
-    codex_home: str
-    model: str
 
 
 @dataclass(frozen=True)
 class Settings:
     """アプリ全体の設定値。"""
 
+    agent_provider: str
+    agent_state_path: str
+    agent_slots: tuple[AgentSlot, ...]
     stt_gateway_url: str
     stt_language: str
     stt_gateway_token: str
@@ -67,7 +69,8 @@ class Settings:
     ptt_gpio: int
     silence_rms_threshold: float
     dry_run: bool
-    codex_slots: tuple[CodexSlot, ...]
+    codex_home: str
+    codex_model: str
     codex_sandbox: str
     codex_bypass_sandbox: bool
     codex_approval_policy: str
@@ -111,12 +114,42 @@ class Settings:
     whisper_compute_type: str = "int8"
 
 
-def _load_codex_slots() -> tuple[CodexSlot, ...]:
-    """環境変数から Codex 会話スロットを読み込む。"""
-    slots: list[CodexSlot] = []
-    default_cwd = os.environ.get("ARGOS_CODEX_CWD", "/home/pi")
-    default_home = os.environ.get("ARGOS_CODEX_HOME", "")
-    default_model = os.environ.get("ARGOS_CODEX_MODEL", "")
+def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
+    """環境変数からLLMエージェント会話スロットを読み込む。"""
+    slots: list[AgentSlot] = []
+    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/home/pi"))
+    index = 1
+    while True:
+        raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
+        if not raw:
+            break
+        parts = [part.strip() for part in raw.split(",", 2)]
+        if parts and parts[0]:
+            slots.append(
+                AgentSlot(
+                    name=parts[0],
+                    provider=parts[1] if len(parts) > 1 and parts[1] else default_provider,
+                    cwd=parts[2] if len(parts) > 2 and parts[2] else default_cwd,
+                )
+            )
+        index += 1
+    if slots:
+        return tuple(slots)
+    legacy_slots = _load_legacy_codex_slots(default_provider, default_cwd)
+    if legacy_slots:
+        return legacy_slots
+    return (
+        AgentSlot(
+            name=os.environ.get("ARGOS_AGENT_SLOT_NAME", os.environ.get("ARGOS_CODEX_SLOT_NAME", "デフォルト")),
+            provider=default_provider,
+            cwd=default_cwd,
+        ),
+    )
+
+
+def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[AgentSlot, ...]:
+    """旧ARGOS_CODEX_SLOT形式を互換のため読み込む。"""
+    slots: list[AgentSlot] = []
     index = 1
     while True:
         raw = os.environ.get(f"ARGOS_CODEX_SLOT_{index}", "")
@@ -125,30 +158,24 @@ def _load_codex_slots() -> tuple[CodexSlot, ...]:
         parts = [part.strip() for part in raw.split(",", 3)]
         if parts and parts[0]:
             slots.append(
-                CodexSlot(
+                AgentSlot(
                     name=parts[0],
+                    provider=default_provider,
                     cwd=parts[1] if len(parts) > 1 and parts[1] else default_cwd,
-                    codex_home=parts[2] if len(parts) > 2 and parts[2] else default_home,
-                    model=parts[3] if len(parts) > 3 and parts[3] else default_model,
                 )
             )
         index += 1
-    if slots:
-        return tuple(slots)
-    return (
-        CodexSlot(
-            name=os.environ.get("ARGOS_CODEX_SLOT_NAME", "デフォルト"),
-            cwd=default_cwd,
-            codex_home=default_home,
-            model=default_model,
-        ),
-    )
+    return tuple(slots)
 
 
 def load_settings() -> Settings:
     """環境変数と .env から設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
+    agent_provider = os.environ.get("ARGOS_AGENT_PROVIDER", "codex")
     return Settings(
+        agent_provider=agent_provider,
+        agent_state_path=os.environ.get("ARGOS_AGENT_STATE_PATH", "~/.argos/agent-sessions.json"),
+        agent_slots=_load_agent_slots(agent_provider),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
@@ -182,7 +209,8 @@ def load_settings() -> Settings:
         ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
-        codex_slots=_load_codex_slots(),
+        codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),
+        codex_model=os.environ.get("ARGOS_CODEX_MODEL", ""),
         codex_sandbox=os.environ.get("ARGOS_CODEX_SANDBOX", "workspace-write"),
         codex_bypass_sandbox=_bool_env("ARGOS_CODEX_BYPASS_SANDBOX", False),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),

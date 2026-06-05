@@ -18,7 +18,7 @@ from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.auth import AuthGate
-from argos.services.codex.cli import CodexCliClient
+from argos.services.agent import create_agent_client
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
@@ -56,7 +56,7 @@ CODEX_PROGRESS_WAIT_PHRASES = (
 
 
 class CodexProgressAnnouncer:
-    """Codex 待機中の進捗音声を管理する。"""
+    """LLMエージェント待機中の進捗音声を管理する。"""
 
     def __init__(
         self,
@@ -98,7 +98,7 @@ class CodexProgressAnnouncer:
 
 
 class ArgosApp:
-    """PTT 録音から Codex 応答の読み上げまでを束ねる。"""
+    """PTT 録音からLLMエージェント応答の読み上げまでを束ねる。"""
 
     def __init__(self, settings: Settings) -> None:
         """各サービスクライアントと状態機械を初期化する。"""
@@ -111,7 +111,7 @@ class ArgosApp:
             settings.whisper_device,
             settings.whisper_compute_type,
         )
-        self._codex = CodexCliClient(settings)
+        self._agent = create_agent_client(settings)
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
         self._voicevox = VoicevoxClient(
             settings.voicevox_url,
@@ -191,7 +191,7 @@ class ArgosApp:
         """ARGOS を起動し、終了シグナルまで待機する。"""
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
-        log.info("ARGOS 起動: 現在の Codex スロット=%s", self._codex.current_name)
+        log.info("ARGOS 起動: provider=%s 現在のエージェントスロット=%s", self._settings.agent_provider, self._agent.current_name)
         if self._dashboard_server is not None:
             self._dashboard_server.start()
         self._run_startup_sequence()
@@ -216,10 +216,10 @@ class ArgosApp:
             if not text:
                 break
             if text == "/next":
-                self._speak_status(f"{self._codex.next_slot()}に切り替えました")
+                self._speak_status(f"{self._agent.next_slot()}に切り替えました")
                 continue
             if text == "/reset":
-                self._codex.reset_current()
+                self._agent.reset_current()
                 self._speak_status("現在のセッションを新規会話にしました")
                 continue
             if self._ensure_authenticated(text):
@@ -266,7 +266,7 @@ class ArgosApp:
             self._start_auth_warning_timer(self._settings.auth_warning_delay_seconds)
 
     def _ensure_authenticated(self, transcript: str) -> bool:
-        """未認証時は音声キーワードだけを検証し、Codex送信を止める。"""
+        """未認証時は音声キーワードだけを検証し、エージェント送信を止める。"""
         if self._auth.is_authenticated():
             self._auth.mark_activity()
             self._stop_auth_warning()
@@ -399,9 +399,9 @@ class ArgosApp:
         self._worker.start()
 
     def _on_double_click(self) -> None:
-        """ダブルクリックで Codex スロットを切り替える。"""
-        name = self._codex.next_slot()
-        log.info("Codex スロット切替: %s", name)
+        """ダブルクリックでエージェントスロットを切り替える。"""
+        name = self._agent.next_slot()
+        log.info("エージェントスロット切替: %s", name)
         self._speak_status(f"{name}に切り替えました")
 
     def _on_cancel(self) -> None:
@@ -424,7 +424,7 @@ class ArgosApp:
             return self._cancel_generation
 
     def _process_recording(self) -> None:
-        """録音済み WAV を STT、Codex、TTS の順に処理する。"""
+        """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
         try:
             wav_path = self._recorder.stop()
             level = check_audio_level(wav_path)
@@ -461,7 +461,7 @@ class ArgosApp:
         return self._local_stt.transcribe(wav_path)
 
     def _handle_text(self, text: str) -> None:
-        """テキストを Codex に送り、応答を読み上げる。"""
+        """テキストをLLMエージェントに送り、応答を読み上げる。"""
         log.info("ユーザ発話: %s", text)
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_status("thinking", "考え中")
@@ -469,20 +469,20 @@ class ArgosApp:
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speak_response_stream(
-                self._stop_progress_on_first_delta(self._codex.ask_stream(text), announcer),
+                self._stop_progress_on_first_delta(self._agent.ask_stream(text), announcer),
                 dashboard_message_id=dashboard_message_id,
             )
-            log.info("Codex 応答: %s", response[:300])
+            log.info("エージェント応答: %s", response[:300])
         except Exception as exc:
-            log.exception("Codex 応答の取得に失敗しました")
-            self._report_error("Codex", exc)
+            log.exception("エージェント応答の取得に失敗しました")
+            self._report_error("エージェント", exc)
         finally:
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
 
     def _speak_response(self, text: str) -> None:
-        """Codex 応答を tts-filter と TTS に通して再生する。"""
+        """エージェント応答を tts-filter と TTS に通して再生する。"""
         if not text:
             return
         if self._settings.dry_run:
@@ -527,12 +527,12 @@ class ArgosApp:
 
         for delta in deltas:
             if self._current_cancel_generation() != stream_generation:
-                log.info("キャンセル済みのため Codex 応答読み上げを中断します")
+                log.info("キャンセル済みのためエージェント応答読み上げを中断します")
                 break
             full_response += delta
             if dashboard_message_id:
                 self._dashboard_state.append_message(dashboard_message_id, delta)
-            log.info("Codex 応答差分: %s", delta[:120])
+            log.info("エージェント応答差分: %s", delta[:120])
             for chunk in chunker.push(delta):
                 if self._current_cancel_generation() != stream_generation:
                     log.info("キャンセル済みのため TTS チャンク投入を停止します")
@@ -549,7 +549,7 @@ class ArgosApp:
         return full_response
 
     def _start_codex_progress(self) -> CodexProgressAnnouncer | None:
-        """設定に応じてCodex待機中の進捗音声を開始する。"""
+        """設定に応じてエージェント待機中の進捗音声を開始する。"""
         if not self._settings.codex_progress_voice:
             return None
         announcer = CodexProgressAnnouncer(
@@ -565,7 +565,7 @@ class ArgosApp:
         deltas: Iterable[str],
         announcer: CodexProgressAnnouncer | None,
     ) -> Iterable[str]:
-        """Codex本文が届いた時点で進捗音声を止める。"""
+        """エージェント本文が届いた時点で進捗音声を止める。"""
         stopped = False
         for delta in deltas:
             if not stopped and announcer is not None:

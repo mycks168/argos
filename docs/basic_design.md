@@ -67,6 +67,12 @@ Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_
 
 `ARGOS_LCD_ENABLED=true` の場合、ARGOS は読み上げる文を ST7789 LCD にも表示する。物理解像度は既定で 76x284 とし、横向き表示になるよう描画内容を90度回転して転送する。日本語フォントは IPA Gothic、IPA P Gothic、IPAex Gothic の順に探し、`ARGOS_LCD_FONT_PATH` が指定されている場合はそれを優先する。IPA系フォントが見つからない場合、LCD表示だけを無効化する。夜間でも明るくなりすぎないよう、ST7789 の色反転を無効にして黒背景に白文字で表示する。
 
+### LLM エージェント
+
+ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。未対応のプロバイダーが指定された場合は起動時にエラーにする。
+
+Codex、Antigravity、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
+
 ### Codex CLI
 
 初回発話:
@@ -101,7 +107,7 @@ ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取�
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
 中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。末尾を表示している場合のみ、新しい会話へ自動追従する。
-文字起こし、Codex、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、通知欄へ優先度 `high` の通知を追加する。直前と同一のエラーは重複追加しない。
+文字起こし、LLMエージェント、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、通知欄へ優先度 `high` の通知を追加する。直前と同一のエラーは重複追加しない。
 
 キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシー `TranslateEnabled=false` で翻訳UIを無効化し、ダッシュボード上のマウスカーソルを非表示にする。
 タッチパネルはlabwcでHDMI画面へ割り当て、`mouseEmulation=no` にしてタッチ操作によるマウスカーソル表示を抑止する。
@@ -209,19 +215,22 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 
 分割済みチャンクは TTS キューに投入する。VOICEVOX 合成と再生はワーカースレッドで順番に行い、Codex の JSONL 読み取りを再生待ちで止めない。キャンセル世代が変わった場合、ワーカーは未処理キューを破棄し、古いチャンクを再生しない。
 
-## Codex スロット
+## エージェントスロット
 
-`ARGOS_CODEX_SLOT_N` で複数のスロットを定義する。
+`ARGOS_AGENT_SLOT_N` で複数のスロットを定義する。
 
 書式:
 
 ```text
-名前,cwd,codex_home,model
+名前,provider,cwd
 ```
 
 - `名前`: 読み上げるスロット名
-- `cwd`: Codex の作業ディレクトリ
-- `codex_home`: 任意。指定した場合は `CODEX_HOME` に設定する
-- `model`: 任意。指定した場合は `-m` に渡す
+- `provider`: `codex` などのエージェント種別
+- `cwd`: エージェントの作業ディレクトリ
 
-`codex_home` を分けると、`resume --last` の履歴をスロットごとに分離できる。
+スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
+
+Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
+
+Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
