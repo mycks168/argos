@@ -23,6 +23,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     """画面へ表示する状態をまとめて保持できる。"""
     state = DashboardState()
     state.set_status("thinking", "考え中")
+    state.set_agent("アンチグラビティ", "antigravity")
     message_id = state.add_message("assistant", "", streaming=True)
     state.append_message(message_id, "返答")
     state.finish_message(message_id)
@@ -31,6 +32,8 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     snapshot = state.snapshot()
 
     assert snapshot["status"]["code"] == "thinking"
+    assert snapshot["agent"]["name"] == "アンチグラビティ"
+    assert snapshot["agent"]["provider"] == "antigravity"
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
@@ -106,6 +109,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
         assert 'data-code="alert"' in html
+        assert "CURRENT SLOT" in html
+        assert 'id="agent-name"' in html
+        assert "state.agent?.provider" in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

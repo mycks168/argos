@@ -58,6 +58,7 @@ def test_create_agent_client_routes_codex_slot():
     client = create_agent_client(_settings())
 
     assert client.current_name == "作業"
+    assert client.current_provider == "codex"
 
 
 def test_unknown_agent_provider_raises():

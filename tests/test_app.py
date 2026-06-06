@@ -101,6 +101,7 @@ class FakeLocalStt:
 class FakeCodex:
     def __init__(self, *args):
         self.current_name = "作業"
+        self.current_provider = "codex"
         self.asked = []
 
     def ask(self, text):
@@ -113,6 +114,7 @@ class FakeCodex:
 
     def next_slot(self):
         self.current_name = "次"
+        self.current_provider = "antigravity"
         return "次"
 
     def reset_current(self):
@@ -168,6 +170,45 @@ def test_handle_text_dry_run(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert "わかった。少し待ってね" in output
     assert "ARGOS> 応答" in output
+
+
+def test_dashboard_shows_current_agent_slot(monkeypatch):
+    """起動時の現在スロットをダッシュボード状態へ反映する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    snapshot = app._dashboard_state.snapshot()
+
+    assert snapshot["agent"]["name"] == "作業"
+    assert snapshot["agent"]["provider"] == "codex"
+
+
+def test_double_click_updates_agent_and_clears_listening_status(monkeypatch):
+    """スロット切替後は現在スロット表示を更新し、録音中表示を残さない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._dashboard_state.set_status("listening", "録音中")
+
+    app._on_double_click()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["agent"]["name"] == "次"
+    assert snapshot["agent"]["provider"] == "antigravity"
+    assert snapshot["status"]["code"] == "ready"
+    assert snapshot["status"]["label"] == "待機中"
+
+
+def test_cancel_clears_listening_status(monkeypatch):
+    """短押しキャンセル後は録音中表示を待機中へ戻す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._dashboard_state.set_status("listening", "録音中")
+
+    app._on_cancel()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert app._recorder.cancelled is True
+    assert snapshot["status"]["code"] == "ready"
 
 
 def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):

@@ -19,6 +19,10 @@ class AgentClient(Protocol):
     def current_name(self) -> str:
         """現在の会話スロット名を返す。"""
 
+    @property
+    def current_provider(self) -> str:
+        """現在の会話スロットのprovider名を返す。"""
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
 
@@ -54,6 +58,11 @@ class RoutedAgentClient:
     def current_name(self) -> str:
         """現在の会話スロット名を返す。"""
         return self._routes[self._index].slot.name
+
+    @property
+    def current_provider(self) -> str:
+        """現在の会話スロットのprovider名を返す。"""
+        return self._routes[self._index].slot.provider
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""

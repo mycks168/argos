@@ -156,6 +156,11 @@ class CodexCliClient:
         """現在の会話スロット名を返す。"""
         return self._conversations[self._index].slot.name
 
+    @property
+    def current_provider(self) -> str:
+        """現在の会話スロットのprovider名を返す。"""
+        return self._conversations[self._index].slot.provider
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
         self._index = (self._index + 1) % len(self._conversations)

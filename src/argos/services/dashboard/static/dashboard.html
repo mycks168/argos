@@ -71,6 +71,15 @@
     .brand { margin: 0; font-size: 34px; line-height: 1; }
     .clock { margin-top: 18px; color: #f4d35e; font-size: 36px; font-variant-numeric: tabular-nums; }
     .date { margin-top: 4px; color: #aebdc6; font-size: 15px; }
+    .agent {
+      margin-top: 18px;
+      padding: 9px 10px;
+      border-left: 3px solid #69b7e4;
+      background: #101820;
+    }
+    .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
+    .agent-name { margin-top: 3px; color: #edf3f7; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
+    .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 22px;
       font-size: 21px; font-weight: 700;
@@ -133,6 +142,11 @@
       <h1 class="brand">ARGOS</h1>
       <div id="clock" class="clock">--:--</div>
       <div id="date" class="date"></div>
+      <div class="agent">
+        <div class="agent-label">CURRENT SLOT</div>
+        <div id="agent-name" class="agent-name">--</div>
+        <div id="agent-provider" class="agent-provider">--</div>
+      </div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
@@ -152,6 +166,8 @@
     const splash = document.getElementById("splash");
     const status = document.getElementById("status");
     const statusLabel = document.getElementById("status-label");
+    const agentName = document.getElementById("agent-name");
+    const agentProvider = document.getElementById("agent-provider");
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
@@ -178,6 +194,8 @@
     function render(state) {
       status.dataset.code = state.status.code;
       statusLabel.textContent = state.status.label;
+      agentName.textContent = state.agent?.name || "--";
+      agentProvider.textContent = state.agent?.provider || "--";
       if (state.status.code === "booting") {
         showSplash();
       }

@@ -128,6 +128,7 @@ class ArgosApp:
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
+        self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
         self._auth = AuthGate(
@@ -216,7 +217,10 @@ class ArgosApp:
             if not text:
                 break
             if text == "/next":
-                self._speak_status(f"{self._agent.next_slot()}に切り替えました")
+                name = self._agent.next_slot()
+                self._sync_agent_display()
+                self._set_ready_or_locked()
+                self._speak_status(f"{name}に切り替えました")
                 continue
             if text == "/reset":
                 self._agent.reset_current()
@@ -256,6 +260,10 @@ class ArgosApp:
             self._dashboard_state.set_status("locked", "ロック中")
             return
         self._dashboard_state.set_status("ready", "待機中")
+
+    def _sync_agent_display(self) -> None:
+        """現在のエージェントスロットをダッシュボード表示へ反映する。"""
+        self._dashboard_state.set_agent(self._agent.current_name, self._agent.current_provider)
 
     def _announce_auth_required(self) -> None:
         """起動後に未認証なら本人確認を促す。"""
@@ -401,6 +409,8 @@ class ArgosApp:
     def _on_double_click(self) -> None:
         """ダブルクリックでエージェントスロットを切り替える。"""
         name = self._agent.next_slot()
+        self._sync_agent_display()
+        self._set_ready_or_locked()
         log.info("エージェントスロット切替: %s", name)
         self._speak_status(f"{name}に切り替えました")
 
@@ -409,6 +419,7 @@ class ArgosApp:
         log.info("キャンセル要求: 録音破棄と再生停止")
         self._recorder.cancel()
         self._cancel_active_audio()
+        self._set_ready_or_locked()
 
     def _cancel_active_audio(self) -> int:
         """再生中と未再生チャンクを無効化し、キャンセル世代を返す。"""
