@@ -24,6 +24,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state = DashboardState()
     state.set_status("thinking", "考え中")
     state.set_agent("アンチグラビティ", "antigravity")
+    state.set_audio_muted(True)
     message_id = state.add_message("assistant", "", streaming=True)
     state.append_message(message_id, "返答")
     state.finish_message(message_id)
@@ -34,6 +35,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["status"]["code"] == "thinking"
     assert snapshot["agent"]["name"] == "アンチグラビティ"
     assert snapshot["agent"]["provider"] == "antigravity"
+    assert snapshot["audio"]["muted"] is True
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
@@ -112,6 +114,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert "state.agent?.provider" in html
+        assert 'id="mute-button"' in html
+        assert "const dashboardToken = \"secret\";" in html
+        assert 'data-code="muted"' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
@@ -126,6 +131,27 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert body["notifications"][0]["title"] == "テスト"
     finally:
         server.stop()
+
+
+def test_dashboard_control_api_calls_handler():
+    """ダッシュボード操作APIはBearer認証後にハンドラーを呼ぶ。"""
+    calls = []
+
+    def handle_control(action):
+        calls.append(action)
+        return {"muted": action == "mute"}
+
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", control_handler=handle_control)
+    server.start()
+    url = f"http://{server.address[0]}:{server.address[1]}/api/control"
+    try:
+        status, body = _read_json(url, "POST", {"action": "mute"}, "secret")
+    finally:
+        server.stop()
+
+    assert status == 200
+    assert body == {"muted": True}
+    assert calls == ["mute"]
 
 
 def test_dashboard_server_rejects_invalid_token():

@@ -90,8 +90,28 @@
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
+    .status[data-code="muted"] .status-dot { background: #8ca0ad; }
     .status[data-code="alert"] .status-dot { background: #ff2e2e; box-shadow: 0 0 14px #ff2e2e; }
     .status[data-code="error"] .status-dot { background: #ff6b6b; }
+    .controls { margin-top: 18px; display: grid; gap: 8px; }
+    .control-button {
+      width: 100%;
+      border: 1px solid #526775;
+      background: #101820;
+      color: #edf3f7;
+      padding: 12px 10px;
+      font: inherit;
+      font-size: 16px;
+      font-weight: 800;
+      text-align: left;
+      cursor: pointer !important;
+    }
+    .control-button[aria-pressed="true"] {
+      border-color: #f4d35e;
+      background: #2a2413;
+      color: #f4d35e;
+    }
+    .control-button:disabled { opacity: 0.55; }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
       height: calc(100vh - 43px);
@@ -150,6 +170,9 @@
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
+      <div class="controls">
+        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート OFF</button>
+      </div>
     </section>
     <section>
       <p class="eyebrow">CONVERSATION</p>
@@ -168,10 +191,13 @@
     const statusLabel = document.getElementById("status-label");
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
+    const muteButton = document.getElementById("mute-button");
+    const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
     let splashTimer = null;
+    let muted = false;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -196,6 +222,9 @@
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
+      muted = Boolean(state.audio?.muted);
+      muteButton.textContent = muted ? "ミュート ON" : "ミュート OFF";
+      muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
       if (state.status.code === "booting") {
         showSplash();
       }
@@ -232,6 +261,29 @@
       const response = await fetch("/api/state", {cache:"no-store"});
       render(await response.json());
     }
+    async function sendControl(action) {
+      muteButton.disabled = true;
+      try {
+        const headers = {"Content-Type": "application/json"};
+        if (dashboardToken) {
+          headers.Authorization = `Bearer ${dashboardToken}`;
+        }
+        const response = await fetch("/api/control", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({action}),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        await refresh();
+      } finally {
+        muteButton.disabled = false;
+      }
+    }
+    muteButton.addEventListener("click", () => {
+      sendControl(muted ? "unmute" : "mute").catch(error => console.error(error));
+    });
     updateClock();
     setInterval(updateClock, 1000);
     showSplash();

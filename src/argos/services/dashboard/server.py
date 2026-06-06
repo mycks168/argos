@@ -10,7 +10,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 from argos.services.dashboard.state import DashboardState
@@ -31,6 +31,7 @@ class DashboardServer:
         port: int,
         token: str,
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
+        control_handler: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -38,6 +39,7 @@ class DashboardServer:
         self._port = port
         self._token = token
         self._camera_snapshot_path = camera_snapshot_path
+        self._control_handler = control_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -50,7 +52,7 @@ class DashboardServer:
 
     def start(self) -> None:
         """HTTPサーバーをバックグラウンドで起動する。"""
-        handler = _create_handler(self._state, self._token, self._camera_snapshot_path)
+        handler = _create_handler(self._state, self._token, self._camera_snapshot_path, self._control_handler)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -68,7 +70,12 @@ class DashboardServer:
         self._thread = None
 
 
-def _create_handler(state: DashboardState, token: str, camera_snapshot_path: Path) -> type[BaseHTTPRequestHandler]:
+def _create_handler(
+    state: DashboardState,
+    token: str,
+    camera_snapshot_path: Path,
+    control_handler: Callable[[str], dict[str, Any]] | None = None,
+) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
     class DashboardHandler(BaseHTTPRequestHandler):
@@ -91,23 +98,25 @@ def _create_handler(state: DashboardState, token: str, camera_snapshot_path: Pat
                 self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
-            """Bearer認証付き表示イベントAPIを処理する。"""
-            if urlparse(self.path).path != "/api/events":
+            """Bearer認証付き更新APIを処理する。"""
+            path = urlparse(self.path).path
+            if path not in {"/api/events", "/api/control"}:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
-            if not token:
-                self._send_json({"error": "ARGOS_DASHBOARD_TOKEN が未設定です"}, HTTPStatus.SERVICE_UNAVAILABLE)
-                return
-            if self.headers.get("Authorization", "") != f"Bearer {token}":
-                self._send_json({"error": "認証に失敗しました"}, HTTPStatus.UNAUTHORIZED)
+            if not self._require_token():
                 return
             try:
                 payload = self._read_json()
-                response = _apply_event(state, payload)
+                if path == "/api/events":
+                    response = _apply_event(state, payload)
+                    status = HTTPStatus.CREATED
+                else:
+                    response = self._apply_control(payload)
+                    status = HTTPStatus.OK
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
-            self._send_json(response, HTTPStatus.CREATED)
+            self._send_json(response, status)
 
         def log_message(self, format: str, *args: object) -> None:
             """標準HTTPログをアプリログへ流す。"""
@@ -129,9 +138,28 @@ def _create_handler(state: DashboardState, token: str, camera_snapshot_path: Pat
                 raise ValueError("JSONオブジェクトを送信してください")
             return payload
 
+        def _require_token(self) -> bool:
+            """更新系APIのBearer認証を検証する。"""
+            if not token:
+                self._send_json({"error": "ARGOS_DASHBOARD_TOKEN が未設定です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return False
+            if self.headers.get("Authorization", "") != f"Bearer {token}":
+                self._send_json({"error": "認証に失敗しました"}, HTTPStatus.UNAUTHORIZED)
+                return False
+            return True
+
+        def _apply_control(self, payload: dict[str, Any]) -> dict[str, Any]:
+            """ダッシュボード操作をARGOS本体へ渡す。"""
+            if control_handler is None:
+                raise ValueError("コントロールAPIは無効です")
+            action = _required_text(payload, "action", 40)
+            return control_handler(action)
+
         def _send_html(self) -> None:
             """ダッシュボードHTMLを返す。"""
-            html = files("argos.services.dashboard.static").joinpath("dashboard.html").read_bytes()
+            html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
+            html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
+            html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))

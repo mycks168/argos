@@ -28,6 +28,7 @@ class DashboardState:
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
         self._agent = {"name": "", "provider": "", "updated_at": _now_iso()}
+        self._audio = {"muted": False, "updated_at": _now_iso()}
 
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
@@ -36,6 +37,7 @@ class DashboardState:
                 "revision": self._revision,
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
+                "audio": deepcopy(self._audio),
                 "messages": deepcopy(list(self._messages)),
                 "notifications": deepcopy(list(self._notifications)),
             }
@@ -54,6 +56,12 @@ class DashboardState:
                 "provider": provider,
                 "updated_at": _now_iso(),
             }
+            self._publish_locked()
+
+    def set_audio_muted(self, muted: bool) -> None:
+        """音声読み上げのミュート状態を更新する。"""
+        with self._lock:
+            self._audio = {"muted": muted, "updated_at": _now_iso()}
             self._publish_locked()
 
     def add_message(self, role: str, text: str, streaming: bool = False) -> str:

@@ -211,6 +211,36 @@ def test_cancel_clears_listening_status(monkeypatch):
     assert snapshot["status"]["code"] == "ready"
 
 
+def test_dashboard_control_updates_mute_state(monkeypatch):
+    """ダッシュボード操作でミュート状態を切り替える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    assert app._handle_dashboard_control("mute") == {"muted": True}
+    snapshot = app._dashboard_state.snapshot()
+    assert app._audio.cancelled is True
+    assert snapshot["audio"]["muted"] is True
+    assert snapshot["status"]["code"] == "ready"
+
+    assert app._handle_dashboard_control("unmute") == {"muted": False}
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["audio"]["muted"] is False
+    assert snapshot["status"]["code"] == "ready"
+
+
+def test_mute_does_not_override_listening_status(monkeypatch):
+    """ミュート状態は録音中表示を上書きしない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._dashboard_state.set_status("listening", "録音中")
+
+    app._set_muted(True)
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["audio"]["muted"] is True
+    assert snapshot["status"]["code"] == "listening"
+
+
 def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
     _patch_app(monkeypatch)
     monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
@@ -624,6 +654,30 @@ def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
 
     assert response == "一文目。二文目。三文目。"
     assert played == ["正規化:一文目。".encode()]
+
+
+def test_stream_response_waits_while_muted(monkeypatch):
+    """ミュート中はTTS再生を待機し、解除後に読み上げる。"""
+    import threading
+    import time
+
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._set_muted(True)
+
+    worker = threading.Thread(target=lambda: app._speak_response_stream(["一文目。"]), daemon=True)
+    worker.start()
+    time.sleep(0.05)
+
+    assert app._audio.played == []
+    assert worker.is_alive()
+
+    app._set_muted(False)
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert app._audio.played == ["正規化:一文目。".encode()]
 
 
 def test_speak_response_plays_normalized_voice(monkeypatch):

@@ -164,6 +164,8 @@ class ArgosApp:
         self._auth_warning_thread: threading.Thread | None = None
         self._cancel_lock = threading.Lock()
         self._cancel_generation = 0
+        self._mute_condition = threading.Condition()
+        self._muted = False
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
 
@@ -186,6 +188,7 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            control_handler=self._handle_dashboard_control,
         )
 
     def run(self) -> None:
@@ -434,6 +437,18 @@ class ArgosApp:
         with self._cancel_lock:
             return self._cancel_generation
 
+    def _handle_dashboard_control(self, action: str) -> dict[str, object]:
+        """ダッシュボードからの操作をARGOS本体へ反映する。"""
+        if action == "mute":
+            self._set_muted(True)
+        elif action == "unmute":
+            self._set_muted(False)
+        elif action == "toggle_mute":
+            self._set_muted(not self._is_muted())
+        else:
+            raise ValueError(f"未対応の操作です: {action}")
+        return {"muted": self._is_muted()}
+
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
         try:
@@ -496,6 +511,9 @@ class ArgosApp:
         """エージェント応答を tts-filter と TTS に通して再生する。"""
         if not text:
             return
+        if self._is_muted():
+            self._show_lcd(text)
+            return
         if self._settings.dry_run:
             print(f"ARGOS> {text}")
             return
@@ -522,13 +540,16 @@ class ArgosApp:
         full_response = ""
         chunker = TextChunker(self._settings.tts_delimiters)
         if self._settings.dry_run:
-            print("ARGOS> ", end="", flush=True)
+            if not self._is_muted():
+                print("ARGOS> ", end="", flush=True)
             for delta in deltas:
                 full_response += delta
                 if dashboard_message_id:
                     self._dashboard_state.append_message(dashboard_message_id, delta)
-                print(delta, end="", flush=True)
-            print()
+                if not self._is_muted():
+                    print(delta, end="", flush=True)
+            if not self._is_muted():
+                print()
             return full_response
 
         stream_generation = self._current_cancel_generation()
@@ -593,6 +614,9 @@ class ArgosApp:
             if self._current_cancel_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return
+            if not self._wait_until_unmuted(generation):
+                self._drain_tts_queue(tts_queue)
+                return
             self._show_lcd(chunk)
             self._dashboard_state.set_status("speaking", "読み上げ中")
             try:
@@ -612,6 +636,9 @@ class ArgosApp:
                 self._drain_tts_queue(tts_queue)
                 return
             if self._current_cancel_generation() != generation:
+                self._drain_tts_queue(tts_queue)
+                return
+            if not self._wait_until_unmuted(generation):
                 self._drain_tts_queue(tts_queue)
                 return
             try:
@@ -637,6 +664,8 @@ class ArgosApp:
         """短い状態メッセージを読み上げる。"""
         log.info("状態通知: %s", text)
         self._show_lcd(text)
+        if self._is_muted():
+            return
         if self._settings.dry_run:
             print(f"ARGOS> {text}")
             return
@@ -686,6 +715,35 @@ class ArgosApp:
             self._lcd.show_text(text)
         except Exception:
             log.exception("LCD表示に失敗しました")
+
+    def _set_muted(self, muted: bool) -> None:
+        """ダッシュボード操作による読み上げミュート状態を更新する。"""
+        with self._mute_condition:
+            changed = self._muted != muted
+            self._muted = muted
+            self._mute_condition.notify_all()
+        self._dashboard_state.set_audio_muted(muted)
+        if muted:
+            self._audio.cancel()
+            if self._dashboard_state.snapshot()["status"]["code"] == "speaking":
+                self._set_ready_or_locked()
+            if changed:
+                self._dashboard_state.add_notification("ミュート", "読み上げを一時停止しました。", source="ARGOS")
+            return
+        if changed:
+            self._dashboard_state.add_notification("ミュート解除", "読み上げを再開します。", source="ARGOS")
+
+    def _is_muted(self) -> bool:
+        """読み上げミュート中ならTrueを返す。"""
+        with self._mute_condition:
+            return self._muted
+
+    def _wait_until_unmuted(self, generation: int) -> bool:
+        """ミュート解除またはキャンセルまでTTSワーカーを待機させる。"""
+        with self._mute_condition:
+            while self._muted and self._current_cancel_generation() == generation and not self._shutdown.is_set():
+                self._mute_condition.wait(timeout=0.2)
+        return self._current_cancel_generation() == generation and not self._shutdown.is_set()
 
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""
