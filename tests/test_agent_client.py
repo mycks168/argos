@@ -1,6 +1,5 @@
 from argos.config import AgentSlot, Settings
 from argos.services.agent import create_agent_client
-from argos.services.codex.cli import CodexCliClient
 
 
 def _settings() -> Settings:
@@ -48,19 +47,22 @@ def _settings() -> Settings:
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=(),
+        antigravity_command="/home/yuki/.local/bin/agy",
+        antigravity_home="~/.gemini/antigravity-cli",
+        antigravity_extra_args=(),
     )
 
 
-def test_create_codex_agent_client():
-    """codexプロバイダーではCodexクライアントを作成する。"""
+def test_create_agent_client_routes_codex_slot():
+    """codexスロットへルーティングできるクライアントを作成する。"""
     client = create_agent_client(_settings())
 
-    assert isinstance(client, CodexCliClient)
+    assert client.current_name == "作業"
 
 
 def test_unknown_agent_provider_raises():
     """未対応プロバイダーは起動時に検出できる。"""
-    settings = Settings(**{**_settings().__dict__, "agent_provider": "antigravity"})
+    settings = Settings(**{**_settings().__dict__, "agent_slots": (AgentSlot("謎", "unknown", "/tmp"),)})
 
     try:
         create_agent_client(settings)

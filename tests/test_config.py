@@ -117,6 +117,27 @@ def test_load_whisper_settings(monkeypatch):
     assert settings.whisper_compute_type == "int8"
 
 
+def test_load_antigravity_settings(monkeypatch):
+    """Antigravity CLI設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_COMMAND", "/tmp/agy")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_HOME", "/tmp/ag-home")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "--x --y")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", "true")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_SANDBOX", "true")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "30s")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", "true")
+
+    settings = load_settings()
+
+    assert settings.antigravity_command == "/tmp/agy"
+    assert settings.antigravity_home == "/tmp/ag-home"
+    assert settings.antigravity_extra_args == ("--x", "--y")
+    assert settings.antigravity_skip_permissions is True
+    assert settings.antigravity_sandbox is True
+    assert settings.antigravity_print_timeout == "30s"
+    assert settings.antigravity_continue_session is True
+
+
 def test_load_codex_progress_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")

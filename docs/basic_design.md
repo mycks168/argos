@@ -234,3 +234,23 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
 Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
+
+## Antigravity CLI
+
+`provider` が `antigravity` のスロットでは、ARGOS は `agy` CLI を1発話ごとに起動する。初回は次の形で実行する。
+
+```bash
+agy --print <prompt>
+```
+
+`ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` の場合だけ、同じARGOSプロセス内の継続発話では、Antigravity の `last_conversations.json` から取得した会話IDを使い、次の形で実行する。
+
+```bash
+agy --conversation <conversation_id> --print <prompt>
+```
+
+`ARGOS_ANTIGRAVITY_COMMAND` で `agy` のパスを指定する。既定値は `/home/yuki/.local/bin/agy` とする。Antigravity のキャッシュは `ARGOS_ANTIGRAVITY_HOME` から読み、既定値は `~/.gemini/antigravity-cli` とする。`ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS=true` の場合は `--dangerously-skip-permissions` を渡す。`ARGOS_ANTIGRAVITY_SANDBOX=true` の場合は `--sandbox` を渡す。
+
+Antigravity は会話再開時に過去の画面出力を標準出力へ混ぜることがある。ARGOS は `agy` の標準出力を回答本文としては使わず、実行後に `transcript_full.jsonl` または `transcript.jsonl` の追加分を読み、末尾から `source=MODEL`、`type=PLANNER_RESPONSE`、`status=DONE`、`content` ありのエントリーだけを回答として扱う。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
+
+既定では毎回新規会話として起動し、`--conversation` は渡さない。会話を継続したい場合だけ `ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` を指定する。サービス再起動後も保存済み会話IDを復元したい場合は、さらに `ARGOS_ANTIGRAVITY_RESUME_SAVED=true` を指定する。`ARGOS_ANTIGRAVITY_PROMPT_PREFIX` は任意の固定prefixだが、既定では空にする。読み上げ向けの整形はprovider個別ではなく、共通のTTSフィルター側で扱う。

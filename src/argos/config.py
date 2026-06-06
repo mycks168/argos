@@ -75,6 +75,15 @@ class Settings:
     codex_bypass_sandbox: bool
     codex_approval_policy: str
     codex_extra_args: tuple[str, ...]
+    antigravity_command: str
+    antigravity_home: str
+    antigravity_extra_args: tuple[str, ...]
+    antigravity_skip_permissions: bool = False
+    antigravity_sandbox: bool = False
+    antigravity_print_timeout: str = "5m0s"
+    antigravity_continue_session: bool = False
+    antigravity_resume_saved: bool = False
+    antigravity_prompt_prefix: str = ""
     codex_progress_voice: bool = True
     codex_progress_first_delay_seconds: float = 8.0
     codex_progress_interval_seconds: float = 20.0
@@ -171,6 +180,7 @@ def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[A
 def load_settings() -> Settings:
     """環境変数と .env から設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
+    antigravity_extra_args = tuple(arg for arg in os.environ.get("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "").split() if arg)
     agent_provider = os.environ.get("ARGOS_AGENT_PROVIDER", "codex")
     return Settings(
         agent_provider=agent_provider,
@@ -215,6 +225,18 @@ def load_settings() -> Settings:
         codex_bypass_sandbox=_bool_env("ARGOS_CODEX_BYPASS_SANDBOX", False),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),
         codex_extra_args=extra_args,
+        antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "/home/yuki/.local/bin/agy"),
+        antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
+        antigravity_extra_args=antigravity_extra_args,
+        antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", False),
+        antigravity_sandbox=_bool_env("ARGOS_ANTIGRAVITY_SANDBOX", False),
+        antigravity_print_timeout=os.environ.get("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "5m0s"),
+        antigravity_continue_session=_bool_env("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", False),
+        antigravity_resume_saved=_bool_env("ARGOS_ANTIGRAVITY_RESUME_SAVED", False),
+        antigravity_prompt_prefix=os.environ.get(
+            "ARGOS_ANTIGRAVITY_PROMPT_PREFIX",
+            "",
+        ),
         codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
         codex_progress_first_delay_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")

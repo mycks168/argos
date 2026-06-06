@@ -11,6 +11,7 @@ class FakeProc:
         self.stdin = None
         self.stderr = None
         self.returncode = 0
+        self.wait_calls = 0
 
     def poll(self):
         return None
@@ -19,6 +20,7 @@ class FakeProc:
         self.signals.append(signal)
 
     def wait(self, timeout=None):
+        self.wait_calls += 1
         return 0
 
     def kill(self):
@@ -128,3 +130,4 @@ def test_audio_player_play_and_cancel(monkeypatch):
     assert popen_calls[0] == ["aplay", "-q", "-D", "speaker", "-"]
     assert proc.input == b"wav"
     assert proc.terminated
+    assert proc.wait_calls >= 1

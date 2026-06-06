@@ -144,8 +144,16 @@ class AudioPlayer:
     def cancel(self) -> None:
         """再生中の aplay を停止する。"""
         proc = self._proc
-        if proc and proc.poll() is None:
-            proc.terminate()
+        if proc is None or proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=1)
+        finally:
+            self._proc = None
 
     def _set_volume_once(self) -> None:
         """amixer で音量を一度だけ設定する。"""
