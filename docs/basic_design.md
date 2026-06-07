@@ -71,9 +71,9 @@ HDMIダッシュボードは、現在の状態、現在のエージェントス�
 
 ### LLM エージェント
 
-ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。未対応のプロバイダーが指定された場合は起動時にエラーにする。
+ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。`codex`、`antigravity`、`hermes` を指定できる。未対応のプロバイダーが指定された場合は起動時にエラーにする。
 
-Codex、Antigravity、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
+Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
 ### Codex CLI
 
@@ -257,3 +257,9 @@ agy --conversation <conversation_id> --print <prompt>
 Antigravity は会話再開時に過去の画面出力を標準出力へ混ぜることがある。ARGOS は `agy` の標準出力を回答本文としては使わず、実行後に `transcript_full.jsonl` または `transcript.jsonl` の追加分を読み、末尾から `source=MODEL`、`type=PLANNER_RESPONSE`、`status=DONE`、`content` ありのエントリーだけを回答として扱う。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
 
 既定では毎回新規会話として起動し、`--conversation` は渡さない。会話を継続したい場合だけ `ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` を指定する。サービス再起動後も保存済み会話IDを復元したい場合は、さらに `ARGOS_ANTIGRAVITY_RESUME_SAVED=true` を指定する。`ARGOS_ANTIGRAVITY_PROMPT_PREFIX` は任意の固定prefixだが、既定では空にする。読み上げ向けの整形はprovider個別ではなく、共通のTTSフィルター側で扱う。
+
+## Hermes Agent CLI
+
+Hermes provider は `hermes chat -q <prompt> -Q --source <source>` を使う。`-Q` によりプログラム向けの出力にし、`ARGOS_HERMES_PASS_SESSION_ID=true` の場合は `--pass-session-id` を渡す。`ARGOS_HERMES_MODEL`、`ARGOS_HERMES_PROVIDER`、`ARGOS_HERMES_TOOLSETS`、`ARGOS_HERMES_SKILLS` はそれぞれ Hermes CLI の `--model`、`--provider`、`--toolsets`、`--skills` に対応する。追加オプションは `ARGOS_HERMES_EXTRA_ARGS` で指定する。
+
+Hermes の session ID は `ARGOS_AGENT_STATE_PATH` にスロットごとに保存する。`ARGOS_HERMES_RESUME_SAVED=true` の場合、保存済みsession IDを起動時に復元し、次回実行では `--resume <session_id>` を渡す。`/reset` では保存済みsession IDを削除し、次回から新規会話として扱う。Hermes側の会話履歴本体は Hermes の管理領域に保存され、ARGOS はsession IDだけを保持する。
