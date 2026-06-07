@@ -163,6 +163,8 @@ ARGOS は最初の発話処理時と正常終了時に最終利用時刻を `ARG
 
 GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
 
+GPIO入力は起動直後の本人確認案内を読み上げる前に初期化する。これにより「本人確認してください」の読み上げ中にPTTを押した場合も、読み上げを止めて録音を開始できる。
+
 ## systemd ユニット
 
 `systemd/argos.service` は Raspberry Pi 上で ARGOS を常駐させるための配布用ユニットファイルである。
@@ -179,7 +181,7 @@ GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、
 
 ## 音声入力の設定
 
-`AUDIO_DEVICE` は `cat /proc/asound/cards` に表示されるカード名に合わせる。
+`AUDIO_DEVICE` は `cat /proc/asound/cards` に表示されるカード名に合わせる。複数のマイク候補を使う場合は `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定する。互換のため `ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` も読み込む。ARGOS は録音開始時に `/proc/asound/cards` を見て、`CARD=...` が接続済みの候補を選ぶ。候補が見つからない場合は `arecord -l` から録音可能デバイスを検出してフォールバックし、それも失敗した場合は先頭候補を使う。
 
 例:
 
@@ -191,6 +193,7 @@ GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、
 
 ```text
 AUDIO_DEVICE=plughw:CARD=H2,DEV=0
+AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 ```
 
 `arecord -l` が空でも、`/proc/asound/cards` に USB マイクが見えていればカード名指定で録音できる場合がある。

@@ -89,6 +89,26 @@ def test_load_voicevox_speed_scale(monkeypatch):
     assert settings.voicevox_speed_scale == 1.1
 
 
+def test_load_audio_input_devices(monkeypatch):
+    """複数の録音デバイス候補を読み込む。"""
+    monkeypatch.setenv("AUDIO_INPUT_DEVICES", "plughw:CARD=One,DEV=0; plughw:CARD=Two,DEV=0")
+
+    settings = load_settings()
+
+    assert settings.audio_input_devices == ("plughw:CARD=One,DEV=0", "plughw:CARD=Two,DEV=0")
+
+
+def test_load_argos_input_devices_from_comma_text(monkeypatch):
+    """ARGOS_INPUT_DEVICESでもALSAデバイス文字列を壊さず読み込む。"""
+    monkeypatch.delenv("AUDIO_INPUT_DEVICES", raising=False)
+    monkeypatch.delenv("ARGOS_AUDIO_INPUT_DEVICES", raising=False)
+    monkeypatch.setenv("ARGOS_INPUT_DEVICES", "plughw:CARD=One,DEV=0, plughw:CARD=Two,DEV=0")
+
+    settings = load_settings()
+
+    assert settings.audio_input_devices == ("plughw:CARD=One,DEV=0", "plughw:CARD=Two,DEV=0")
+
+
 def test_load_kokoro_settings(monkeypatch):
     """Kokoroフォールバック設定を読み込む。"""
     monkeypatch.setenv("ARGOS_KOKORO_VOICE", "jf_alpha")

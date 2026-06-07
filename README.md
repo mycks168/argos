@@ -44,6 +44,12 @@ journalctl -u argos.service -f
 sudo systemctl restart argos.service
 ```
 
+複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
+
+```text
+AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
+```
+
 ## PTT 操作
 
 - PTT ON: 録音開始
@@ -102,6 +108,8 @@ uv run scripts/enroll-face-auth.py --count 5
 カメラが横向きに写る場合は `ARGOS_AUTH_FACE_IMAGE_ROTATION=90` のように設定します。
 
 起動後に未認証の場合は「本人確認をしてください。」と案内します。`ARGOS_AUTH_WARNING_DELAY_SECONDS` の秒数が過ぎても未認証なら、警告音と本人確認案内を繰り返します。`ARGOS_AUTH_ALERT_DELAY_SECONDS` を超えると「警戒モードに入りました」と案内し、画面を「警戒中」にします。本人確認の失敗が続いた場合は、`ARGOS_AUTH_ALERT_COMMAND` に設定したコマンドも実行できます。
+
+音声キーワード照合時は、STTで認識された文字列と照合結果を `本人確認キーワード照合` としてログに出します。期待キーワードそのものはログに出しません。
 
 設定:
 
