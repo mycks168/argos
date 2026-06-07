@@ -105,6 +105,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html
+        assert "state.notifications.slice().reverse()" in html
+        assert "state.notifications.slice(-4)" not in html
+        assert ".notifications::-webkit-scrollbar" in html
         assert "id=\"splash\"" in html
         assert "showSplash()" in html
         assert 'data-code="booting"' in html

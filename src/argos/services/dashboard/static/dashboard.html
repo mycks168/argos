@@ -126,7 +126,14 @@
     .message[data-role="assistant"] { border-color: #69b7e4; }
     .meta { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .text { margin-top: 3px; font-size: 18px; line-height: 1.38; overflow-wrap: anywhere; }
-    .notifications { height: calc(100vh - 43px); }
+    .notifications {
+      height: calc(100vh - 43px);
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      scrollbar-width: none;
+      touch-action: pan-y;
+    }
+    .notifications::-webkit-scrollbar { display: none; }
     .notice { border-left: 3px solid #2a9d8f; padding: 3px 0 4px 11px; }
     .notice[data-priority="high"] { border-color: #e63946; }
     .notice-title { color: #e8f0f4; font-size: 16px; font-weight: 700; text-decoration: none; }
@@ -242,7 +249,7 @@
           messages.scrollTop = messages.scrollHeight;
         }
       }
-      const recentNotices = state.notifications.slice(-4).reverse();
+      const recentNotices = state.notifications.slice().reverse();
       const nextNotifications = JSON.stringify(recentNotices);
       if (nextNotifications !== previousNotifications) {
         notifications.innerHTML = recentNotices.length ? recentNotices.map(item => `
