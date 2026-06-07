@@ -130,6 +130,7 @@ class Settings:
     whisper_model_size: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
+    audio_input_devices: tuple[str, ...] = ()
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -186,6 +187,30 @@ def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[A
     return tuple(slots)
 
 
+def _split_device_env(name: str) -> tuple[str, ...]:
+    """環境変数を録音デバイス候補として読み込む。"""
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return ()
+    if ";" in raw:
+        return tuple(part.strip() for part in raw.split(";") if part.strip())
+    import re
+
+    devices = re.findall(r"(?:plug)?hw:CARD=[^,\s;]+,DEV=\d+|(?:sysdefault|front|dsnoop):CARD=[^,\s;]+(?:,DEV=\d+)?", raw)
+    if devices:
+        return tuple(devices)
+    return (raw.strip(),)
+
+
+def _load_audio_input_devices() -> tuple[str, ...]:
+    """互換の環境変数名から録音デバイス候補を読み込む。"""
+    for name in ("AUDIO_INPUT_DEVICES", "ARGOS_AUDIO_INPUT_DEVICES", "ARGOS_INPUT_DEVICES", "ARGOS_INPUT_DEVICE"):
+        devices = _split_device_env(name)
+        if devices:
+            return devices
+    return ()
+
+
 def load_settings() -> Settings:
     """環境変数と .env から設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
@@ -207,6 +232,7 @@ def load_settings() -> Settings:
         voicevox_sample_rate=int(os.environ.get("VOICEVOX_SAMPLE_RATE", "48000")),
         voicevox_speed_scale=float(os.environ.get("VOICEVOX_SPEED_SCALE", "1.0")),
         audio_input_device=os.environ.get("AUDIO_DEVICE", "plughw:CARD=Microphone,DEV=0"),
+        audio_input_devices=_load_audio_input_devices(),
         audio_output_device=os.environ.get("AUDIO_OUTPUT_DEVICE", "default"),
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),

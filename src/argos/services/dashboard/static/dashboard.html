@@ -68,6 +68,7 @@
     }
     section { min-width: 0; background: #0b1117; padding: 14px 18px; overflow: hidden; }
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
+    .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
     .clock { margin-top: 18px; color: #f4d35e; font-size: 36px; font-variant-numeric: tabular-nums; }
     .date { margin-top: 4px; color: #aebdc6; font-size: 15px; }
@@ -93,23 +94,25 @@
     .status[data-code="muted"] .status-dot { background: #8ca0ad; }
     .status[data-code="alert"] .status-dot { background: #ff2e2e; box-shadow: 0 0 14px #ff2e2e; }
     .status[data-code="error"] .status-dot { background: #ff6b6b; }
-    .controls { margin-top: 18px; display: grid; gap: 8px; }
     .control-button {
-      width: 100%;
       border: 1px solid #526775;
       background: #101820;
       color: #edf3f7;
-      padding: 12px 10px;
+      border-radius: 8px;
+      padding: 8px 12px;
       font: inherit;
-      font-size: 16px;
+      font-size: 13px;
       font-weight: 800;
-      text-align: left;
+      text-align: center;
+      white-space: nowrap;
+      opacity: 0.72;
       cursor: pointer !important;
     }
     .control-button[aria-pressed="true"] {
       border-color: #f4d35e;
       background: #2a2413;
       color: #f4d35e;
+      opacity: 1;
     }
     .control-button:disabled { opacity: 0.55; }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
@@ -150,6 +153,7 @@
     @media (max-width: 760px) {
       .dashboard { display: block; }
       section { border-bottom: 1px solid #26323b; }
+      .brand-row { align-items: flex-start; }
       .messages, .notifications { max-height: none; }
     }
   </style>
@@ -166,7 +170,10 @@
   <main class="dashboard">
     <section>
       <p class="eyebrow">VOICE AGENT</p>
-      <h1 class="brand">ARGOS</h1>
+      <div class="brand-row">
+        <h1 class="brand">ARGOS</h1>
+        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+      </div>
       <div id="clock" class="clock">--:--</div>
       <div id="date" class="date"></div>
       <div class="agent">
@@ -176,9 +183,6 @@
       </div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
-      </div>
-      <div class="controls">
-        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート OFF</button>
       </div>
     </section>
     <section>
@@ -230,7 +234,7 @@
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
       muted = Boolean(state.audio?.muted);
-      muteButton.textContent = muted ? "ミュート ON" : "ミュート OFF";
+      muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
       if (state.status.code === "booting") {
         showSplash();

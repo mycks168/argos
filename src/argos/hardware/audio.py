@@ -10,6 +10,7 @@ import subprocess
 import wave
 import logging
 from pathlib import Path
+from collections.abc import Iterable
 
 
 WAV_PATH = "/tmp/argos/utterance.wav"
@@ -33,9 +34,12 @@ def check_audio_level(wav_path: str) -> float:
 class Recorder:
     """arecord プロセスを制御して PTT 録音を行う。"""
 
-    def __init__(self, device: str, sample_rate: int) -> None:
-        """録音デバイスとサンプリングレートを保持する。"""
-        self._device = device
+    def __init__(self, device: str | Iterable[str], sample_rate: int) -> None:
+        """録音デバイス候補とサンプリングレートを保持する。"""
+        self._devices = (device,) if isinstance(device, str) else tuple(device)
+        if not self._devices:
+            raise ValueError("録音デバイス候補が空です")
+        self._device = self._devices[0]
         self._sample_rate = sample_rate
         self._proc: subprocess.Popen | None = None
 
@@ -54,6 +58,7 @@ class Recorder:
             os.remove(WAV_PATH)
         except FileNotFoundError:
             pass
+        self._device = select_available_input_device((self._device, *self._devices))
         cmd = [
             "arecord",
             "-D",
@@ -172,6 +177,89 @@ class AudioPlayer:
 def _is_expected_arecord_interrupt(stderr: str) -> bool:
     """arecord を SIGINT 停止した時の既知 stderr か判定する。"""
     return "Aborted by signal Interrupt" in stderr or "Interrupted system call" in stderr
+
+
+def select_available_input_device(devices: Iterable[str]) -> str:
+    """候補から現在接続されているALSA入力デバイスを選ぶ。"""
+    candidates = tuple(device for device in devices if device)
+    if not candidates:
+        raise ValueError("録音デバイス候補が空です")
+    cards = _read_asound_cards()
+    if not cards:
+        return candidates[0]
+    for device in candidates:
+        card = _extract_card_name(device)
+        if not card or _card_exists(cards, card):
+            return device
+    auto_devices = _list_capture_devices()
+    if auto_devices:
+        log.warning("録音デバイス候補が見つかりません。検出した入力デバイスを使います: %s", auto_devices[0])
+        return auto_devices[0]
+    log.warning("録音デバイス候補が見つかりません。先頭候補を使います: %s", candidates[0])
+    return candidates[0]
+
+
+def _read_asound_cards() -> str:
+    """ALSAカード一覧を読み込む。"""
+    try:
+        return Path("/proc/asound/cards").read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _extract_card_name(device: str) -> str:
+    """ALSAデバイス文字列からCARD名を取り出す。"""
+    marker = "CARD="
+    if marker not in device:
+        return ""
+    rest = device.split(marker, 1)[1]
+    return rest.split(",", 1)[0].strip()
+
+
+def _card_exists(cards_text: str, card: str) -> bool:
+    """ALSAカード一覧に指定カードが存在するか返す。"""
+    if card.isdigit():
+        return any(line.lstrip().startswith(f"{card} ") for line in cards_text.splitlines())
+    return card in _asound_card_names(cards_text)
+
+
+def _asound_card_names(cards_text: str) -> set[str]:
+    """ALSAカード一覧から空白を除いたカード名を取り出す。"""
+    names = set()
+    for line in cards_text.splitlines():
+        if "[" not in line or "]" not in line:
+            continue
+        name = line.split("[", 1)[1].split("]", 1)[0].strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def _list_capture_devices() -> tuple[str, ...]:
+    """arecord -l から録音可能なplughwデバイス候補を作る。"""
+    try:
+        result = subprocess.run(["arecord", "-l"], text=True, capture_output=True, timeout=3, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ()
+    if result.returncode != 0:
+        return ()
+    devices = []
+    for line in result.stdout.splitlines():
+        parsed = _parse_arecord_capture_line(line)
+        if parsed:
+            devices.append(parsed)
+    return tuple(devices)
+
+
+def _parse_arecord_capture_line(line: str) -> str:
+    """arecord -l のcard/device行からplughwデバイス文字列を作る。"""
+    import re
+
+    match = re.search(r"card\s+\d+:\s+([^\s\[]+).*device\s+(\d+):", line)
+    if not match:
+        return ""
+    card, device = match.groups()
+    return f"plughw:CARD={card},DEV={device}"
 
 
 def _repair_wav_header(wav_path: str) -> None:

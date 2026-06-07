@@ -1,3 +1,5 @@
+import logging
+
 from argos.config import AgentSlot, Settings
 from argos.core.app import ArgosApp, CodexProgressAnnouncer
 from argos.services.auth import hash_keyword
@@ -315,6 +317,44 @@ def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
     assert "本人確認をしてください。" in capsys.readouterr().out
 
 
+def test_run_initializes_gpio_before_auth_prompt(monkeypatch):
+    """本人確認案内の読み上げ前にPTT入力を初期化する。"""
+    _patch_app(monkeypatch)
+    events = []
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "startup_sound_enabled": False,
+            "startup_splash_seconds": 0,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+
+    def fake_gpio(*_args):
+        events.append("gpio")
+        return object()
+
+    monkeypatch.setattr("argos.core.app.GpioPttInput", fake_gpio)
+    app = ArgosApp(settings)
+    original_speak_status = app._speak_status
+
+    def speak_status(text):
+        events.append("speak")
+        original_speak_status(text)
+
+    def sleep_once(_seconds):
+        app._shutdown.set()
+
+    app._speak_status = speak_status
+    monkeypatch.setattr("argos.core.app.time.sleep", sleep_once)
+
+    app.run()
+
+    assert events[:2] == ["gpio", "speak"]
+
+
 def test_auth_warning_repeats_until_authenticated(monkeypatch):
     """未認証が続いたら案内を繰り返し、認証後に止める。"""
     _patch_app(monkeypatch)
@@ -457,6 +497,29 @@ def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):
 
     assert app._agent.asked == []
     assert "本人確認しました。" in capsys.readouterr().out
+
+
+def test_auth_keyword_attempt_logs_transcript(monkeypatch, caplog):
+    """本人確認キーワード照合時にSTT結果をログへ出す。"""
+    _patch_app(monkeypatch)
+    caplog.set_level(logging.INFO, logger="argos.core.app")
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": False,
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: "会場"
+
+    app._process_recording()
+
+    assert "本人確認キーワード照合" in caplog.text
+    assert "会場" in caplog.text
+    assert "音声キーワードが一致しません。" in caplog.text
 
 
 def test_face_auth_failure_notification_has_image(monkeypatch, tmp_path):

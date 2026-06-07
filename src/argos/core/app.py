@@ -103,7 +103,7 @@ class ArgosApp:
     def __init__(self, settings: Settings) -> None:
         """各サービスクライアントと状態機械を初期化する。"""
         self._settings = settings
-        self._recorder = Recorder(settings.audio_input_device, settings.audio_sample_rate)
+        self._recorder = Recorder(settings.audio_input_devices or (settings.audio_input_device,), settings.audio_sample_rate)
         self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
@@ -201,11 +201,12 @@ class ArgosApp:
         self._run_startup_sequence()
         self._try_face_auth("起動時")
         self._set_ready_or_locked()
+        if not self._settings.dry_run:
+            self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         self._announce_auth_required()
         if self._settings.dry_run:
             self._run_text_loop()
             return
-        self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         while not self._shutdown.is_set():
             time.sleep(0.2)
 
@@ -285,6 +286,7 @@ class ArgosApp:
         if self._try_face_auth("顔認証"):
             return True
         result = self._auth.verify_keyword(transcript)
+        log.info("本人確認キーワード照合: transcript=%r authenticated=%s message=%s", transcript, result.authenticated, result.message)
         if result.authenticated:
             self._stop_auth_warning()
             self._dashboard_state.set_status("ready", "待機中")

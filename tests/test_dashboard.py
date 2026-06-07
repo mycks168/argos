@@ -117,7 +117,12 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert "state.agent?.provider" in html
+        assert 'class="brand-row"' in html
         assert 'id="mute-button"' in html
+        assert ">ミュート</button>" in html
+        assert 'muted ? "ミュート中" : "ミュート"' in html
+        assert "border-radius: 8px" in html
+        assert "opacity: 0.72" in html
         assert "const dashboardToken = \"secret\";" in html
         assert 'data-code="muted"' in html
 

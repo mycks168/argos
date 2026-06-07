@@ -1,6 +1,6 @@
 import wave
 
-from argos.hardware.audio import AudioPlayer, Recorder, _repair_wav_header
+from argos.hardware.audio import AudioPlayer, Recorder, _repair_wav_header, select_available_input_device
 
 
 class FakeProc:
@@ -52,6 +52,75 @@ def test_recorder_start_stop_cancel(monkeypatch, tmp_path):
     recorder.start()
     recorder.cancel()
     assert proc.killed
+
+
+def test_recorder_selects_available_device_on_start(monkeypatch, tmp_path):
+    """録音開始時に接続済みカードの候補を選ぶ。"""
+    proc = FakeProc()
+    calls = []
+    wav_path = tmp_path / "u.wav"
+    monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(wav_path))
+    monkeypatch.setattr("argos.hardware.audio._read_asound_cards", lambda: " 1 [H2]: USB-Audio - HyperX\n")
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: calls.append(command) or proc)
+    recorder = Recorder(("plughw:CARD=Missing,DEV=0", "plughw:CARD=H2,DEV=0"), 16000)
+
+    recorder.start()
+
+    assert calls[0][calls[0].index("-D") + 1] == "plughw:CARD=H2,DEV=0"
+
+
+def test_recorder_reuses_detected_fallback_device(monkeypatch, tmp_path):
+    """一度検出したフォールバック先は次回録音で優先する。"""
+    proc = FakeProc()
+    calls = []
+    scan_count = 0
+    wav_path = tmp_path / "u.wav"
+
+    def list_capture_devices():
+        nonlocal scan_count
+        scan_count += 1
+        return ("plughw:CARD=Microphone,DEV=0",)
+
+    monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(wav_path))
+    monkeypatch.setattr("argos.hardware.audio._read_asound_cards", lambda: " 2 [Microphone]: USB-Audio - USB Microphone\n")
+    monkeypatch.setattr("argos.hardware.audio._list_capture_devices", list_capture_devices)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: calls.append(command) or proc)
+    recorder = Recorder(("plughw:CARD=Missing,DEV=0",), 16000)
+
+    recorder.start()
+    recorder.cancel()
+    recorder.start()
+
+    assert calls[0][calls[0].index("-D") + 1] == "plughw:CARD=Microphone,DEV=0"
+    assert calls[1][calls[1].index("-D") + 1] == "plughw:CARD=Microphone,DEV=0"
+    assert scan_count == 1
+
+
+def test_select_available_input_device_falls_back_to_first(monkeypatch):
+    """候補が見つからない場合は先頭候補を返す。"""
+    monkeypatch.setattr("argos.hardware.audio._read_asound_cards", lambda: " 1 [H2]: USB-Audio - HyperX\n")
+    monkeypatch.setattr("argos.hardware.audio._list_capture_devices", lambda: ())
+
+    assert select_available_input_device(("plughw:CARD=Missing,DEV=0", "plughw:CARD=Other,DEV=0")) == "plughw:CARD=Missing,DEV=0"
+
+
+def test_select_available_input_device_uses_detected_capture_device(monkeypatch):
+    """設定候補が外れている場合は検出した録音デバイスへフォールバックする。"""
+    monkeypatch.setattr("argos.hardware.audio._read_asound_cards", lambda: " 2 [Microphone]: USB-Audio - USB Microphone\n")
+    monkeypatch.setattr("argos.hardware.audio._list_capture_devices", lambda: ("plughw:CARD=Microphone,DEV=0",))
+
+    assert select_available_input_device(("plughw:CARD=Missing,DEV=0",)) == "plughw:CARD=Microphone,DEV=0"
+
+
+def test_select_available_input_device_matches_padded_card_name(monkeypatch):
+    """ALSAカード名の右側空白を無視して候補を選ぶ。"""
+    monkeypatch.setattr(
+        "argos.hardware.audio._read_asound_cards",
+        lambda: " 2 [Microphone     ]: USB-Audio - USB Microphone\n",
+    )
+    monkeypatch.setattr("argos.hardware.audio._list_capture_devices", lambda: ())
+
+    assert select_available_input_device(("plughw:CARD=Microphone,DEV=0",)) == "plughw:CARD=Microphone,DEV=0"
 
 
 def test_recorder_stop_raises_when_file_missing(monkeypatch, tmp_path):
