@@ -17,6 +17,7 @@ from argos.config import AgentSlot, Settings
 
 log = logging.getLogger(__name__)
 SESSION_ID_PATTERN = re.compile(r"session[ _-]?id\s*[:=]\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
+HERMES_RESUME_ID_PATTERN = re.compile(r"\b\d{8}_\d{6}_[A-Za-z0-9]+\b")
 HERMES_ERROR_LOG_PATH = Path("/tmp/argos/hermes-error.log")
 
 
@@ -96,7 +97,11 @@ class HermesCliClient:
         for slot in settings.agent_slots:
             if slot.provider.lower() != "hermes":
                 raise ValueError(f"Hermesクライアントでは扱えないスロットです: {slot.name} provider={slot.provider}")
-            session_id = self._store.load(_slot_key(slot)) if settings.hermes_resume_saved else ""
+            stored_session_id = self._store.load(_slot_key(slot)) if settings.hermes_resume_saved else ""
+            session_id = stored_session_id if _is_resume_session_id(stored_session_id) else ""
+            if stored_session_id and not session_id:
+                log.warning("Hermes resume用ではないsession IDを無視します: slot=%s value=%s", slot.name, stored_session_id)
+                self._store.clear(_slot_key(slot))
             self._conversations.append(HermesConversation(slot=slot, session_id=session_id))
         self._index = 0
 
@@ -137,7 +142,7 @@ class HermesCliClient:
             _write_debug_log(HERMES_ERROR_LOG_PATH, stderr)
         if proc.returncode != 0:
             raise RuntimeError(f"hermes エラー {proc.returncode}: {stderr[-1000:]}")
-        session_id = _extract_session_id(stdout)
+        session_id = _extract_resume_session_id(stdout) or _load_latest_session_id(self._settings)
         if session_id:
             conversation.session_id = session_id
             self._store.save(_slot_key(conversation.slot), session_id)
@@ -172,9 +177,42 @@ class HermesCliClient:
 
 
 def _extract_session_id(output: str) -> str:
-    """Hermesの出力からsession IDを取り出す。"""
+    """Hermesの出力からsession IDらしい値を取り出す。"""
     match = SESSION_ID_PATTERN.search(output)
     return match.group(1).strip() if match else ""
+
+
+def _extract_resume_session_id(output: str) -> str:
+    """Hermesの--resumeへ渡せるsession IDを出力から取り出す。"""
+    explicit = _extract_session_id(output)
+    if _is_resume_session_id(explicit):
+        return explicit
+    match = HERMES_RESUME_ID_PATTERN.search(output)
+    return match.group(0) if match else ""
+
+
+def _is_resume_session_id(value: str) -> bool:
+    """Hermesの--resumeへ渡せるsession ID形式ならTrueを返す。"""
+    return bool(HERMES_RESUME_ID_PATTERN.fullmatch(value.strip()))
+
+
+def _load_latest_session_id(settings: Settings) -> str:
+    """Hermes session一覧から直近のresume用IDを取得する。"""
+    for command in (
+        [settings.hermes_command, "sessions", "list", "--source", settings.hermes_source, "--limit", "1"],
+        [settings.hermes_command, "sessions", "list", "--limit", "1"],
+    ):
+        try:
+            result = subprocess.run(command, text=True, capture_output=True, timeout=10, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            log.exception("Hermes session一覧の取得に失敗しました: %s", command)
+            continue
+        if result.returncode != 0:
+            continue
+        session_id = _extract_resume_session_id(result.stdout)
+        if session_id:
+            return session_id
+    return ""
 
 
 def _strip_session_info(output: str) -> str:

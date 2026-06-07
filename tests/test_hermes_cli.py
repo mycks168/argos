@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
-from argos.services.hermes.cli import HermesCliClient, _extract_session_id, _strip_session_info
+from argos.services.hermes.cli import HermesCliClient, _extract_resume_session_id, _extract_session_id, _strip_session_info
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -68,7 +68,7 @@ def _settings(tmp_path: Path) -> Settings:
 
 
 def test_hermes_ask_stream_saves_session_id(monkeypatch, tmp_path):
-    """Hermes応答を返し、出力内のsession IDを保存する。"""
+    """Hermes応答を返し、sessions listのresume用session IDを保存する。"""
     settings = _settings(tmp_path)
     calls = []
 
@@ -76,13 +76,21 @@ def test_hermes_ask_stream_saves_session_id(monkeypatch, tmp_path):
         returncode = 0
 
         def communicate(self):
-            return "こんにちは\nSession ID: sess-1\n", ""
+            return "こんにちは\nSession ID: b33fdb00-7b92-463c-934d-e4b4c02696b8\n", ""
 
     def fake_popen(command, stdout, stderr, text, cwd, env):
         calls.append((command, cwd))
         return FakeProc()
 
+    def fake_run(command, text, capture_output, timeout, check):
+        class Result:
+            returncode = 0
+            stdout = "Title  Preview  Last Active  ID\n—  応答  now  20260607_102005_eb28d3\n"
+
+        return Result()
+
     monkeypatch.setattr("argos.services.hermes.cli.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("argos.services.hermes.cli.subprocess.run", fake_run)
     client = HermesCliClient(settings)
 
     assert client.ask("依頼") == "こんにちは"
@@ -107,7 +115,7 @@ def test_hermes_ask_stream_saves_session_id(monkeypatch, tmp_path):
         "--yolo",
     ]
     assert cwd == settings.agent_slots[0].cwd
-    assert "sess-1" in Path(settings.agent_state_path).read_text(encoding="utf-8")
+    assert "20260607_102005_eb28d3" in Path(settings.agent_state_path).read_text(encoding="utf-8")
 
 
 def test_hermes_uses_saved_session(monkeypatch, tmp_path):
@@ -118,7 +126,7 @@ def test_hermes_uses_saved_session(monkeypatch, tmp_path):
     from argos.services.hermes.cli import _slot_key
 
     Path(settings.agent_state_path).write_text(
-        json.dumps({_slot_key(settings.agent_slots[0]): "saved-session"}),
+        json.dumps({_slot_key(settings.agent_slots[0]): "20260607_102005_eb28d3"}),
         encoding="utf-8",
     )
     calls = []
@@ -133,18 +141,34 @@ def test_hermes_uses_saved_session(monkeypatch, tmp_path):
         calls.append(command)
         return FakeProc()
 
+    def fake_run(command, text, capture_output, timeout, check):
+        class Result:
+            returncode = 0
+            stdout = "Title  Preview  Last Active  ID\n—  応答  now  20260607_102005_eb28d3\n"
+
+        return Result()
+
     monkeypatch.setattr("argos.services.hermes.cli.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("argos.services.hermes.cli.subprocess.run", fake_run)
 
     client = HermesCliClient(settings)
     assert client.ask("続き") == "続きの応答"
     assert "--resume" in calls[0]
-    assert "saved-session" in calls[0]
+    assert "20260607_102005_eb28d3" in calls[0]
 
 
 def test_extract_and_strip_session_info():
     """session ID行の抽出と除去ができる。"""
-    output = "応答\nsession_id: abc-123\n"
+    output = "応答\nsession_id: 20260607_102005_eb28d3\n"
 
-    assert _extract_session_id(output) == "abc-123"
+    assert _extract_session_id(output) == "20260607_102005_eb28d3"
+    assert _extract_resume_session_id(output) == "20260607_102005_eb28d3"
     assert _strip_session_info(output) == "応答"
 
+
+def test_extract_resume_session_id_ignores_uuid():
+    """Hermesの--resumeに使えないUUID形式はresume IDとして扱わない。"""
+    output = "応答\nSession ID: b33fdb00-7b92-463c-934d-e4b4c02696b8\n"
+
+    assert _extract_session_id(output) == "b33fdb00-7b92-463c-934d-e4b4c02696b8"
+    assert _extract_resume_session_id(output) == ""
