@@ -84,6 +84,15 @@ class Settings:
     antigravity_continue_session: bool = False
     antigravity_resume_saved: bool = False
     antigravity_prompt_prefix: str = ""
+    hermes_command: str = "hermes"
+    hermes_model: str = ""
+    hermes_provider: str = ""
+    hermes_toolsets: str = ""
+    hermes_skills: str = ""
+    hermes_source: str = "argos"
+    hermes_pass_session_id: bool = True
+    hermes_resume_saved: bool = True
+    hermes_extra_args: tuple[str, ...] = ()
     codex_progress_voice: bool = True
     codex_progress_first_delay_seconds: float = 8.0
     codex_progress_interval_seconds: float = 20.0
@@ -181,6 +190,7 @@ def load_settings() -> Settings:
     """環境変数と .env から設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
     antigravity_extra_args = tuple(arg for arg in os.environ.get("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "").split() if arg)
+    hermes_extra_args = tuple(arg for arg in os.environ.get("ARGOS_HERMES_EXTRA_ARGS", "").split() if arg)
     agent_provider = os.environ.get("ARGOS_AGENT_PROVIDER", "codex")
     return Settings(
         agent_provider=agent_provider,
@@ -237,6 +247,15 @@ def load_settings() -> Settings:
             "ARGOS_ANTIGRAVITY_PROMPT_PREFIX",
             "",
         ),
+        hermes_command=os.environ.get("ARGOS_HERMES_COMMAND", "hermes"),
+        hermes_model=os.environ.get("ARGOS_HERMES_MODEL", ""),
+        hermes_provider=os.environ.get("ARGOS_HERMES_PROVIDER", ""),
+        hermes_toolsets=os.environ.get("ARGOS_HERMES_TOOLSETS", ""),
+        hermes_skills=os.environ.get("ARGOS_HERMES_SKILLS", ""),
+        hermes_source=os.environ.get("ARGOS_HERMES_SOURCE", "argos"),
+        hermes_pass_session_id=_bool_env("ARGOS_HERMES_PASS_SESSION_ID", True),
+        hermes_resume_saved=_bool_env("ARGOS_HERMES_RESUME_SAVED", True),
+        hermes_extra_args=hermes_extra_args,
         codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
         codex_progress_first_delay_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")

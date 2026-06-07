@@ -61,6 +61,16 @@ def test_create_agent_client_routes_codex_slot():
     assert client.current_provider == "codex"
 
 
+def test_create_agent_client_routes_hermes_slot():
+    """hermesスロットへルーティングできるクライアントを作成する。"""
+    settings = Settings(**{**_settings().__dict__, "agent_slots": (AgentSlot("Hermes", "hermes", "/tmp"),)})
+
+    client = create_agent_client(settings)
+
+    assert client.current_name == "Hermes"
+    assert client.current_provider == "hermes"
+
+
 def test_unknown_agent_provider_raises():
     """未対応プロバイダーは起動時に検出できる。"""
     settings = Settings(**{**_settings().__dict__, "agent_slots": (AgentSlot("謎", "unknown", "/tmp"),)})

@@ -10,6 +10,7 @@ from argos.config import AgentSlot
 from argos.config import Settings
 from argos.services.antigravity import AntigravityCliClient
 from argos.services.codex.cli import CodexCliClient
+from argos.services.hermes import HermesCliClient
 
 
 class AgentClient(Protocol):
@@ -95,4 +96,6 @@ def _create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
         return CodexCliClient(slot_settings)
     if provider == "antigravity":
         return AntigravityCliClient(slot_settings)
+    if provider == "hermes":
+        return HermesCliClient(slot_settings)
     raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")

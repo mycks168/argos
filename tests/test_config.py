@@ -138,6 +138,31 @@ def test_load_antigravity_settings(monkeypatch):
     assert settings.antigravity_continue_session is True
 
 
+def test_load_hermes_settings(monkeypatch):
+    """Hermes Agent CLI設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_HERMES_COMMAND", "/tmp/hermes")
+    monkeypatch.setenv("ARGOS_HERMES_MODEL", "model-a")
+    monkeypatch.setenv("ARGOS_HERMES_PROVIDER", "provider-a")
+    monkeypatch.setenv("ARGOS_HERMES_TOOLSETS", "tools-a")
+    monkeypatch.setenv("ARGOS_HERMES_SKILLS", "skills-a")
+    monkeypatch.setenv("ARGOS_HERMES_SOURCE", "argos-test")
+    monkeypatch.setenv("ARGOS_HERMES_PASS_SESSION_ID", "false")
+    monkeypatch.setenv("ARGOS_HERMES_RESUME_SAVED", "false")
+    monkeypatch.setenv("ARGOS_HERMES_EXTRA_ARGS", "--x --y")
+
+    settings = load_settings()
+
+    assert settings.hermes_command == "/tmp/hermes"
+    assert settings.hermes_model == "model-a"
+    assert settings.hermes_provider == "provider-a"
+    assert settings.hermes_toolsets == "tools-a"
+    assert settings.hermes_skills == "skills-a"
+    assert settings.hermes_source == "argos-test"
+    assert settings.hermes_pass_session_id is False
+    assert settings.hermes_resume_saved is False
+    assert settings.hermes_extra_args == ("--x", "--y")
+
+
 def test_load_codex_progress_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")
