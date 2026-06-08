@@ -25,6 +25,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state.set_status("thinking", "考え中")
     state.set_agent("アンチグラビティ", "antigravity")
     state.set_audio_muted(True)
+    state.set_audio_volume(64)
     message_id = state.add_message("assistant", "", streaming=True)
     state.append_message(message_id, "返答")
     state.finish_message(message_id)
@@ -36,6 +37,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["agent"]["name"] == "アンチグラビティ"
     assert snapshot["agent"]["provider"] == "antigravity"
     assert snapshot["audio"]["muted"] is True
+    assert snapshot["audio"]["volume"] == 64
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
@@ -119,6 +121,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
         assert 'id="mute-button"' in html
+        assert 'id="volume-slider"' in html
+        assert 'aria-label="読み上げ音量"' in html
+        assert 'sendControl("set_volume", {volume})' in html
         assert ">ミュート</button>" in html
         assert 'muted ? "ミュート中" : "ミュート"' in html
         assert "border-radius: 8px" in html
@@ -145,21 +150,21 @@ def test_dashboard_control_api_calls_handler():
     """ダッシュボード操作APIはBearer認証後にハンドラーを呼ぶ。"""
     calls = []
 
-    def handle_control(action):
-        calls.append(action)
-        return {"muted": action == "mute"}
+    def handle_control(payload):
+        calls.append(payload)
+        return {"muted": payload["action"] == "mute", "volume": payload.get("volume", 90)}
 
     server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", control_handler=handle_control)
     server.start()
     url = f"http://{server.address[0]}:{server.address[1]}/api/control"
     try:
-        status, body = _read_json(url, "POST", {"action": "mute"}, "secret")
+        status, body = _read_json(url, "POST", {"action": "mute", "volume": 55}, "secret")
     finally:
         server.stop()
 
     assert status == 200
-    assert body == {"muted": True}
-    assert calls == ["mute"]
+    assert body == {"muted": True, "volume": 55}
+    assert calls == [{"action": "mute", "volume": 55}]
 
 
 def test_dashboard_server_rejects_invalid_token():

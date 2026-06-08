@@ -31,7 +31,7 @@ class DashboardServer:
         port: int,
         token: str,
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
-        control_handler: Callable[[str], dict[str, Any]] | None = None,
+        control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -74,7 +74,7 @@ def _create_handler(
     state: DashboardState,
     token: str,
     camera_snapshot_path: Path,
-    control_handler: Callable[[str], dict[str, Any]] | None = None,
+    control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -152,8 +152,8 @@ def _create_handler(
             """ダッシュボード操作をARGOS本体へ渡す。"""
             if control_handler is None:
                 raise ValueError("コントロールAPIは無効です")
-            action = _required_text(payload, "action", 40)
-            return control_handler(action)
+            _required_text(payload, "action", 40)
+            return control_handler(payload)
 
         def _send_html(self) -> None:
             """ダッシュボードHTMLを返す。"""

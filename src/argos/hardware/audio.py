@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import math
 import os
 import signal
 import struct
 import subprocess
+import threading
 import wave
 import logging
 from pathlib import Path
@@ -128,12 +130,31 @@ class AudioPlayer:
         self._output_device = output_device
         self._output_card = output_card
         self._volume = volume
+        self._volume_lock = threading.Lock()
         self._volume_set = False
         self._proc: subprocess.Popen | None = None
+
+    @property
+    def volume(self) -> int:
+        """現在の再生音量を返す。"""
+        with self._volume_lock:
+            return self._volume
+
+    def set_volume(self, volume: int) -> int:
+        """再生音量を0から100の範囲に丸めて反映し、反映後の値を返す。"""
+        with self._volume_lock:
+            self._volume = max(0, min(100, int(volume)))
+            applied = self._volume
+        self._apply_volume()
+        self._volume_set = True
+        return applied
 
     def play_wav(self, wav_data: bytes) -> None:
         """WAV データを同期的に再生する。"""
         self._set_volume_once()
+        if self._play_wav_streaming(wav_data):
+            return
+        wav_data = self._scale_wav_volume(wav_data)
         proc = subprocess.Popen(
             ["aplay", "-q", "-D", self._output_device, "-"],
             stdin=subprocess.PIPE,
@@ -162,16 +183,126 @@ class AudioPlayer:
 
     def _set_volume_once(self) -> None:
         """amixer で音量を一度だけ設定する。"""
-        if self._volume_set or not self._output_card:
+        if self._volume_set:
             return
-        volume = f"{self._volume}%"
+        self._apply_volume()
+        self._volume_set = True
+
+    def _apply_volume(self) -> None:
+        """amixer で現在の音量を出力カードへ反映する。"""
+        volume = f"{self.volume}%"
+        device_args = ["-D", f"hw:CARD={self._output_card}"] if self._output_card else []
         for control in ("Master", "PCM", "Headphone", "Speaker"):
             subprocess.run(
-                ["amixer", "-q", "-D", f"hw:CARD={self._output_card}", "set", control, volume],
+                ["amixer", "-q", *device_args, "set", control, volume],
                 capture_output=True,
                 check=False,
             )
-        self._volume_set = True
+
+    def _play_wav_streaming(self, wav_data: bytes) -> bool:
+        """16bit PCM WAVを小分けにして、再生中の音量変更を反映する。"""
+        try:
+            source = wave.open(io.BytesIO(wav_data), "rb")
+        except (wave.Error, EOFError):
+            return False
+        with source:
+            params = source.getparams()
+            if params.sampwidth != 2:
+                return False
+            proc = subprocess.Popen(
+                [
+                    "aplay",
+                    "-q",
+                    "-D",
+                    self._output_device,
+                    "-t",
+                    "raw",
+                    "-f",
+                    "S16_LE",
+                    "-r",
+                    str(params.framerate),
+                    "-c",
+                    str(params.nchannels),
+                    "-",
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self._proc = proc
+            try:
+                if proc.stdin is None:
+                    return False
+                previous_volume = self.volume
+                while True:
+                    frames = source.readframes(2048)
+                    if not frames:
+                        break
+                    current_volume = self.volume
+                    proc.stdin.write(self._scale_pcm16_ramp(frames, previous_volume, current_volume, params.nchannels))
+                    previous_volume = current_volume
+                proc.stdin.close()
+                proc.wait(timeout=120)
+            except (BrokenPipeError, subprocess.TimeoutExpired):
+                proc.kill()
+                proc.wait(timeout=1)
+            finally:
+                self._proc = None
+            return True
+
+    def _scale_wav_volume(self, wav_data: bytes) -> bytes:
+        """16bit PCM WAVのサンプルへソフトウェア音量を反映する。"""
+        volume = self.volume
+        if volume == 100:
+            return wav_data
+        try:
+            with wave.open(io.BytesIO(wav_data), "rb") as source:
+                params = source.getparams()
+                if params.sampwidth != 2:
+                    return wav_data
+                frames = source.readframes(params.nframes)
+        except (wave.Error, EOFError):
+            return wav_data
+        scaled = self._scale_pcm16(frames, volume)
+        with io.BytesIO() as buffer:
+            with wave.open(buffer, "wb") as target:
+                target.setparams(params)
+                target.writeframes(scaled)
+            return buffer.getvalue()
+
+    def _scale_pcm16(self, frames: bytes, volume: int) -> bytes:
+        """16bit little-endian PCMフレームへ指定音量を掛ける。"""
+        volume = max(0, min(100, int(volume)))
+        if volume == 100:
+            return frames
+        factor = volume / 100
+        sample_count = len(frames) // 2
+        samples = struct.unpack(f"<{sample_count}h", frames[: sample_count * 2])
+        scaled = bytearray()
+        for sample in samples:
+            value = max(-32768, min(32767, int(sample * factor)))
+            scaled.extend(struct.pack("<h", value))
+        scaled.extend(frames[sample_count * 2 :])
+        return bytes(scaled)
+
+    def _scale_pcm16_ramp(self, frames: bytes, start_volume: int, end_volume: int, channels: int) -> bytes:
+        """16bit PCMフレームへ音量を滑らかに掛ける。"""
+        start_volume = max(0, min(100, int(start_volume)))
+        end_volume = max(0, min(100, int(end_volume)))
+        if start_volume == end_volume:
+            return self._scale_pcm16(frames, end_volume)
+        sample_count = len(frames) // 2
+        frame_count = max(1, sample_count // max(1, channels))
+        samples = struct.unpack(f"<{sample_count}h", frames[: sample_count * 2])
+        scaled = bytearray()
+        for index, sample in enumerate(samples):
+            frame_index = min(frame_count - 1, index // max(1, channels))
+            progress = frame_index / max(1, frame_count - 1)
+            volume = start_volume + (end_volume - start_volume) * progress
+            value = max(-32768, min(32767, int(sample * volume / 100)))
+            scaled.extend(struct.pack("<h", value))
+        scaled.extend(frames[sample_count * 2 :])
+        return bytes(scaled)
 
 
 def _is_expected_arecord_interrupt(stderr: str) -> bool:

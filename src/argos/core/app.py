@@ -128,6 +128,7 @@ class ArgosApp:
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
+        self._dashboard_state.set_audio_volume(self._audio.volume)
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -439,17 +440,21 @@ class ArgosApp:
         with self._cancel_lock:
             return self._cancel_generation
 
-    def _handle_dashboard_control(self, action: str) -> dict[str, object]:
+    def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
+        action = str(payload.get("action", ""))
         if action == "mute":
             self._set_muted(True)
         elif action == "unmute":
             self._set_muted(False)
         elif action == "toggle_mute":
             self._set_muted(not self._is_muted())
+        elif action == "set_volume":
+            volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
+            self._dashboard_state.set_audio_volume(volume)
         else:
             raise ValueError(f"未対応の操作です: {action}")
-        return {"muted": self._is_muted()}
+        return {"muted": self._is_muted(), "volume": self._audio.volume}
 
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""

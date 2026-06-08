@@ -28,7 +28,7 @@ class DashboardState:
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
         self._agent = {"name": "", "provider": "", "updated_at": _now_iso()}
-        self._audio = {"muted": False, "updated_at": _now_iso()}
+        self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
 
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
@@ -61,7 +61,13 @@ class DashboardState:
     def set_audio_muted(self, muted: bool) -> None:
         """音声読み上げのミュート状態を更新する。"""
         with self._lock:
-            self._audio = {"muted": muted, "updated_at": _now_iso()}
+            self._audio = {**self._audio, "muted": muted, "updated_at": _now_iso()}
+            self._publish_locked()
+
+    def set_audio_volume(self, volume: int) -> None:
+        """音声読み上げの音量表示を更新する。"""
+        with self._lock:
+            self._audio = {**self._audio, "volume": max(0, min(100, int(volume))), "updated_at": _now_iso()}
             self._publish_locked()
 
     def add_message(self, role: str, text: str, streaming: bool = False) -> str:
