@@ -76,12 +76,17 @@ class FakeAudio:
     def __init__(self, *args):
         self.cancelled = False
         self.played = []
+        self.volume = args[2]
 
     def cancel(self):
         self.cancelled = True
 
     def play_wav(self, wav):
         self.played.append(wav)
+
+    def set_volume(self, volume):
+        self.volume = max(0, min(100, int(volume)))
+        return self.volume
 
 
 class FakeStt:
@@ -218,16 +223,28 @@ def test_dashboard_control_updates_mute_state(monkeypatch):
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
 
-    assert app._handle_dashboard_control("mute") == {"muted": True}
+    assert app._handle_dashboard_control({"action": "mute"}) == {"muted": True, "volume": 90}
     snapshot = app._dashboard_state.snapshot()
     assert app._audio.cancelled is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["status"]["code"] == "ready"
 
-    assert app._handle_dashboard_control("unmute") == {"muted": False}
+    assert app._handle_dashboard_control({"action": "unmute"}) == {"muted": False, "volume": 90}
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["audio"]["muted"] is False
     assert snapshot["status"]["code"] == "ready"
+
+
+def test_dashboard_control_updates_audio_volume(monkeypatch):
+    """ダッシュボード操作で読み上げ音量を変更する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    assert app._handle_dashboard_control({"action": "set_volume", "volume": 42}) == {"muted": False, "volume": 42}
+    snapshot = app._dashboard_state.snapshot()
+
+    assert app._audio.volume == 42
+    assert snapshot["audio"]["volume"] == 42
 
 
 def test_mute_does_not_override_listening_status(monkeypatch):

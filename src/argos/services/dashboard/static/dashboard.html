@@ -67,6 +67,35 @@
       background: #26323b;
     }
     section { min-width: 0; background: #0b1117; padding: 14px 18px; overflow: hidden; }
+    .status-panel { position: relative; padding-left: 54px; }
+    .volume-control {
+      position: absolute;
+      left: 13px;
+      top: 16px;
+      bottom: 16px;
+      width: 26px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+    }
+    .volume-slider {
+      flex: 1;
+      width: 26px;
+      min-height: 180px;
+      accent-color: #69b7e4;
+      writing-mode: vertical-lr;
+      direction: rtl;
+      cursor: pointer !important;
+    }
+    .volume-label {
+      width: 32px;
+      color: #aebdc6;
+      font-size: 12px;
+      font-weight: 800;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+    }
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
@@ -168,7 +197,11 @@
     </div>
   </div>
   <main class="dashboard">
-    <section>
+    <section class="status-panel">
+      <div class="volume-control">
+        <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" step="5" value="90" aria-label="読み上げ音量">
+        <div id="volume-label" class="volume-label">90</div>
+      </div>
       <p class="eyebrow">VOICE AGENT</p>
       <div class="brand-row">
         <h1 class="brand">ARGOS</h1>
@@ -203,12 +236,15 @@
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
     const muteButton = document.getElementById("mute-button");
+    const volumeSlider = document.getElementById("volume-slider");
+    const volumeLabel = document.getElementById("volume-label");
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
     let splashTimer = null;
     let muted = false;
+    let changingVolume = false;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -236,6 +272,11 @@
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      const volume = Number.isFinite(Number(state.audio?.volume)) ? Number(state.audio.volume) : Number(volumeSlider.value);
+      if (!changingVolume) {
+        volumeSlider.value = volume;
+        volumeLabel.textContent = String(volume);
+      }
       if (state.status.code === "booting") {
         showSplash();
       }
@@ -272,8 +313,9 @@
       const response = await fetch("/api/state", {cache:"no-store"});
       render(await response.json());
     }
-    async function sendControl(action) {
+    async function sendControl(action, values = {}) {
       muteButton.disabled = true;
+      volumeSlider.disabled = true;
       try {
         const headers = {"Content-Type": "application/json"};
         if (dashboardToken) {
@@ -282,7 +324,7 @@
         const response = await fetch("/api/control", {
           method: "POST",
           headers,
-          body: JSON.stringify({action}),
+          body: JSON.stringify({action, ...values}),
         });
         if (!response.ok) {
           throw new Error(await response.text());
@@ -290,10 +332,21 @@
         await refresh();
       } finally {
         muteButton.disabled = false;
+        volumeSlider.disabled = false;
       }
     }
     muteButton.addEventListener("click", () => {
       sendControl(muted ? "unmute" : "mute").catch(error => console.error(error));
+    });
+    volumeSlider.addEventListener("input", () => {
+      changingVolume = true;
+      volumeLabel.textContent = volumeSlider.value;
+    });
+    volumeSlider.addEventListener("change", () => {
+      const volume = Number(volumeSlider.value);
+      sendControl("set_volume", {volume})
+        .catch(error => console.error(error))
+        .finally(() => { changingVolume = false; });
     });
     updateClock();
     setInterval(updateClock, 1000);

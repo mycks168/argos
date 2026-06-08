@@ -1,4 +1,5 @@
 import wave
+from io import BytesIO
 
 from argos.hardware.audio import AudioPlayer, Recorder, _repair_wav_header, select_available_input_device
 
@@ -8,10 +9,11 @@ class FakeProc:
         self.signals = []
         self.killed = False
         self.terminated = False
-        self.stdin = None
+        self.stdin = self
         self.stderr = None
         self.returncode = 0
         self.wait_calls = 0
+        self.input = b""
 
     def poll(self):
         return None
@@ -32,6 +34,16 @@ class FakeProc:
     def communicate(self, input=None, timeout=None):
         self.input = input
         return b"", b""
+
+    def write(self, data):
+        self.input += data
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
 
 
 def test_recorder_start_stop_cancel(monkeypatch, tmp_path):
@@ -200,3 +212,46 @@ def test_audio_player_play_and_cancel(monkeypatch):
     assert proc.input == b"wav"
     assert proc.terminated
     assert proc.wait_calls >= 1
+
+
+def test_audio_player_set_volume_applies_amixer(monkeypatch):
+    """音量変更時は0から100へ丸めてALSAへ反映する。"""
+    run_calls = []
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: run_calls.append(command))
+
+    player = AudioPlayer("speaker", "card0", 80)
+
+    assert player.set_volume(120) == 100
+    assert player.volume == 100
+    assert run_calls[0] == ["amixer", "-q", "-D", "hw:CARD=card0", "set", "Master", "100%"]
+
+
+def test_audio_player_set_volume_uses_default_mixer_without_card(monkeypatch):
+    """出力カード未指定時はデフォルトミキサーへ音量を反映する。"""
+    run_calls = []
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: run_calls.append(command))
+
+    player = AudioPlayer("plughw:0,0", "", 80)
+
+    assert player.set_volume(35) == 35
+    assert run_calls[0] == ["amixer", "-q", "set", "Master", "35%"]
+
+
+def test_audio_player_scales_wav_before_playback(monkeypatch):
+    """plughw直指定でも効くように再生PCMへソフトウェア音量を掛ける。"""
+    proc = FakeProc()
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: proc)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    with BytesIO() as buffer:
+        with wave.open(buffer, "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)
+            wav_file.setframerate(16000)
+            wav_file.writeframes((10000).to_bytes(2, "little", signed=True))
+        wav_data = buffer.getvalue()
+
+    player = AudioPlayer("plughw:0,0", "", 25)
+    player.play_wav(wav_data)
+
+    sample = int.from_bytes(proc.input[:2], "little", signed=True)
+    assert sample == 2500
