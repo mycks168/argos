@@ -218,6 +218,25 @@ def test_cancel_clears_listening_status(monkeypatch):
     assert snapshot["status"]["code"] == "ready"
 
 
+def test_locked_ptt_keeps_dashboard_locked(monkeypatch):
+    """ロック中のPTT録音は通常の録音中表示にしない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._on_ptt_press()
+    snapshot = app._dashboard_state.snapshot()
+    assert app._recorder.started is True
+    assert snapshot["status"]["code"] == "locked"
+    assert snapshot["status"]["label"] == "ロック中"
+
+
 def test_dashboard_control_updates_mute_state(monkeypatch):
     """ダッシュボード操作でミュート状態を切り替える。"""
     _patch_app(monkeypatch)
@@ -332,6 +351,28 @@ def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
     assert snapshot["status"]["code"] == "locked"
     assert snapshot["status"]["label"] == "ロック中"
     assert "本人確認をしてください。" in capsys.readouterr().out
+
+
+def test_auth_expiry_updates_ready_dashboard_to_locked(monkeypatch):
+    """待機中に認証が切れたらロック中表示へ戻す。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+    app._auth.verify_keyword("解除")
+    app._dashboard_state.set_status("ready", "待機中")
+
+    app._auth.lock()
+    app._refresh_auth_status()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "locked"
+    assert snapshot["status"]["label"] == "ロック中"
 
 
 def test_run_initializes_gpio_before_auth_prompt(monkeypatch):

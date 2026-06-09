@@ -31,6 +31,7 @@ class DashboardServer:
         port: int,
         token: str,
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
+        screensaver_seconds: float = 300.0,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
@@ -39,6 +40,7 @@ class DashboardServer:
         self._port = port
         self._token = token
         self._camera_snapshot_path = camera_snapshot_path
+        self._screensaver_seconds = screensaver_seconds
         self._control_handler = control_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -52,7 +54,13 @@ class DashboardServer:
 
     def start(self) -> None:
         """HTTPサーバーをバックグラウンドで起動する。"""
-        handler = _create_handler(self._state, self._token, self._camera_snapshot_path, self._control_handler)
+        handler = _create_handler(
+            self._state,
+            self._token,
+            self._camera_snapshot_path,
+            self._screensaver_seconds,
+            self._control_handler,
+        )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
@@ -74,6 +82,7 @@ def _create_handler(
     state: DashboardState,
     token: str,
     camera_snapshot_path: Path,
+    screensaver_seconds: float = 300.0,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
@@ -159,6 +168,7 @@ def _create_handler(
             """ダッシュボードHTMLを返す。"""
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -131,6 +131,7 @@ class Settings:
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
+    dashboard_screensaver_seconds: float = 300.0
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -252,6 +253,7 @@ def load_settings() -> Settings:
         dashboard_host=os.environ.get("ARGOS_DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
+        dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),

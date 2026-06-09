@@ -29,6 +29,19 @@
       transition: opacity 260ms ease, transform 420ms ease;
     }
     .splash.is-active { opacity: 1; transform: scale(1); }
+    .screensaver {
+      position: fixed;
+      inset: 0;
+      z-index: 40;
+      background: #000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+    }
+    .screensaver.is-active {
+      opacity: 1;
+      pointer-events: auto;
+    }
     .splash-frame {
       position: relative;
       width: min(620px, 84vw);
@@ -188,6 +201,7 @@
   </style>
 </head>
 <body>
+  <div id="screensaver" class="screensaver" aria-hidden="true"></div>
   <div id="splash" class="splash" aria-hidden="true">
     <div class="splash-frame">
       <div class="splash-kicker">AUTONOMOUS ROAD GUARDIAN</div>
@@ -230,6 +244,7 @@
   <script>
     const messages = document.getElementById("messages");
     const notifications = document.getElementById("notifications");
+    const screensaver = document.getElementById("screensaver");
     const splash = document.getElementById("splash");
     const status = document.getElementById("status");
     const statusLabel = document.getElementById("status-label");
@@ -239,10 +254,12 @@
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+    const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
     let splashTimer = null;
+    let screensaverTimer = null;
     let muted = false;
     let changingVolume = false;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
@@ -264,6 +281,19 @@
       window.clearTimeout(splashTimer);
       splashTimer = window.setTimeout(() => splash.classList.remove("is-active"), 3000);
     }
+    function showScreensaver() {
+      if (screensaverTimeoutMs <= 0) {
+        return;
+      }
+      screensaver.classList.add("is-active");
+    }
+    function resetScreensaver() {
+      screensaver.classList.remove("is-active");
+      window.clearTimeout(screensaverTimer);
+      if (screensaverTimeoutMs > 0) {
+        screensaverTimer = window.setTimeout(showScreensaver, screensaverTimeoutMs);
+      }
+    }
     function render(state) {
       status.dataset.code = state.status.code;
       statusLabel.textContent = state.status.label;
@@ -279,6 +309,9 @@
       }
       if (state.status.code === "booting") {
         showSplash();
+      }
+      if (state.status.code === "listening" || state.status.code === "locked") {
+        resetScreensaver();
       }
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
@@ -350,6 +383,10 @@
     });
     updateClock();
     setInterval(updateClock, 1000);
+    ["pointerdown", "touchstart", "keydown", "wheel"].forEach(eventName => {
+      window.addEventListener(eventName, resetScreensaver, {passive: true});
+    });
+    resetScreensaver();
     showSplash();
     refresh();
     const stream = new EventSource("/api/stream");

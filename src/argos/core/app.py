@@ -189,6 +189,7 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            screensaver_seconds=settings.dashboard_screensaver_seconds,
             control_handler=self._handle_dashboard_control,
         )
 
@@ -205,6 +206,7 @@ class ArgosApp:
         if not self._settings.dry_run:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         self._announce_auth_required()
+        self._start_auth_status_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -277,6 +279,26 @@ class ArgosApp:
             self._dashboard_state.add_error_notification("本人確認", "本人確認をしてください。")
             self._speak_status("本人確認をしてください。")
             self._start_auth_warning_timer(self._settings.auth_warning_delay_seconds)
+
+    def _start_auth_status_monitor(self) -> None:
+        """認証期限切れを監視して待機表示をロック表示へ戻す。"""
+        if not self._auth.enabled:
+            return
+        thread = threading.Thread(target=self._run_auth_status_monitor, daemon=True)
+        thread.start()
+
+    def _run_auth_status_monitor(self) -> None:
+        """一定間隔で認証状態を画面表示へ反映する。"""
+        while not self._shutdown.wait(1.0):
+            self._refresh_auth_status()
+
+    def _refresh_auth_status(self) -> None:
+        """待機中に認証が切れていたらロック表示へ切り替える。"""
+        if not self._auth.enabled or self._auth.is_authenticated():
+            return
+        status = self._dashboard_state.snapshot()["status"]["code"]
+        if status == "ready":
+            self._dashboard_state.set_status("locked", "ロック中")
 
     def _ensure_authenticated(self, transcript: str) -> bool:
         """未認証時は音声キーワードだけを検証し、エージェント送信を止める。"""
@@ -401,14 +423,20 @@ class ArgosApp:
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         log.info("PTT ON: 録音開始")
-        self._dashboard_state.set_status("listening", "録音中")
+        if self._is_auth_locked():
+            self._dashboard_state.set_status("locked", "ロック中")
+        else:
+            self._dashboard_state.set_status("listening", "録音中")
         self._cancel_active_audio()
         self._recorder.start()
 
     def _on_ptt_release(self) -> None:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
         log.info("PTT OFF: 録音停止と処理開始")
-        self._dashboard_state.set_status("thinking", "文字起こし中")
+        if self._is_auth_locked():
+            self._dashboard_state.set_status("locked", "ロック中")
+        else:
+            self._dashboard_state.set_status("thinking", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
         self._worker.start()
 
@@ -744,6 +772,10 @@ class ArgosApp:
         """読み上げミュート中ならTrueを返す。"""
         with self._mute_condition:
             return self._muted
+
+    def _is_auth_locked(self) -> bool:
+        """本人確認が必要なロック状態ならTrueを返す。"""
+        return self._auth.enabled and not self._auth.is_authenticated()
 
     def _wait_until_unmuted(self, generation: int) -> bool:
         """ミュート解除またはキャンセルまでTTSワーカーを待機させる。"""
