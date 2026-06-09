@@ -166,7 +166,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="agent-name"' in html
         assert 'id="slots"' in html
         assert ".slots::-webkit-scrollbar" in html
-        assert "max-height: min(164px, 32vh)" in html
+        assert "overflow-x: auto" in html
+        assert "touch-action: pan-x" in html
+        assert "border-radius: 999px" in html
         assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html

@@ -124,27 +124,31 @@
     .agent-name { margin-top: 3px; color: #edf3f7; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
     .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
     .slots {
-      display: grid;
+      display: flex;
       gap: 6px;
-      margin-top: 12px;
-      max-height: min(164px, 32vh);
-      overflow-y: auto;
-      overscroll-behavior-y: contain;
+      margin-top: 8px;
+      min-height: 30px;
+      max-width: 100%;
+      overflow-x: auto;
+      overflow-y: hidden;
+      overscroll-behavior-x: contain;
       scrollbar-width: none;
-      touch-action: pan-y;
+      touch-action: pan-x;
     }
     .slots::-webkit-scrollbar { display: none; }
     .slot-button {
-      width: 100%;
+      flex: 0 0 auto;
+      max-width: 132px;
       border: 1px solid #354855;
-      border-radius: 8px;
+      border-radius: 999px;
       background: #0d151c;
       color: #aebdc6;
-      padding: 7px 8px;
+      padding: 5px 9px;
       font: inherit;
-      font-size: 13px;
+      font-size: 12px;
       font-weight: 800;
-      text-align: left;
+      line-height: 1.2;
+      text-align: center;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -250,6 +254,7 @@
         <h1 class="brand">ARGOS</h1>
         <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
       </div>
+      <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       <div id="clock" class="clock">--:--</div>
       <div id="date" class="date"></div>
       <div class="agent">
@@ -257,7 +262,6 @@
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
       </div>
-      <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
