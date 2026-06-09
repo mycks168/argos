@@ -94,7 +94,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path)
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5)
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -129,6 +129,12 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "border-radius: 8px" in html
         assert "opacity: 0.72" in html
         assert "const dashboardToken = \"secret\";" in html
+        assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
+        assert 'id="screensaver"' in html
+        assert "resetScreensaver()" in html
+        assert 'state.status.code === "listening" || state.status.code === "locked"' in html
+        assert "showScreensaver" in html
+        assert '"pointermove"' not in html
         assert 'data-code="muted"' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
