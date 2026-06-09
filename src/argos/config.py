@@ -132,6 +132,7 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    audio_state_path: str = "~/.local/state/argos/audio-state.json"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -237,6 +238,7 @@ def load_settings() -> Settings:
         audio_output_device=os.environ.get("AUDIO_OUTPUT_DEVICE", "default"),
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
+        audio_state_path=os.environ.get("ARGOS_AUDIO_STATE_PATH", "~/.local/state/argos/audio-state.json"),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),

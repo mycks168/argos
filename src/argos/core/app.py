@@ -17,8 +17,9 @@ from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
-from argos.services.auth import AuthGate
 from argos.services.agent import create_agent_client
+from argos.services.audio_state import AudioStateStore
+from argos.services.auth import AuthGate
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
@@ -125,7 +126,10 @@ class ArgosApp:
             settings.kokoro_repo_id,
             settings.kokoro_sample_rate,
         )
-        self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, settings.audio_output_volume)
+        self._audio_state = AudioStateStore(settings.audio_state_path)
+        saved_audio_state = self._audio_state.load()
+        initial_volume = saved_audio_state.volume if saved_audio_state.volume is not None else settings.audio_output_volume
+        self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, initial_volume)
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
         self._dashboard_state.set_audio_volume(self._audio.volume)
@@ -167,11 +171,12 @@ class ArgosApp:
         self._cancel_lock = threading.Lock()
         self._cancel_generation = 0
         self._mute_condition = threading.Condition()
-        self._muted = False
+        self._muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
+        self._dashboard_state.set_audio_muted(self._muted)
 
     def _create_lcd_display(self, settings: Settings) -> St7789TextDisplay | None:
         """設定に応じてLCD表示器を初期化する。"""
@@ -485,6 +490,7 @@ class ArgosApp:
         elif action == "set_volume":
             volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
             self._dashboard_state.set_audio_volume(volume)
+            self._save_audio_state()
         else:
             raise ValueError(f"未対応の操作です: {action}")
         return {"muted": self._is_muted(), "volume": self._audio.volume}
@@ -780,6 +786,7 @@ class ArgosApp:
             self._muted = muted
             self._mute_condition.notify_all()
         self._dashboard_state.set_audio_muted(muted)
+        self._save_audio_state()
         if muted:
             self._audio.cancel()
             if self._dashboard_state.snapshot()["status"]["code"] == "speaking":
@@ -794,6 +801,14 @@ class ArgosApp:
         """読み上げミュート中ならTrueを返す。"""
         with self._mute_condition:
             return self._muted
+
+    def _save_audio_state(self) -> None:
+        """現在の読み上げ音量とミュート状態を保存する。"""
+        try:
+            self._audio_state.save(self._audio.volume, self._is_muted())
+        except OSError as exc:
+            log.exception("音声状態の保存に失敗しました")
+            self._report_error("音声状態保存", exc)
 
     def _is_current_slot_key(self, slot_key: str) -> bool:
         """指定スロットが現在表示中ならTrueを返す。"""

@@ -98,6 +98,15 @@ def test_load_audio_input_devices(monkeypatch):
     assert settings.audio_input_devices == ("plughw:CARD=One,DEV=0", "plughw:CARD=Two,DEV=0")
 
 
+def test_load_audio_state_path(monkeypatch):
+    """音量とミュート状態の保存先を読み込む。"""
+    monkeypatch.setenv("ARGOS_AUDIO_STATE_PATH", "/tmp/audio-state.json")
+
+    settings = load_settings()
+
+    assert settings.audio_state_path == "/tmp/audio-state.json"
+
+
 def test_load_argos_input_devices_from_comma_text(monkeypatch):
     """ARGOS_INPUT_DEVICESでもALSAデバイス文字列を壊さず読み込む。"""
     monkeypatch.delenv("AUDIO_INPUT_DEVICES", raising=False)

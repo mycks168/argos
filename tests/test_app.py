@@ -1,3 +1,4 @@
+import json
 import logging
 
 from argos.config import AgentSlot, Settings
@@ -23,6 +24,7 @@ def _settings():
         audio_output_device="out",
         audio_output_card="",
         audio_output_volume=90,
+        audio_state_path="",
         audio_sample_rate=16000,
         lcd_enabled=False,
         lcd_width=76,
@@ -264,6 +266,35 @@ def test_dashboard_control_updates_audio_volume(monkeypatch):
 
     assert app._audio.volume == 42
     assert snapshot["audio"]["volume"] == 42
+
+
+def test_app_restores_audio_state(monkeypatch, tmp_path):
+    """起動時に保存済みの音量とミュート状態を復元する。"""
+    _patch_app(monkeypatch)
+    state_path = tmp_path / "audio-state.json"
+    state_path.write_text('{"volume": 37, "muted": true}', encoding="utf-8")
+    settings = Settings(**{**_settings().__dict__, "audio_state_path": str(state_path)})
+
+    app = ArgosApp(settings)
+    snapshot = app._dashboard_state.snapshot()
+
+    assert app._audio.volume == 37
+    assert app._is_muted() is True
+    assert snapshot["audio"]["volume"] == 37
+    assert snapshot["audio"]["muted"] is True
+
+
+def test_dashboard_audio_controls_persist_state(monkeypatch, tmp_path):
+    """ダッシュボード操作で変更した音量とミュート状態を保存する。"""
+    _patch_app(monkeypatch)
+    state_path = tmp_path / "audio-state.json"
+    settings = Settings(**{**_settings().__dict__, "audio_state_path": str(state_path)})
+    app = ArgosApp(settings)
+
+    app._handle_dashboard_control({"action": "set_volume", "volume": 42})
+    app._handle_dashboard_control({"action": "mute"})
+
+    assert json.loads(state_path.read_text(encoding="utf-8")) == {"volume": 42, "muted": True}
 
 
 def test_mute_does_not_override_listening_status(monkeypatch):

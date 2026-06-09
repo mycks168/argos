@@ -171,7 +171,7 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 ```
 
 通知では `image_url` と `link_url` も指定できます。会話追加は `user_message` または `agent_message`、状態更新は `status`、通知削除は `clear_notifications` を `type` に指定します。
-ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。
+ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。変更した音量とミュート状態は `ARGOS_AUDIO_STATE_PATH` に保存し、ARGOS再起動後も前回の状態を復元します。
 
 `ARGOS_DASHBOARD_HOST=0.0.0.0` ではLAN内の他端末から画面も閲覧できます。会話履歴を含むため、インターネットへ直接公開しないでください。
 
