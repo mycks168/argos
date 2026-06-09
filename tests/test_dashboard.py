@@ -36,6 +36,8 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["status"]["code"] == "thinking"
     assert snapshot["agent"]["name"] == "アンチグラビティ"
     assert snapshot["agent"]["provider"] == "antigravity"
+    assert snapshot["slots"][0]["name"] == "アンチグラビティ"
+    assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
     assert snapshot["messages"][0]["text"] == "返答"
@@ -52,6 +54,50 @@ def test_dashboard_state_notifies_subscribers():
 
     assert subscriber.get(timeout=1) > 0
     state.unsubscribe(subscriber)
+
+
+def test_dashboard_state_keeps_messages_per_agent_slot():
+    """会話履歴は現在スロットごとに分けて表示する。"""
+    state = DashboardState()
+    state.set_agent("作業", "codex")
+    first_id = state.add_message("assistant", "作業スロット")
+
+    state.set_agent("調査", "antigravity")
+    assert state.snapshot()["messages"] == []
+    second_id = state.add_message("assistant", "調査スロット", streaming=True)
+
+    state.set_agent("作業", "codex")
+    snapshot = state.snapshot()
+    assert [message["text"] for message in snapshot["messages"]] == ["作業スロット"]
+
+    state.append_message(second_id, " 続き")
+    state.finish_message(second_id)
+    state.set_agent("調査", "antigravity")
+    snapshot = state.snapshot()
+    assert [message["text"] for message in snapshot["messages"]] == ["調査スロット 続き"]
+    assert snapshot["messages"][0]["streaming"] is False
+    assert first_id != second_id
+
+
+def test_dashboard_state_tracks_slot_unread_and_busy():
+    """スロットごとの未読と処理中状態を保持する。"""
+    state = DashboardState()
+    state.set_slots([("作業", "codex"), ("調査", "antigravity")])
+    state.set_agent("作業", "codex")
+    state.set_slot_busy("調査", "antigravity", True)
+    state.set_slot_unread("調査", "antigravity", True)
+
+    snapshot = state.snapshot()
+    slots = {slot["name"]: slot for slot in snapshot["slots"]}
+
+    assert slots["作業"]["active"] is True
+    assert slots["調査"]["busy"] is True
+    assert slots["調査"]["unread"] is True
+
+    state.set_agent("調査", "antigravity")
+    slots = {slot["name"]: slot for slot in state.snapshot()["slots"]}
+    assert slots["調査"]["active"] is True
+    assert slots["調査"]["unread"] is False
 
 
 def test_dashboard_state_deduplicates_consecutive_internal_errors():
@@ -118,6 +164,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-code="alert"' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
+        assert 'id="slots"' in html
+        assert ".slots::-webkit-scrollbar" in html
+        assert "max-height: min(164px, 32vh)" in html
+        assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
         assert 'id="mute-button"' in html
