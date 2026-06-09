@@ -22,12 +22,19 @@ class DashboardState:
     def __init__(self, max_messages: int = 60, max_notifications: int = 30) -> None:
         """保持件数と初期状態を設定する。"""
         self._lock = threading.Lock()
-        self._messages: deque[dict[str, Any]] = deque(maxlen=max_messages)
+        self._max_messages = max_messages
+        self._current_slot_key = _slot_key("", "")
+        self._messages_by_slot: dict[str, deque[dict[str, Any]]] = {
+            self._current_slot_key: deque(maxlen=max_messages),
+        }
+        self._message_slots: dict[str, str] = {}
         self._notifications: deque[dict[str, Any]] = deque(maxlen=max_notifications)
         self._subscribers: set[queue.Queue[int]] = set()
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
         self._agent = {"name": "", "provider": "", "updated_at": _now_iso()}
+        self._slots: dict[str, dict[str, Any]] = {}
+        self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
 
     def snapshot(self) -> dict[str, Any]:
@@ -37,8 +44,9 @@ class DashboardState:
                 "revision": self._revision,
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
+                "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
                 "audio": deepcopy(self._audio),
-                "messages": deepcopy(list(self._messages)),
+                "messages": deepcopy(list(self._current_messages_locked())),
                 "notifications": deepcopy(list(self._notifications)),
             }
 
@@ -51,11 +59,45 @@ class DashboardState:
     def set_agent(self, name: str, provider: str) -> None:
         """現在のエージェントスロット表示を更新する。"""
         with self._lock:
+            self._current_slot_key = _slot_key(name, provider)
+            self._messages_by_slot.setdefault(self._current_slot_key, deque(maxlen=self._max_messages))
+            self._ensure_slot_locked(name, provider)
+            for slot in self._slots.values():
+                slot["active"] = False
+            self._slots[self._current_slot_key] = {
+                **self._slots[self._current_slot_key],
+                "active": True,
+                "unread": False,
+                "updated_at": _now_iso(),
+            }
             self._agent = {
                 "name": name,
                 "provider": provider,
                 "updated_at": _now_iso(),
             }
+            self._publish_locked()
+
+    def set_slots(self, slots: list[tuple[str, str]]) -> None:
+        """表示するエージェントスロット一覧を設定する。"""
+        with self._lock:
+            for name, provider in slots:
+                self._ensure_slot_locked(name, provider)
+            self._publish_locked()
+
+    def set_slot_busy(self, name: str, provider: str, busy: bool) -> None:
+        """スロットの処理中状態を更新する。"""
+        with self._lock:
+            key = _slot_key(name, provider)
+            self._ensure_slot_locked(name, provider)
+            self._slots[key] = {**self._slots[key], "busy": busy, "updated_at": _now_iso()}
+            self._publish_locked()
+
+    def set_slot_unread(self, name: str, provider: str, unread: bool) -> None:
+        """スロットの未読応答状態を更新する。"""
+        with self._lock:
+            key = _slot_key(name, provider)
+            self._ensure_slot_locked(name, provider)
+            self._slots[key] = {**self._slots[key], "unread": unread, "updated_at": _now_iso()}
             self._publish_locked()
 
     def set_audio_muted(self, muted: bool) -> None:
@@ -74,7 +116,8 @@ class DashboardState:
         """会話メッセージを追加し、メッセージIDを返す。"""
         message_id = uuid.uuid4().hex
         with self._lock:
-            self._messages.append(
+            messages = self._current_messages_locked()
+            messages.append(
                 {
                     "id": message_id,
                     "role": role,
@@ -83,6 +126,8 @@ class DashboardState:
                     "created_at": _now_iso(),
                 }
             )
+            self._message_slots[message_id] = self._current_slot_key
+            self._cleanup_message_slots_locked()
             self._publish_locked()
         return message_id
 
@@ -177,7 +222,38 @@ class DashboardState:
 
     def _find_message_locked(self, message_id: str) -> dict[str, Any] | None:
         """ロック保持中にメッセージIDを検索する。"""
-        return next((message for message in self._messages if message["id"] == message_id), None)
+        slot_key = self._message_slots.get(message_id, self._current_slot_key)
+        messages = self._messages_by_slot.get(slot_key)
+        if messages is None:
+            return None
+        return next((message for message in messages if message["id"] == message_id), None)
+
+    def _current_messages_locked(self) -> deque[dict[str, Any]]:
+        """現在スロットの会話履歴を返す。"""
+        return self._messages_by_slot.setdefault(self._current_slot_key, deque(maxlen=self._max_messages))
+
+    def _cleanup_message_slots_locked(self) -> None:
+        """保持上限で消えたメッセージIDの所属情報を削除する。"""
+        existing_ids = {message["id"] for messages in self._messages_by_slot.values() for message in messages}
+        for message_id in list(self._message_slots):
+            if message_id not in existing_ids:
+                del self._message_slots[message_id]
+
+    def _ensure_slot_locked(self, name: str, provider: str) -> None:
+        """スロット表示情報を必要に応じて作成する。"""
+        key = _slot_key(name, provider)
+        if key in self._slots:
+            return
+        self._slots[key] = {
+            "key": key,
+            "name": name,
+            "provider": provider,
+            "active": key == self._current_slot_key,
+            "busy": False,
+            "unread": False,
+            "updated_at": _now_iso(),
+        }
+        self._slot_order.append(key)
 
     def _publish_locked(self) -> None:
         """状態更新を購読者へ通知する。"""
@@ -187,3 +263,8 @@ class DashboardState:
                 subscriber.put_nowait(self._revision)
             except queue.Full:
                 continue
+
+
+def _slot_key(name: str, provider: str) -> str:
+    """ダッシュボード会話履歴用のスロットキーを作る。"""
+    return f"{provider}\0{name}"

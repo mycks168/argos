@@ -777,6 +777,48 @@ def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
     assert played == ["正規化:一文目。".encode()]
 
 
+def test_cancel_during_stream_keeps_background_slot_response(monkeypatch):
+    """スロット切替時の短押しキャンセル後も、元スロットの応答取得は継続する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+
+    def ask_stream(_text):
+        yield "前半。"
+        app._on_cancel()
+        app._on_double_click()
+        yield "後半。"
+
+    app._agent.ask_stream = ask_stream
+
+    app._handle_text("依頼")
+
+    snapshot = app._dashboard_state.snapshot()
+    slots = {slot["name"]: slot for slot in snapshot["slots"]}
+    assert slots["作業"]["unread"] is True
+    assert app._pending_slot_speech["codex\0作業"] == "前半。後半。"
+    app._dashboard_state.set_agent("作業", "codex")
+    assert [message["text"] for message in app._dashboard_state.snapshot()["messages"]] == ["依頼", "前半。後半。"]
+
+
+def test_pending_slot_response_uses_chunked_cancelable_tts(monkeypatch):
+    """未読応答の読み上げも通常応答と同じチャンク分割TTSを使う。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    app._pending_slot_speech["codex\0作業"] = "一文目。二文目です。"
+
+    app._start_pending_slot_response()
+    assert app._pending_speech_thread is not None
+    app._pending_speech_thread.join(timeout=1)
+
+    assert not app._pending_speech_thread.is_alive()
+    assert app._audio.played == [
+        "正規化:一文目。".encode(),
+        "正規化:二文目です。".encode(),
+    ]
+
+
 def test_stream_response_waits_while_muted(monkeypatch):
     """ミュート中はTTS再生を待機し、解除後に読み上げる。"""
     import threading

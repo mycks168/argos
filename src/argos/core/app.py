@@ -129,6 +129,7 @@ class ArgosApp:
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
         self._dashboard_state.set_audio_volume(self._audio.volume)
+        self._dashboard_state.set_slots([(slot.name, slot.provider) for slot in settings.agent_slots])
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -167,6 +168,8 @@ class ArgosApp:
         self._cancel_generation = 0
         self._mute_condition = threading.Condition()
         self._muted = False
+        self._pending_slot_speech: dict[str, str] = {}
+        self._pending_speech_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
 
@@ -442,11 +445,13 @@ class ArgosApp:
 
     def _on_double_click(self) -> None:
         """ダブルクリックでエージェントスロットを切り替える。"""
+        self._audio.cancel()
         name = self._agent.next_slot()
         self._sync_agent_display()
         self._set_ready_or_locked()
         log.info("エージェントスロット切替: %s", name)
         self._speak_status(f"{name}に切り替えました")
+        self._start_pending_slot_response()
 
     def _on_cancel(self) -> None:
         """処理中の音声入出力をキャンセルする。"""
@@ -456,7 +461,7 @@ class ArgosApp:
         self._set_ready_or_locked()
 
     def _cancel_active_audio(self) -> int:
-        """再生中と未再生チャンクを無効化し、キャンセル世代を返す。"""
+        """再生中と未再生の読み上げチャンクを無効化し、キャンセル世代を返す。"""
         with self._cancel_lock:
             self._cancel_generation += 1
             generation = self._cancel_generation
@@ -524,20 +529,30 @@ class ArgosApp:
     def _handle_text(self, text: str) -> None:
         """テキストをLLMエージェントに送り、応答を読み上げる。"""
         log.info("ユーザ発話: %s", text)
+        slot_name = self._agent.current_name
+        slot_provider = self._agent.current_provider
+        slot_key = _app_slot_key(slot_name, slot_provider)
         self._dashboard_state.add_message("user", text)
+        self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._dashboard_state.set_status("thinking", "考え中")
-        announcer = self._start_codex_progress()
+        announcer = self._start_codex_progress(slot_key)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speak_response_stream(
                 self._stop_progress_on_first_delta(self._agent.ask_stream(text), announcer),
                 dashboard_message_id=dashboard_message_id,
+                slot_key=slot_key,
             )
             log.info("エージェント応答: %s", response[:300])
+            if response and not self._is_current_slot_key(slot_key):
+                self._pending_slot_speech[slot_key] = response
+                self._dashboard_state.set_slot_unread(slot_name, slot_provider, True)
+                self._dashboard_state.add_notification(f"{slot_name} 応答完了", "スロットを切り替えると読み上げます。", source="ARGOS")
         except Exception as exc:
             log.exception("エージェント応答の取得に失敗しました")
             self._report_error("エージェント", exc)
         finally:
+            self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
@@ -570,7 +585,7 @@ class ArgosApp:
             log.exception("音声再生に失敗しました")
             self._report_error("音声再生", exc)
 
-    def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "") -> str:
+    def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "", slot_key: str = "") -> str:
         """応答差分を句読点で分割し、TTS へ順次投入する。"""
         full_response = ""
         chunker = TextChunker(self._settings.tts_delimiters)
@@ -589,38 +604,42 @@ class ArgosApp:
 
         stream_generation = self._current_cancel_generation()
         tts_queue: queue.Queue[str | None] = queue.Queue()
-        worker = threading.Thread(target=self._tts_worker, args=(tts_queue, stream_generation), daemon=True)
+        worker = threading.Thread(target=self._tts_worker, args=(tts_queue, stream_generation, slot_key), daemon=True)
         worker.start()
 
         for delta in deltas:
-            if self._current_cancel_generation() != stream_generation:
-                log.info("キャンセル済みのためエージェント応答読み上げを中断します")
-                break
             full_response += delta
             if dashboard_message_id:
                 self._dashboard_state.append_message(dashboard_message_id, delta)
             log.info("エージェント応答差分: %s", delta[:120])
             for chunk in chunker.push(delta):
                 if self._current_cancel_generation() != stream_generation:
-                    log.info("キャンセル済みのため TTS チャンク投入を停止します")
-                    break
+                    log.info("キャンセル済みのため TTS チャンクを読み上げません: %s", chunk[:80])
+                    continue
+                if slot_key and not self._is_current_slot_key(slot_key):
+                    log.info("非表示スロットのため TTS チャンクを読み上げません: %s", chunk[:80])
+                    continue
                 log.info("TTS チャンク投入: %s", chunk[:80])
                 tts_queue.put(chunk)
 
         rest = chunker.flush()
-        if rest and self._current_cancel_generation() == stream_generation:
+        if rest and self._current_cancel_generation() == stream_generation and (not slot_key or self._is_current_slot_key(slot_key)):
             log.info("TTS 最終チャンク投入: %s", rest[:80])
             tts_queue.put(rest)
         tts_queue.put(None)
         worker.join(timeout=300)
         return full_response
 
-    def _start_codex_progress(self) -> CodexProgressAnnouncer | None:
+    def _start_codex_progress(self, slot_key: str = "") -> CodexProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
         if not self._settings.codex_progress_voice:
             return None
+        def speak_if_current(text: str) -> None:
+            """現在スロットの待機通知だけ読み上げる。"""
+            if not slot_key or self._is_current_slot_key(slot_key):
+                self._speak_status(text)
         announcer = CodexProgressAnnouncer(
-            speak_status=self._speak_status,
+            speak_status=speak_if_current,
             first_delay_seconds=self._settings.codex_progress_first_delay_seconds,
             interval_seconds=self._settings.codex_progress_interval_seconds,
         )
@@ -640,13 +659,16 @@ class ArgosApp:
                 stopped = True
             yield delta
 
-    def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int) -> None:
+    def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int, slot_key: str = "") -> None:
         """TTS チャンクを順に合成して再生する。"""
         while True:
             chunk = tts_queue.get()
             if chunk is None:
                 return
             if self._current_cancel_generation() != generation:
+                self._drain_tts_queue(tts_queue)
+                return
+            if slot_key and not self._is_current_slot_key(slot_key):
                 self._drain_tts_queue(tts_queue)
                 return
             if not self._wait_until_unmuted(generation):
@@ -773,6 +795,27 @@ class ArgosApp:
         with self._mute_condition:
             return self._muted
 
+    def _is_current_slot_key(self, slot_key: str) -> bool:
+        """指定スロットが現在表示中ならTrueを返す。"""
+        return slot_key == _app_slot_key(self._agent.current_name, self._agent.current_provider)
+
+    def _start_pending_slot_response(self) -> None:
+        """現在スロットの未読応答を、PTT処理を塞がないよう別スレッドで読み上げる。"""
+        slot_key = _app_slot_key(self._agent.current_name, self._agent.current_provider)
+        response = self._pending_slot_speech.pop(slot_key, "")
+        if response:
+            self._dashboard_state.set_slot_unread(self._agent.current_name, self._agent.current_provider, False)
+            self._pending_speech_thread = threading.Thread(
+                target=self._speak_pending_slot_response,
+                args=(response, slot_key),
+                daemon=True,
+            )
+            self._pending_speech_thread.start()
+
+    def _speak_pending_slot_response(self, response: str, slot_key: str) -> None:
+        """未読応答を通常応答と同じチャンク分割とキャンセル制御で読み上げる。"""
+        self._speak_response_stream([response], slot_key=slot_key)
+
     def _is_auth_locked(self) -> bool:
         """本人確認が必要なロック状態ならTrueを返す。"""
         return self._auth.enabled and not self._auth.is_authenticated()
@@ -795,3 +838,8 @@ class ArgosApp:
         self._stop_auth_warning()
         if self._dashboard_server is not None:
             self._dashboard_server.stop()
+
+
+def _app_slot_key(name: str, provider: str) -> str:
+    """アプリ内部で使うスロットキーを作る。"""
+    return f"{provider}\0{name}"

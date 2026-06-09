@@ -123,6 +123,35 @@
     .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .agent-name { margin-top: 3px; color: #edf3f7; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
     .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .slots {
+      display: grid;
+      gap: 6px;
+      margin-top: 12px;
+      max-height: min(164px, 32vh);
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      scrollbar-width: none;
+      touch-action: pan-y;
+    }
+    .slots::-webkit-scrollbar { display: none; }
+    .slot-button {
+      width: 100%;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #0d151c;
+      color: #aebdc6;
+      padding: 7px 8px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .slot-button[data-active="true"] { border-color: #69b7e4; color: #edf3f7; background: #102131; }
+    .slot-button[data-unread="true"] { border-color: #f4d35e; color: #f4d35e; background: #211d0e; }
+    .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 22px;
       font-size: 21px; font-weight: 700;
@@ -228,6 +257,7 @@
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
       </div>
+      <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
@@ -250,6 +280,7 @@
     const statusLabel = document.getElementById("status-label");
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
+    const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
@@ -299,6 +330,13 @@
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
+      slots.innerHTML = (state.slots || []).map(slot => `
+        <button class="slot-button" type="button" disabled
+          data-active="${slot.active ? "true" : "false"}"
+          data-unread="${slot.unread ? "true" : "false"}"
+          data-busy="${slot.busy ? "true" : "false"}">
+          ${escapeHtml(slot.name || "--")}${slot.busy ? " ..." : ""}${slot.unread ? " / 未読" : ""}
+        </button>`).join("");
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
