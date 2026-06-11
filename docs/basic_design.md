@@ -176,7 +176,8 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 - `EnvironmentFile=/home/pi/argos/.env` から設定を読み込む
 - `ExecStart=/home/pi/argos/.venv/bin/argos` でプロジェクトの仮想環境内コマンドを起動する
 - `PATH` に `/home/pi/.local/bin` を含め、Codex CLI を解決できるようにする
-- `network-online.target` と `sound.target` の後に起動する
+- `network-online.target`、`tailscale-online.target`、`autossh-clove.service`、`sound.target` の後に起動する
+- 起動直後にTailscale越しのVOICEVOXなどへ早すぎる接続を行わないよう、`tailscale-online.target` と `autossh-clove.service` を `Wants` と `After` に含める
 - 異常終了時は `Restart=on-failure` で再起動する
 
 実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、`pi` ユーザを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。

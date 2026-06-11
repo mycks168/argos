@@ -31,6 +31,8 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now argos.service
 ```
 
+ARGOSは `tailscale-online.target` と `autossh-clove.service` の後に起動します。Tailscale越しの VOICEVOX や周辺サービスを使う場合、起動直後に依存サービスへ早すぎる接続を行わないようにします。
+
 状態確認とログ確認:
 
 ```bash

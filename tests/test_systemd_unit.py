@@ -26,7 +26,8 @@ def test_argos_service_is_enabled_for_system_boot():
     """システム起動時に有効化できるユニットであることを確認する。"""
     unit = _load_unit()
 
-    assert unit["Unit"]["After"] == "network-online.target sound.target"
+    assert unit["Unit"]["After"] == "network-online.target tailscale-online.target autossh-clove.service sound.target"
+    assert unit["Unit"]["Wants"] == "network-online.target tailscale-online.target autossh-clove.service"
     assert unit["Service"]["Restart"] == "on-failure"
     assert unit["Install"]["WantedBy"] == "multi-user.target"
 
