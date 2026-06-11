@@ -155,6 +155,8 @@ def test_load_antigravity_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_SANDBOX", "true")
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "30s")
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", "true")
+    monkeypatch.setenv("ARGOS_ACKNOWLEDGEMENT_URL", "http://ack")
+    monkeypatch.setenv("ARGOS_ACKNOWLEDGEMENT_TOKEN", "ack-token")
 
     settings = load_settings()
 
@@ -165,6 +167,8 @@ def test_load_antigravity_settings(monkeypatch):
     assert settings.antigravity_sandbox is True
     assert settings.antigravity_print_timeout == "30s"
     assert settings.antigravity_continue_session is True
+    assert settings.acknowledgement_url == "http://ack"
+    assert settings.acknowledgement_token == "ack-token"
 
 
 def test_load_hermes_settings(monkeypatch):

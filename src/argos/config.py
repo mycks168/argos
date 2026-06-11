@@ -84,6 +84,8 @@ class Settings:
     antigravity_continue_session: bool = False
     antigravity_resume_saved: bool = False
     antigravity_prompt_prefix: str = ""
+    acknowledgement_url: str = ""
+    acknowledgement_token: str = ""
     hermes_command: str = "hermes"
     hermes_model: str = ""
     hermes_provider: str = ""
@@ -277,6 +279,8 @@ def load_settings() -> Settings:
             "ARGOS_ANTIGRAVITY_PROMPT_PREFIX",
             "",
         ),
+        acknowledgement_url=os.environ.get("ARGOS_ACKNOWLEDGEMENT_URL", ""),
+        acknowledgement_token=os.environ.get("ARGOS_ACKNOWLEDGEMENT_TOKEN", ""),
         hermes_command=os.environ.get("ARGOS_HERMES_COMMAND", "hermes"),
         hermes_model=os.environ.get("ARGOS_HERMES_MODEL", ""),
         hermes_provider=os.environ.get("ARGOS_HERMES_PROVIDER", ""),

@@ -17,6 +17,7 @@ from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
+from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
@@ -64,17 +65,25 @@ class CodexProgressAnnouncer:
         speak_status,
         first_delay_seconds: float,
         interval_seconds: float,
+        user_text: str = "",
+        acknowledgement_client: AcknowledgementClient | None = None,
     ) -> None:
         """読み上げ関数と通知間隔を初期化する。"""
         self._speak_status = speak_status
         self._first_delay_seconds = first_delay_seconds
         self._interval_seconds = interval_seconds
+        self._user_text = user_text
+        self._acknowledgement_client = acknowledgement_client
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
-        self._speak_random(CODEX_PROGRESS_START_PHRASES)
+        if self._acknowledgement_client is not None and self._user_text:
+            phrase = self._acknowledgement_client.select_phrase(self._user_text, CODEX_PROGRESS_START_PHRASES)
+            self._speak_status(phrase)
+        else:
+            self._speak_random(CODEX_PROGRESS_START_PHRASES)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -114,6 +123,7 @@ class ArgosApp:
         )
         self._agent = create_agent_client(settings)
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
+        self._acknowledgement = AcknowledgementClient(settings.acknowledgement_url, settings.acknowledgement_token)
         self._voicevox = VoicevoxClient(
             settings.voicevox_url,
             settings.voicevox_speaker,
@@ -541,7 +551,7 @@ class ArgosApp:
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._dashboard_state.set_status("thinking", "考え中")
-        announcer = self._start_codex_progress(slot_key)
+        announcer = self._start_codex_progress(text, slot_key)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speak_response_stream(
@@ -636,7 +646,7 @@ class ArgosApp:
         worker.join(timeout=300)
         return full_response
 
-    def _start_codex_progress(self, slot_key: str = "") -> CodexProgressAnnouncer | None:
+    def _start_codex_progress(self, user_text: str = "", slot_key: str = "") -> CodexProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
         if not self._settings.codex_progress_voice:
             return None
@@ -648,6 +658,8 @@ class ArgosApp:
             speak_status=speak_if_current,
             first_delay_seconds=self._settings.codex_progress_first_delay_seconds,
             interval_seconds=self._settings.codex_progress_interval_seconds,
+            user_text=user_text,
+            acknowledgement_client=self._acknowledgement,
         )
         announcer.start()
         return announcer
