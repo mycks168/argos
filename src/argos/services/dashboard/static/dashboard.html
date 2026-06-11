@@ -10,6 +10,34 @@
       font-family: "Noto Sans CJK JP", "IPAexGothic", "IPAGothic", sans-serif;
       background: #070b0f;
       color: #edf3f7;
+      --agent-name-font-size: 20px;
+      --clock-font-size: 36px;
+      --control-font-size: 13px;
+      --message-font-size: 18px;
+      --notice-text-font-size: 14px;
+      --notice-title-font-size: 16px;
+      --slot-font-size: 12px;
+      --status-font-size: 21px;
+    }
+    body[data-font-size="small"] {
+      --agent-name-font-size: 18px;
+      --clock-font-size: 32px;
+      --control-font-size: 12px;
+      --message-font-size: 16px;
+      --notice-text-font-size: 13px;
+      --notice-title-font-size: 15px;
+      --slot-font-size: 11px;
+      --status-font-size: 19px;
+    }
+    body[data-font-size="large"] {
+      --agent-name-font-size: 23px;
+      --clock-font-size: 40px;
+      --control-font-size: 14px;
+      --message-font-size: 21px;
+      --notice-text-font-size: 16px;
+      --notice-title-font-size: 18px;
+      --slot-font-size: 13px;
+      --status-font-size: 24px;
     }
     *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
     body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
@@ -112,7 +140,7 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
-    .clock { margin-top: 18px; color: #f4d35e; font-size: 36px; font-variant-numeric: tabular-nums; }
+    .clock { margin-top: 18px; color: #f4d35e; font-size: var(--clock-font-size); font-variant-numeric: tabular-nums; }
     .date { margin-top: 4px; color: #aebdc6; font-size: 15px; }
     .agent {
       margin-top: 18px;
@@ -121,7 +149,7 @@
       background: #101820;
     }
     .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .agent-name { margin-top: 3px; color: #edf3f7; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
+    .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
     .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
     .slots {
       display: flex;
@@ -145,7 +173,7 @@
       color: #aebdc6;
       padding: 5px 9px;
       font: inherit;
-      font-size: 12px;
+      font-size: var(--slot-font-size);
       font-weight: 800;
       line-height: 1.2;
       text-align: center;
@@ -158,7 +186,7 @@
     .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 22px;
-      font-size: 21px; font-weight: 700;
+      font-size: var(--status-font-size); font-weight: 700;
     }
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
@@ -176,7 +204,7 @@
       border-radius: 8px;
       padding: 8px 12px;
       font: inherit;
-      font-size: 13px;
+      font-size: var(--control-font-size);
       font-weight: 800;
       text-align: center;
       white-space: nowrap;
@@ -190,6 +218,28 @@
       opacity: 1;
     }
     .control-button:disabled { opacity: 0.55; }
+    .font-size-control {
+      display: flex;
+      gap: 5px;
+      margin-top: 10px;
+    }
+    .font-size-button {
+      flex: 1;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #0d151c;
+      color: #aebdc6;
+      padding: 5px 0;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer !important;
+    }
+    .font-size-button[aria-pressed="true"] {
+      border-color: #69b7e4;
+      background: #102131;
+      color: #edf3f7;
+    }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
       height: calc(100vh - 43px);
@@ -203,7 +253,7 @@
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
     .meta { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .text { margin-top: 3px; font-size: 18px; line-height: 1.38; overflow-wrap: anywhere; }
+    .text { margin-top: 3px; font-size: var(--message-font-size); line-height: 1.38; overflow-wrap: anywhere; }
     .notifications {
       height: calc(100vh - 43px);
       overflow-y: auto;
@@ -214,9 +264,9 @@
     .notifications::-webkit-scrollbar { display: none; }
     .notice { border-left: 3px solid #2a9d8f; padding: 3px 0 4px 11px; }
     .notice[data-priority="high"] { border-color: #e63946; }
-    .notice-title { color: #e8f0f4; font-size: 16px; font-weight: 700; text-decoration: none; }
+    .notice-title { color: #e8f0f4; font-size: var(--notice-title-font-size); font-weight: 700; text-decoration: none; }
     a.notice-title:hover { text-decoration: underline; }
-    .notice-text { margin-top: 3px; color: #c3d0d7; font-size: 14px; line-height: 1.3; }
+    .notice-text { margin-top: 3px; color: #c3d0d7; font-size: var(--notice-text-font-size); line-height: 1.3; }
     .notice-image { width: 100%; max-height: 220px; margin-top: 6px; background: #000; object-fit: contain; }
     .empty { color: #738591; font-size: 15px; }
     @media (max-width: 1200px) {
@@ -254,6 +304,11 @@
         <h1 class="brand">ARGOS</h1>
         <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
       </div>
+      <div class="font-size-control" role="group" aria-label="フォントサイズ">
+        <button class="font-size-button" type="button" data-font-size-option="small" aria-pressed="false">小</button>
+        <button class="font-size-button" type="button" data-font-size-option="medium" aria-pressed="true">中</button>
+        <button class="font-size-button" type="button" data-font-size-option="large" aria-pressed="false">大</button>
+      </div>
       <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       <div id="clock" class="clock">--:--</div>
       <div id="date" class="date"></div>
@@ -288,8 +343,11 @@
     const muteButton = document.getElementById("mute-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
+    const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
+    const fontSizeStorageKey = "argos-dashboard-font-size";
+    const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
@@ -304,6 +362,14 @@
       const now = new Date();
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
       document.getElementById("date").textContent = now.toLocaleDateString("ja-JP", {month:"long", day:"numeric", weekday:"short"});
+    }
+    function applyFontSize(size) {
+      const normalized = fontSizeOptions.has(size) ? size : "medium";
+      document.body.dataset.fontSize = normalized;
+      localStorage.setItem(fontSizeStorageKey, normalized);
+      fontSizeButtons.forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.fontSizeOption === normalized ? "true" : "false");
+      });
     }
     function isNearLatestMessage() {
       return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
@@ -423,6 +489,10 @@
         .catch(error => console.error(error))
         .finally(() => { changingVolume = false; });
     });
+    fontSizeButtons.forEach(button => {
+      button.addEventListener("click", () => applyFontSize(button.dataset.fontSizeOption));
+    });
+    applyFontSize(localStorage.getItem(fontSizeStorageKey));
     updateClock();
     setInterval(updateClock, 1000);
     ["pointerdown", "touchstart", "keydown", "wheel"].forEach(eventName => {
