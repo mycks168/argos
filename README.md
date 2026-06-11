@@ -188,6 +188,6 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 
 Codex のセッションIDは `CODEX_HOME/argos-sessions.json` にスロットごとに保存します。`--json` の標準出力にセッションIDが出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルからIDを補完します。サービス再起動後も保存済みIDを使って同じセッションを再開します。`/reset` を入力すると、現在スロットの保存済みIDも削除します。
 
-Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
+Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目に話者IDを指定し、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8` のように設定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
 
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

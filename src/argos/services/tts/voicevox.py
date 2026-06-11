@@ -15,11 +15,12 @@ class VoicevoxClient:
         self._sample_rate = sample_rate
         self._speed_scale = speed_scale
 
-    def synthesize(self, text: str) -> bytes:
+    def synthesize(self, text: str, speaker: int | None = None) -> bytes:
         """VOICEVOX の audio_query と synthesis を呼び出して WAV を返す。"""
+        speaker_id = self._speaker if speaker is None else speaker
         query_response = requests.post(
             f"{self._base_url}/audio_query",
-            params={"text": text, "speaker": self._speaker},
+            params={"text": text, "speaker": speaker_id},
             timeout=10,
         )
         if query_response.status_code != 200:
@@ -29,7 +30,7 @@ class VoicevoxClient:
         query["speedScale"] = self._speed_scale
         synth_response = requests.post(
             f"{self._base_url}/synthesis",
-            params={"speaker": self._speaker},
+            params={"speaker": speaker_id},
             json=query,
             headers={"Content-Type": "application/json"},
             timeout=60,

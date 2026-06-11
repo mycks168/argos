@@ -140,9 +140,11 @@ class FakeFilter:
 
 class FakeVoicevox:
     def __init__(self, *args):
+        self.calls = []
         pass
 
-    def synthesize(self, text):
+    def synthesize(self, text, speaker=None):
+        self.calls.append((text, speaker))
         return text.encode()
 
 
@@ -885,6 +887,23 @@ def test_speak_response_plays_normalized_voice(monkeypatch):
     assert app._audio.played == ["正規化:返答".encode()]
 
 
+def test_speak_response_uses_current_slot_voicevox_speaker(monkeypatch):
+    """現在スロットに設定したVOICEVOX話者で読み上げる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "agent_slots": (AgentSlot("作業", "codex", "/tmp", voicevox_speaker=8),),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._speak_response("返答")
+
+    assert app._voicevox.calls == [("正規化:返答", 8)]
+
+
 def test_speak_response_uses_kokoro_when_voicevox_url_is_empty(monkeypatch):
     """VOICEVOX URLが空ならKokoroで読み上げる。"""
     _patch_app(monkeypatch)
@@ -901,7 +920,7 @@ def test_speak_response_falls_back_to_kokoro_on_voicevox_error(monkeypatch):
     _patch_app(monkeypatch)
     settings = Settings(**{**_settings().__dict__, "dry_run": False})
     app = ArgosApp(settings)
-    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+    app._voicevox.synthesize = lambda _text, speaker=None: (_ for _ in ()).throw(RuntimeError("接続できません"))
 
     app._speak_response("返答")
 
@@ -915,7 +934,7 @@ def test_stream_voicevox_error_is_shown_on_dashboard(monkeypatch):
     _patch_app(monkeypatch)
     settings = Settings(**{**_settings().__dict__, "dry_run": False})
     app = ArgosApp(settings)
-    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+    app._voicevox.synthesize = lambda _text, speaker=None: (_ for _ in ()).throw(RuntimeError("接続できません"))
 
     app._speak_response_stream(["読み上げ。"])
 
@@ -942,7 +961,7 @@ def test_status_voicevox_error_is_shown_on_dashboard(monkeypatch):
     _patch_app(monkeypatch)
     settings = Settings(**{**_settings().__dict__, "dry_run": False})
     app = ArgosApp(settings)
-    app._voicevox.synthesize = lambda _text: (_ for _ in ()).throw(RuntimeError("接続できません"))
+    app._voicevox.synthesize = lambda _text, speaker=None: (_ for _ in ()).throw(RuntimeError("接続できません"))
 
     app._speak_status("確認中")
 

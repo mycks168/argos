@@ -27,6 +27,7 @@ class AgentSlot:
     name: str
     provider: str
     cwd: str
+    voicevox_speaker: int | None = None
 
 
 @dataclass(frozen=True)
@@ -146,13 +147,14 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
         raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
         if not raw:
             break
-        parts = [part.strip() for part in raw.split(",", 2)]
+        parts = [part.strip() for part in raw.split(",", 3)]
         if parts and parts[0]:
             slots.append(
                 AgentSlot(
                     name=parts[0],
                     provider=parts[1] if len(parts) > 1 and parts[1] else default_provider,
                     cwd=parts[2] if len(parts) > 2 and parts[2] else default_cwd,
+                    voicevox_speaker=_optional_int(parts[3]) if len(parts) > 3 else None,
                 )
             )
         index += 1
@@ -166,6 +168,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
             name=os.environ.get("ARGOS_AGENT_SLOT_NAME", os.environ.get("ARGOS_CODEX_SLOT_NAME", "デフォルト")),
             provider=default_provider,
             cwd=default_cwd,
+            voicevox_speaker=_optional_int(os.environ.get("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER")),
         ),
     )
 
@@ -204,6 +207,13 @@ def _split_device_env(name: str) -> tuple[str, ...]:
     if devices:
         return tuple(devices)
     return (raw.strip(),)
+
+
+def _optional_int(raw: str | None) -> int | None:
+    """空文字をNoneとして扱い、値があれば整数へ変換する。"""
+    if raw is None or not raw.strip():
+        return None
+    return int(raw.strip())
 
 
 def _load_audio_input_devices() -> tuple[str, ...]:

@@ -104,8 +104,28 @@ def test_voicevox_synthesize(monkeypatch):
 
     assert client.synthesize("こんにちは") == b"wave-bytes"
     assert calls[0][0] == "http://voicevox/audio_query"
+    assert calls[0][1]["params"]["speaker"] == 2
+    assert calls[1][1]["params"]["speaker"] == 2
     assert calls[1][1]["json"]["outputSamplingRate"] == 48000
     assert calls[1][1]["json"]["speedScale"] == 1.1
+
+
+def test_voicevox_synthesize_accepts_speaker_override(monkeypatch):
+    """合成ごとにVOICEVOX話者IDを上書きできる。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"wave-bytes")
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1)
+
+    assert client.synthesize("こんにちは", speaker=8) == b"wave-bytes"
+    assert calls[0][1]["params"]["speaker"] == 8
+    assert calls[1][1]["params"]["speaker"] == 8
 
 
 def test_kokoro_synthesize_uses_japanese_pipeline(monkeypatch):

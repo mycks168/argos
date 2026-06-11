@@ -232,14 +232,15 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 書式:
 
 ```text
-名前,provider,cwd
+名前,provider,cwd[,voicevox_speaker]
 ```
 
 - `名前`: 読み上げるスロット名
 - `provider`: `codex` などのエージェント種別
 - `cwd`: エージェントの作業ディレクトリ
+- `voicevox_speaker`: 任意。指定した場合、このスロットの読み上げだけ指定VOICEVOX話者IDを使う
 
-スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
+スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。既定スロットのVOICEVOX話者IDは `ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER` で指定できる。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
