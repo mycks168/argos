@@ -78,7 +78,7 @@ class Settings:
     antigravity_command: str
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
-    antigravity_skip_permissions: bool = False
+    antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
     antigravity_print_timeout: str = "5m0s"
     antigravity_continue_session: bool = False
@@ -268,7 +268,7 @@ def load_settings() -> Settings:
         antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "/home/yuki/.local/bin/agy"),
         antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
         antigravity_extra_args=antigravity_extra_args,
-        antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", False),
+        antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", True),
         antigravity_sandbox=_bool_env("ARGOS_ANTIGRAVITY_SANDBOX", False),
         antigravity_print_timeout=os.environ.get("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "5m0s"),
         antigravity_continue_session=_bool_env("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", False),
