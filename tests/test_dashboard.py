@@ -176,6 +176,13 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="volume-slider"' in html
         assert 'aria-label="読み上げ音量"' in html
         assert 'sendControl("set_volume", {volume})' in html
+        assert 'aria-label="フォントサイズ"' in html
+        assert 'data-font-size-option="small"' in html
+        assert 'data-font-size-option="medium"' in html
+        assert 'data-font-size-option="large"' in html
+        assert 'const fontSizeStorageKey = "argos-dashboard-font-size";' in html
+        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey))" in html
+        assert 'body[data-font-size="large"]' in html
         assert ">ミュート</button>" in html
         assert 'muted ? "ミュート中" : "ミュート"' in html
         assert "border-radius: 8px" in html
