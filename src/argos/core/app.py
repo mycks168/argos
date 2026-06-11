@@ -130,6 +130,11 @@ class ArgosApp:
             settings.voicevox_sample_rate,
             settings.voicevox_speed_scale,
         )
+        self._voicevox_speakers_by_slot_key = {
+            _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker
+            for slot in settings.agent_slots
+            if slot.voicevox_speaker is not None
+        }
         self._kokoro = KokoroClient(
             settings.kokoro_voice,
             settings.kokoro_speed,
@@ -705,7 +710,7 @@ class ArgosApp:
                 self._drain_tts_queue(tts_queue)
                 return
             try:
-                wav_data = self._synthesize_tts(normalized)
+                wav_data = self._synthesize_tts(normalized, slot_key)
             except Exception as exc:
                 log.exception("TTSに失敗しました")
                 self._drain_tts_queue(tts_queue)
@@ -761,11 +766,11 @@ class ArgosApp:
             log.exception("状態通知の音声再生に失敗しました")
             self._report_error("音声再生", exc)
 
-    def _synthesize_tts(self, text: str) -> bytes:
+    def _synthesize_tts(self, text: str, slot_key: str = "") -> bytes:
         """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""
         if self._settings.voicevox_url.strip():
             try:
-                return self._voicevox.synthesize(text)
+                return self._voicevox.synthesize(text, speaker=self._voicevox_speaker_for_slot(slot_key))
             except Exception as exc:
                 log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
                 self._report_error("VOICEVOX", exc)
@@ -775,6 +780,11 @@ class ArgosApp:
             log.exception("Kokoroに失敗しました")
             self._report_error("Kokoro", exc)
             raise
+
+    def _voicevox_speaker_for_slot(self, slot_key: str = "") -> int:
+        """指定スロットまたは現在スロットのVOICEVOX話者IDを返す。"""
+        key = slot_key or _app_slot_key(self._agent.current_name, self._agent.current_provider)
+        return self._voicevox_speakers_by_slot_key.get(key, self._settings.voicevox_speaker)
 
     def _report_error(self, source: str, exc: Exception) -> None:
         """内部エラーをダッシュボードへ短い通知として表示する。"""

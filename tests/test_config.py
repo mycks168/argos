@@ -48,6 +48,29 @@ def test_load_numbered_slots(monkeypatch):
     assert settings.agent_slots[1].cwd == "/tmp/b"
 
 
+def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):
+    """スロットごとのVOICEVOX話者IDを読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_1", "一番,codex,/tmp/a,8")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_2", "二番,antigravity,/tmp/b,14")
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_3", raising=False)
+
+    settings = load_settings()
+
+    assert settings.agent_slots[0].voicevox_speaker == 8
+    assert settings.agent_slots[1].voicevox_speaker == 14
+
+
+def test_load_default_slot_voicevox_speaker(monkeypatch):
+    """単一既定スロットのVOICEVOX話者IDを読み込む。"""
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
+    monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER", "7")
+
+    settings = load_settings()
+
+    assert settings.agent_slots[0].voicevox_speaker == 7
+
+
 def test_load_legacy_codex_slots(monkeypatch):
     """旧ARGOS_CODEX_SLOT形式を互換読み込みする。"""
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
