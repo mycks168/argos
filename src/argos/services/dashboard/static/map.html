@@ -36,6 +36,8 @@
     const lat = parseFloat(params.get('lat')) || 35.6895; // デフォルトは東京
     const lng = parseFloat(params.get('lng')) || 139.6917;
     const zoom = parseInt(params.get('zoom')) || 13;
+    const curLat = parseFloat(params.get('cur_lat'));
+    const curLng = parseFloat(params.get('cur_lng'));
 
     // 地図の初期化
     const map = L.map('map', {
@@ -47,8 +49,26 @@
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    // マーカーピンを追加
-    L.marker([lat, lng]).addTo(map);
+    // マーカーと位置調整
+    if (!isNaN(curLat) && !isNaN(curLng)) {
+      // 現在地に青いサークルとマーカーを追加
+      L.circle([curLat, curLng], {
+        color: '#69b7e4',
+        fillColor: '#69b7e4',
+        fillOpacity: 0.2,
+        radius: 300
+      }).addTo(map);
+
+      const curMarker = L.marker([curLat, curLng]).addTo(map).bindPopup("現在地").openPopup();
+      const destMarker = L.marker([lat, lng]).addTo(map).bindPopup(params.get('title') || "目的地");
+
+      // 現在地と目的地が両方収まるように地図範囲を自動調整
+      const group = new L.featureGroup([curMarker, destMarker]);
+      map.fitBounds(group.getBounds().pad(0.3));
+    } else {
+      // 目的地のみ表示
+      L.marker([lat, lng]).addTo(map).bindPopup(params.get('title') || "目的地").openPopup();
+    }
   </script>
 </body>
 </html>
