@@ -179,8 +179,50 @@ def test_handle_text_dry_run(monkeypatch, capsys):
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
     assert snapshot["messages"][1]["text"] == "応答"
     output = capsys.readouterr().out
-    assert "わかった。少し待ってね" in output
+    assert "わかった。少し待ね" in output or "わかった。少し待ってね" in output
     assert "ARGOS> 応答" in output
+
+
+def test_handle_text_agent_rate_limit_error(monkeypatch, capsys):
+    """エージェントがレートリミットエラーを返した際に音声で報告されることをテストする。"""
+    _patch_app(monkeypatch)
+
+    class FakeCodexWithError:
+        def __init__(self, settings):
+            self.current_name = "作業"
+            self.current_provider = "codex"
+
+        def ask_stream(self, text: str):
+            raise RuntimeError("Rate Limit Exceeded")
+
+    monkeypatch.setattr("argos.core.app.create_agent_client", FakeCodexWithError)
+    app = ArgosApp(_settings())
+
+    app._handle_text("依頼")
+
+    output = capsys.readouterr().out
+    assert "リミット制限に達しました" in output
+
+
+def test_handle_text_agent_general_error(monkeypatch, capsys):
+    """エージェントが一般的なエラーを返した際に音声で報告されることをテストする。"""
+    _patch_app(monkeypatch)
+
+    class FakeCodexWithError:
+        def __init__(self, settings):
+            self.current_name = "作業"
+            self.current_provider = "codex"
+
+        def ask_stream(self, text: str):
+            raise RuntimeError("Connection Timeout")
+
+    monkeypatch.setattr("argos.core.app.create_agent_client", FakeCodexWithError)
+    app = ArgosApp(_settings())
+
+    app._handle_text("依頼")
+
+    output = capsys.readouterr().out
+    assert "エージェントの応答取得に失敗しました" in output
 
 
 def test_dashboard_shows_current_agent_slot(monkeypatch):

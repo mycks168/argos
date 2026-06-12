@@ -572,6 +572,11 @@ class ArgosApp:
         except Exception as exc:
             log.exception("エージェント応答の取得に失敗しました")
             self._report_error("エージェント", exc)
+            exc_msg = str(exc).lower()
+            if "rate limit" in exc_msg or "quota" in exc_msg or "limit" in exc_msg:
+                self._speak_status("リミット制限に達しました。")
+            else:
+                self._speak_status("エージェントの応答取得に失敗しました。")
         finally:
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
             self._dashboard_state.finish_message(dashboard_message_id)
