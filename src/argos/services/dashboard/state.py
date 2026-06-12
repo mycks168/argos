@@ -36,6 +36,7 @@ class DashboardState:
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
+        self._overlay = {"active": False, "updated_at": _now_iso()}
 
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
@@ -46,6 +47,7 @@ class DashboardState:
                 "agent": deepcopy(self._agent),
                 "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
                 "audio": deepcopy(self._audio),
+                "overlay": deepcopy(self._overlay),
                 "messages": deepcopy(list(self._current_messages_locked())),
                 "notifications": deepcopy(list(self._notifications)),
             }
@@ -227,6 +229,36 @@ class DashboardState:
         if messages is None:
             return None
         return next((message for message in messages if message["id"] == message_id), None)
+
+    def set_overlay(
+        self,
+        overlay_type: str,
+        title: str,
+        content: str = "",
+        url: str = "",
+        options: dict[str, Any] | None = None,
+    ) -> None:
+        """オーバーレイ表示状態を設定する。"""
+        with self._lock:
+            self._overlay = {
+                "active": True,
+                "type": overlay_type,
+                "title": title,
+                "content": content,
+                "url": url,
+                "options": deepcopy(options) if options is not None else {},
+                "updated_at": _now_iso(),
+            }
+            self._publish_locked()
+
+    def clear_overlay(self) -> None:
+        """オーバーレイ表示を消去する。"""
+        with self._lock:
+            self._overlay = {
+                "active": False,
+                "updated_at": _now_iso(),
+            }
+            self._publish_locked()
 
     def _current_messages_locked(self) -> deque[dict[str, Any]]:
         """現在スロットの会話履歴を返す。"""

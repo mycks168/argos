@@ -281,6 +281,65 @@
       .brand-row { align-items: flex-start; }
       .messages, .notifications { max-height: none; }
     }
+
+    /* オーバーレイコンテナのスタイル設定 */
+    .overlay-container {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: rgba(7, 11, 15, 0.95);
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 250ms ease;
+    }
+    .overlay-container.is-active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 24px;
+      border-bottom: 1px solid #26323b;
+      background: #0b1117;
+    }
+    .overlay-header h2 {
+      margin: 0;
+      font-size: 20px;
+      color: #f4d35e;
+      font-weight: 800;
+    }
+    .overlay-close {
+      border: 1px solid #e63946;
+      background: rgba(230, 57, 70, 0.1);
+      color: #e63946;
+      padding: 6px 18px;
+      font-weight: 800;
+      border-radius: 6px;
+      cursor: pointer !important;
+      transition: background 150ms ease, transform 100ms ease;
+    }
+    .overlay-close:hover {
+      background: rgba(230, 57, 70, 0.25);
+    }
+    .overlay-close:active {
+      transform: scale(0.96);
+    }
+    .overlay-body {
+      flex: 1;
+      background: #000;
+      position: relative;
+    }
+    .overlay-body iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: transparent;
+    }
   </style>
 </head>
 <body>
@@ -330,6 +389,18 @@
       <div id="notifications" class="notifications"></div>
     </section>
   </main>
+
+  <!-- 汎用オーバーレイモーダルパネル -->
+  <div id="overlay-container" class="overlay-container" aria-hidden="true">
+    <div class="overlay-header">
+      <h2 id="overlay-title">--</h2>
+      <button id="overlay-close" class="overlay-close" type="button">閉じる</button>
+    </div>
+    <div class="overlay-body">
+      <iframe id="overlay-iframe" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+    </div>
+  </div>
+
   <script>
     const messages = document.getElementById("messages");
     const notifications = document.getElementById("notifications");
@@ -345,6 +416,12 @@
     const volumeLabel = document.getElementById("volume-label");
     const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+
+    // オーバーレイ用のDOM要素
+    const overlayContainer = document.getElementById("overlay-container");
+    const overlayTitle = document.getElementById("overlay-title");
+    const overlayIframe = document.getElementById("overlay-iframe");
+    const overlayClose = document.getElementById("overlay-close");
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
     const fontSizeStorageKey = "argos-dashboard-font-size";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
@@ -449,6 +526,54 @@
         </article>`).join("") : `<div class="empty">新しい通知はありません</div>`;
         previousNotifications = nextNotifications;
       }
+
+      // オーバーレイの描画処理
+      if (state.overlay && state.overlay.active) {
+        overlayTitle.textContent = state.overlay.title || "表示";
+        const targetUrl = state.overlay.url || "about:blank";
+        if (overlayIframe.getAttribute("data-src") !== targetUrl) {
+          overlayIframe.setAttribute("data-src", targetUrl);
+          if (state.overlay.content) {
+            overlayIframe.onload = () => {
+              // iframe内の受信スクリプトが確実に準備完了するよう、わずかに遅延させる
+              setTimeout(() => {
+                try {
+                  overlayIframe.contentWindow.postMessage({
+                    type: "content",
+                    data: state.overlay.content,
+                    options: state.overlay.options || {}
+                  }, "*");
+                } catch (e) {
+                  console.error("Failed to post message to iframe:", e);
+                }
+              }, 50);
+            };
+          } else {
+            overlayIframe.onload = null;
+          }
+          overlayIframe.src = targetUrl;
+        } else if (state.overlay.content) {
+          try {
+            overlayIframe.contentWindow.postMessage({
+              type: "content",
+              data: state.overlay.content,
+              options: state.overlay.options || {}
+            }, "*");
+          } catch (e) {
+            // iframeのコンテンツウインドウがまだ読み込み完了していない可能性があり、その場合はonloadで処理される
+          }
+        }
+        overlayContainer.classList.add("is-active");
+        overlayContainer.setAttribute("aria-hidden", "false");
+      } else {
+        overlayContainer.classList.remove("is-active");
+        overlayContainer.setAttribute("aria-hidden", "true");
+        if (overlayIframe.getAttribute("data-src") !== "about:blank") {
+          overlayIframe.setAttribute("data-src", "about:blank");
+          overlayIframe.src = "about:blank";
+          overlayIframe.onload = null;
+        }
+      }
     }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});
@@ -501,6 +626,31 @@
     resetScreensaver();
     showSplash();
     refresh();
+
+    // オーバーレイ消去などのイベント送信用のヘルパー関数
+    async function sendEvent(type, values = {}) {
+      try {
+        const headers = {"Content-Type": "application/json"};
+        if (dashboardToken) {
+          headers.Authorization = `Bearer ${dashboardToken}`;
+        }
+        const response = await fetch("/api/events", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({type, ...values}),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        await refresh();
+      } catch (error) {
+        console.error("Failed to send event:", error);
+      }
+    }
+    overlayClose.addEventListener("click", () => {
+      sendEvent("clear_overlay").catch(error => console.error(error));
+    });
+
     const stream = new EventSource("/api/stream");
     stream.addEventListener("open", refresh);
     stream.addEventListener("update", refresh);

@@ -195,6 +195,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "showScreensaver" in html
         assert '"pointermove"' not in html
         assert 'data-code="muted"' in html
+        assert 'id="overlay-container"' in html
+        assert 'id="overlay-iframe"' in html
+        assert 'sendEvent("clear_overlay")' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
@@ -244,5 +247,94 @@ def test_dashboard_server_rejects_invalid_token():
             assert exc.code == 401
         else:
             raise AssertionError("認証エラーになりませんでした")
+    finally:
+        server.stop()
+
+
+def test_dashboard_state_supports_overlay():
+    """オーバーレイの表示状態を設定・消去できる。"""
+    state = DashboardState()
+
+    # 初期状態
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is False
+
+    # 設定
+    state.set_overlay(
+        overlay_type="map",
+        title="周辺地図",
+        content="地図テスト",
+        url="http://127.0.0.1/map",
+        options={"lat": 35.6, "lng": 139.6}
+    )
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is True
+    assert snapshot["overlay"]["type"] == "map"
+    assert snapshot["overlay"]["title"] == "周辺地図"
+    assert snapshot["overlay"]["content"] == "地図テスト"
+    assert snapshot["overlay"]["url"] == "http://127.0.0.1/map"
+    assert snapshot["overlay"]["options"] == {"lat": 35.6, "lng": 139.6}
+
+    # 消去
+    state.clear_overlay()
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is False
+
+
+def test_apply_event_supports_overlay():
+    """外部イベントAPIを介してオーバーレイの表示・消去イベントを適用できる。"""
+    state = DashboardState()
+
+    # overlayイベントの適用
+    _apply_event(state, {
+        "type": "overlay",
+        "overlay_type": "markdown",
+        "title": "タスクリスト",
+        "content": "# タスクリスト\n- [ ] 開発",
+        "url": "/static/reader.html",
+        "options": {"foo": "bar"}
+    })
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is True
+    assert snapshot["overlay"]["type"] == "markdown"
+    assert snapshot["overlay"]["title"] == "タスクリスト"
+    assert snapshot["overlay"]["content"] == "# タスクリスト\n- [ ] 開発"
+    assert snapshot["overlay"]["url"] == "/static/reader.html"
+    assert snapshot["overlay"]["options"] == {"foo": "bar"}
+
+    # clear_overlayイベントの適用
+    _apply_event(state, {"type": "clear_overlay"})
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is False
+
+
+def test_dashboard_server_serves_static_files():
+    """/static/* 経由でパッケージ内の静的ファイルを返せる。"""
+    state = DashboardState()
+    server = DashboardServer(state, "127.0.0.1", 0, "secret")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        # reader.html を取得してみる
+        with urlopen(base_url + "/static/reader.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Markdown Reader" in html
+
+        # map.html を取得してみる
+        with urlopen(base_url + "/static/map.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Map Viewer" in html
+
+        # 存在しないファイルは404
+        with pytest.raises(HTTPError) as exc:
+            urlopen(base_url + "/static/nonexistent.html", timeout=2)
+        assert exc.value.code == 404
+
+        # ディレクトリトラバーサルのガードテスト
+        with pytest.raises(HTTPError) as exc:
+            urlopen(base_url + "/static/../server.py", timeout=2)
+        assert exc.value.code == 403
     finally:
         server.stop()

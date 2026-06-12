@@ -95,6 +95,8 @@ def _create_handler(
             path = urlparse(self.path).path
             if path == "/":
                 self._send_html()
+            elif path.startswith("/static/"):
+                self._send_static_file(path)
             elif path == "/api/health":
                 self._send_json({"status": "ok"})
             elif path == "/api/state":
@@ -176,6 +178,36 @@ def _create_handler(
             self.end_headers()
             self.wfile.write(html)
 
+        def _send_static_file(self, path: str) -> None:
+            """static ディレクトリ内の静的ファイルを返す。"""
+            filename = path.replace("/static/", "", 1)
+            if ".." in filename or filename.startswith("/") or filename.startswith("."):
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
+            try:
+                content = files("argos.services.dashboard.static").joinpath(filename).read_bytes()
+            except FileNotFoundError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+
+            mime_type = "application/octet-stream"
+            if filename.endswith(".html"):
+                mime_type = "text/html; charset=utf-8"
+            elif filename.endswith(".js"):
+                mime_type = "application/javascript; charset=utf-8"
+            elif filename.endswith(".css"):
+                mime_type = "text/css; charset=utf-8"
+            elif filename.endswith(".png"):
+                mime_type = "image/png"
+            elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+                mime_type = "image/jpeg"
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
         def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
             """JSONレスポンスを返す。"""
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -249,6 +281,18 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
     if event_type == "clear_notifications":
         state.clear_notifications()
         return {"status": "cleared"}
+    if event_type == "overlay":
+        state.set_overlay(
+            overlay_type=_required_text(payload, "overlay_type", 40),
+            title=_required_text(payload, "title", 120),
+            content=_optional_text(payload, "content", 64000),
+            url=_optional_text(payload, "url", 2000),
+            options=payload.get("options"),
+        )
+        return {"status": "overlay_updated"}
+    if event_type == "clear_overlay":
+        state.clear_overlay()
+        return {"status": "overlay_cleared"}
     raise ValueError(f"未対応のイベント種別です: {event_type}")
 
 

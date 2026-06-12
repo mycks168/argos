@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Viewer</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+      position: relative;
+    }
+    .image-container {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: auto;
+    }
+    img {
+      max-width: 95%;
+      max-height: 95%;
+      object-fit: contain;
+      transition: transform 150ms ease;
+      transform-origin: center;
+    }
+    /* 下部のシンプルなコントロールバー */
+    .controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 10px;
+      background: rgba(11, 17, 23, 0.85);
+      padding: 8px 16px;
+      border-radius: 999px;
+      border: 1px solid #26323b;
+      backdrop-filter: blur(4px);
+    }
+    .btn {
+      background: transparent;
+      border: none;
+      color: #edf3f7;
+      font-size: 18px;
+      font-weight: 800;
+      cursor: pointer !important;
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 50%;
+    }
+    .btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+  </style>
+</head>
+<body>
+  <div class="image-container">
+    <img id="viewer-img" src="" alt="Image Viewer">
+  </div>
+  <div class="controls">
+    <button id="zoom-out" class="btn" type="button" title="縮小">−</button>
+    <button id="reset" class="btn" type="button" title="リセット">⟲</button>
+    <button id="zoom-in" class="btn" type="button" title="拡大">+</button>
+  </div>
+  <script>
+    const img = document.getElementById("viewer-img");
+    const zoomInBtn = document.getElementById("zoom-in");
+    const zoomOutBtn = document.getElementById("zoom-out");
+    const resetBtn = document.getElementById("reset");
+
+    // クエリパラメータから画像を読み込む
+    const params = new URLSearchParams(window.location.search);
+    const url = params.get("url");
+    if (url) {
+      img.src = url;
+    } else {
+      img.alt = "画像URLが指定されていません。";
+    }
+
+    let scale = 1;
+    function updateZoom() {
+      img.style.transform = `scale(${scale})`;
+    }
+
+    zoomInBtn.addEventListener("click", () => {
+      scale = Math.min(scale + 0.2, 3.0);
+      updateZoom();
+    });
+
+    zoomOutBtn.addEventListener("click", () => {
+      scale = Math.max(scale - 0.2, 0.5);
+      updateZoom();
+    });
+
+    resetBtn.addEventListener("click", () => {
+      scale = 1;
+      updateZoom();
+    });
+  </script>
+</body>
+</html>
