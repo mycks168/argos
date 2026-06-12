@@ -25,6 +25,56 @@
     .leaflet-container {
       background: #0d151c !important;
     }
+    .map-label {
+      background: rgba(12, 18, 24, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      color: #fff;
+      font: 700 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 5px 8px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+      white-space: nowrap;
+    }
+    .leaflet-tooltip-top.map-label::before {
+      border-top-color: rgba(12, 18, 24, 0.88);
+    }
+    .current-location-marker {
+      align-items: center;
+      background: #28a8ff;
+      border: 3px solid #fff;
+      border-radius: 999px;
+      box-shadow: 0 0 0 5px rgba(40, 168, 255, 0.22), 0 3px 10px rgba(0, 0, 0, 0.55);
+      display: flex;
+      height: 22px;
+      justify-content: center;
+      width: 22px;
+    }
+    .current-location-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 7px;
+      width: 7px;
+    }
+    .destination-marker {
+      background: #ff4d4d;
+      border: 3px solid #fff;
+      border-radius: 999px 999px 999px 0;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
+      height: 24px;
+      transform: rotate(-45deg);
+      width: 24px;
+    }
+    .destination-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 8px;
+      left: 8px;
+      position: absolute;
+      top: 8px;
+      width: 8px;
+    }
   </style>
 </head>
 <body>
@@ -35,6 +85,7 @@
     const params = new URLSearchParams(window.location.search);
     const curLat = parseFloat(params.get('cur_lat'));
     const curLng = parseFloat(params.get('cur_lng'));
+    const followCurrentLocation = params.get('follow') === '1';
 
     // 地図の初期化
     const map = L.map('map', {
@@ -47,19 +98,85 @@
     }).addTo(map);
 
     const markers = [];
+    const dynamicMarkers = [];
+    let currentMarker = null;
+    let currentCircle = null;
+    const currentLocationIcon = L.divIcon({
+      className: '',
+      html: '<div class="current-location-marker" aria-label="現在地"></div>',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+    const destinationIcon = L.divIcon({
+      className: '',
+      html: '<div class="destination-marker" aria-label="目的地"></div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 28],
+      popupAnchor: [0, -28],
+      tooltipAnchor: [0, -30]
+    });
+
+    function labelMarker(marker, title) {
+      // 音声操作中でも見分けやすいように、ラベルを常時表示する。
+      marker.bindTooltip(title, {
+        permanent: true,
+        direction: 'top',
+        offset: [0, -10],
+        className: 'map-label'
+      });
+      marker.bindPopup(title);
+      return marker;
+    }
+
+    function upsertCurrentLocation(lat, lng) {
+      if (isNaN(lat) || isNaN(lng)) {
+        return;
+      }
+      const latLng = [lat, lng];
+      if (!currentCircle) {
+        currentCircle = L.circle(latLng, {
+          color: '#69b7e4',
+          fillColor: '#69b7e4',
+          fillOpacity: 0.2,
+          radius: 400
+        }).addTo(map);
+      } else {
+        currentCircle.setLatLng(latLng);
+      }
+      if (!currentMarker) {
+        currentMarker = labelMarker(
+          L.marker(latLng, { icon: currentLocationIcon }).addTo(map),
+          "現在地"
+        );
+        markers.push(currentMarker);
+        dynamicMarkers.push(currentMarker);
+      } else {
+        currentMarker.setLatLng(latLng);
+      }
+    }
+
+    function startCurrentLocationFollow() {
+      async function updateLocation() {
+        try {
+          const response = await fetch('/api/location', { cache: 'no-store' });
+          if (!response.ok) {
+            return;
+          }
+          const location = await response.json();
+          if (location.available) {
+            upsertCurrentLocation(location.lat, location.lng);
+          }
+        } catch (error) {
+          console.warn('現在地の更新に失敗しました', error);
+        }
+      }
+      updateLocation();
+      setInterval(updateLocation, 2000);
+    }
 
     // 現在地の描画
     if (!isNaN(curLat) && !isNaN(curLng)) {
-      // 現在地に青いサークルとマーカーを追加
-      L.circle([curLat, curLng], {
-        color: '#69b7e4',
-        fillColor: '#69b7e4',
-        fillOpacity: 0.2,
-        radius: 400
-      }).addTo(map);
-
-      const curMarker = L.marker([curLat, curLng]).addTo(map).bindPopup("現在地").openPopup();
-      markers.push(curMarker);
+      upsertCurrentLocation(curLat, curLng);
     }
 
     // 複数目的地の描画 (points=lat,lng,title|lat,lng,title...)
@@ -73,7 +190,7 @@
           const lng = parseFloat(parts[1]);
           const title = parts[2] || "目的地";
           if (!isNaN(lat) && !isNaN(lng)) {
-            const marker = L.marker([lat, lng]).addTo(map).bindPopup(title);
+            const marker = labelMarker(L.marker([lat, lng], { icon: destinationIcon }).addTo(map), title);
             markers.push(marker);
           }
         }
@@ -84,11 +201,8 @@
       const lng = parseFloat(params.get('lng')) || 139.6917;
       const title = params.get('title') || "目的地";
       if (!isNaN(lat) && !isNaN(lng)) {
-        const marker = L.marker([lat, lng]).addTo(map).bindPopup(title);
+        const marker = labelMarker(L.marker([lat, lng], { icon: destinationIcon }).addTo(map), title);
         markers.push(marker);
-        if (markers.length === 1 && !markers.includes(marker)) {
-          marker.openPopup();
-        }
       }
     }
 
@@ -102,6 +216,10 @@
       }
     } else {
       map.setView([35.6895, 139.6917], 13);
+    }
+
+    if (followCurrentLocation) {
+      startCurrentLocationFollow();
     }
   </script>
 </body>
