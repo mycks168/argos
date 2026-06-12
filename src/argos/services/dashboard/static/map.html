@@ -33,41 +33,75 @@
   <script>
     // クエリパラメータの解析
     const params = new URLSearchParams(window.location.search);
-    const lat = parseFloat(params.get('lat')) || 35.6895; // デフォルトは東京
-    const lng = parseFloat(params.get('lng')) || 139.6917;
-    const zoom = parseInt(params.get('zoom')) || 13;
     const curLat = parseFloat(params.get('cur_lat'));
     const curLng = parseFloat(params.get('cur_lng'));
 
     // 地図の初期化
     const map = L.map('map', {
       zoomControl: false // すっきりしたダッシュボード外観にするためズームコントロールを非表示に
-    }).setView([lat, lng], zoom);
+    });
 
     // OpenStreetMapタイルレイヤーを追加
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
 
-    // マーカーと位置調整
+    const markers = [];
+
+    // 現在地の描画
     if (!isNaN(curLat) && !isNaN(curLng)) {
       // 現在地に青いサークルとマーカーを追加
       L.circle([curLat, curLng], {
         color: '#69b7e4',
         fillColor: '#69b7e4',
         fillOpacity: 0.2,
-        radius: 300
+        radius: 400
       }).addTo(map);
 
       const curMarker = L.marker([curLat, curLng]).addTo(map).bindPopup("現在地").openPopup();
-      const destMarker = L.marker([lat, lng]).addTo(map).bindPopup(params.get('title') || "目的地");
+      markers.push(curMarker);
+    }
 
-      // 現在地と目的地が両方収まるように地図範囲を自動調整
-      const group = new L.featureGroup([curMarker, destMarker]);
-      map.fitBounds(group.getBounds().pad(0.3));
+    // 複数目的地の描画 (points=lat,lng,title|lat,lng,title...)
+    const pointsParam = params.get('points');
+    if (pointsParam) {
+      const pointStrings = pointsParam.split('|');
+      pointStrings.forEach(pStr => {
+        const parts = pStr.split(',');
+        if (parts.length >= 2) {
+          const lat = parseFloat(parts[0]);
+          const lng = parseFloat(parts[1]);
+          const title = parts[2] || "目的地";
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const marker = L.marker([lat, lng]).addTo(map).bindPopup(title);
+            markers.push(marker);
+          }
+        }
+      });
     } else {
-      // 目的地のみ表示
-      L.marker([lat, lng]).addTo(map).bindPopup(params.get('title') || "目的地").openPopup();
+      // 従来の単一目的地 (lat, lng, title)
+      const lat = parseFloat(params.get('lat')) || 35.6895;
+      const lng = parseFloat(params.get('lng')) || 139.6917;
+      const title = params.get('title') || "目的地";
+      if (!isNaN(lat) && !isNaN(lng)) {
+        const marker = L.marker([lat, lng]).addTo(map).bindPopup(title);
+        markers.push(marker);
+        if (markers.length === 1 && !markers.includes(marker)) {
+          marker.openPopup();
+        }
+      }
+    }
+
+    // 地図範囲の自動調整
+    if (markers.length > 0) {
+      const group = new L.featureGroup(markers);
+      if (markers.length === 1) {
+        map.setView(markers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
+      } else {
+        map.fitBounds(group.getBounds().pad(0.25));
+      }
+    } else {
+      map.setView([35.6895, 139.6917], 13);
     }
   </script>
 </body>
