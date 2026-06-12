@@ -4,6 +4,8 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from argos.services.dashboard import location as dashboard_location
+from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location
 from argos.services.dashboard.server import DashboardServer, _apply_event
 from argos.services.dashboard.state import DashboardState
 
@@ -191,7 +193,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
         assert 'id="screensaver"' in html
         assert "resetScreensaver()" in html
-        assert 'state.status.code === "listening" || state.status.code === "locked"' in html
+        assert 'state.status.code === "listening" || state.status.code === "locked" || state.status.code === "auth_listening"' in html
         assert "showScreensaver" in html
         assert '"pointermove"' not in html
         assert 'data-code="muted"' in html
@@ -326,6 +328,9 @@ def test_dashboard_server_serves_static_files():
             assert response.headers["Content-Type"] == "text/html; charset=utf-8"
             html = response.read().decode("utf-8")
             assert "Map Viewer" in html
+            assert "current-location-marker" in html
+            assert "destination-marker" in html
+            assert "bindTooltip" in html
 
         # 存在しないファイルは404
         with pytest.raises(HTTPError) as exc:
@@ -338,3 +343,51 @@ def test_dashboard_server_serves_static_files():
         assert exc.value.code == 403
     finally:
         server.stop()
+
+
+def test_parse_nmea_location_from_rmc():
+    """RMC文から現在地、速度、進行方向を取り出せる。"""
+    location = parse_nmea_location("$GPRMC,054543.20,A,3713.69073,N,13950.85569,E,26.529,242.71,120626,,,D*57")
+
+    assert location is not None
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.2281788)
+    assert location["lng"] == pytest.approx(139.8475948)
+    assert location["speed_kmh"] == 49.1
+    assert location["course"] == 242.71
+
+
+def test_parse_gpsd_tpv():
+    """gpsdのTPV JSONから現在地を取り出せる。"""
+    location = parse_gpsd_tpv(
+        '{"class":"TPV","mode":3,"lat":37.110871441,"lon":139.720415378,"speed":0.029,"track":347.2306}'
+    )
+
+    assert location is not None
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.110871441)
+    assert location["lng"] == pytest.approx(139.720415378)
+    assert location["speed_kmh"] == 0.1
+    assert location["course"] == 347.2306
+
+
+def test_dashboard_server_serves_location(monkeypatch, tmp_path):
+    """GPSデバイス相当のNMEAファイルから現在地APIを返せる。"""
+    monkeypatch.setattr(dashboard_location, "read_gpsd_location", lambda timeout_seconds=1.2: {"available": False, "error": "gpsdなし"})
+    gps_file = tmp_path / "gps.nmea"
+    gps_file.write_text(
+        "$GPRMC,054543.20,A,3713.69073,N,13950.85569,E,26.529,242.71,120626,,,D*57\n",
+        encoding="ascii",
+    )
+    state = DashboardState()
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", gps_device_path=gps_file)
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        _, payload = _read_json(base_url + "/api/location")
+    finally:
+        server.stop()
+
+    assert payload["available"] is True
+    assert payload["lat"] == pytest.approx(37.2281788)
+    assert payload["lng"] == pytest.approx(139.8475948)

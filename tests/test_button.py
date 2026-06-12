@@ -57,6 +57,26 @@ def test_short_press_cancels_recording(monkeypatch):
     assert button.state == PttState.IDLE
 
 
+def test_short_press_can_be_recorded_when_requested(monkeypatch):
+    """本人確認中などは短い押下でも録音として処理できる。"""
+    events = []
+    times = iter([1.00, 1.10])
+    monkeypatch.setattr("argos.hardware.button.time.monotonic", lambda: next(times))
+    button = ButtonPtt(
+        on_press=lambda: events.append("press"),
+        on_release=lambda: events.append("release"),
+        on_double_click=lambda: events.append("double"),
+        on_cancel=lambda: events.append("cancel"),
+        should_record_short_press=lambda: True,
+    )
+
+    button.handle_press()
+    button.handle_release()
+
+    assert events == ["press", "release"]
+    assert button.state == PttState.BUSY
+
+
 def test_busy_press_starts_listening():
     events = []
     button = ButtonPtt(

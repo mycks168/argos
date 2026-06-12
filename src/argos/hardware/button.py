@@ -29,12 +29,14 @@ class ButtonPtt:
         on_release: Callable[[], None],
         on_double_click: Callable[[], None],
         on_cancel: Callable[[], None],
+        should_record_short_press: Callable[[], bool] | None = None,
     ) -> None:
         """コールバックを受け取り、初期状態を作成する。"""
         self._on_press = on_press
         self._on_release = on_release
         self._on_double_click = on_double_click
         self._on_cancel = on_cancel
+        self._should_record_short_press = should_record_short_press or (lambda: False)
         self._state = PttState.IDLE
         self._lock = Lock()
         self._press_started_at = 0.0
@@ -81,14 +83,19 @@ class ButtonPtt:
             now = time.monotonic()
             duration = now - self._press_started_at
             if duration < DOUBLE_CLICK_MAX_PRESS_SEC:
-                gap = now - self._last_quick_release_at
-                self._state = PttState.IDLE
-                callbacks.append(self._on_cancel)
-                if gap < DOUBLE_CLICK_MAX_GAP_SEC:
+                if self._should_record_short_press():
+                    self._state = PttState.BUSY
                     self._last_quick_release_at = 0.0
-                    callbacks.append(self._on_double_click)
+                    callbacks.append(self._on_release)
                 else:
-                    self._last_quick_release_at = now
+                    gap = now - self._last_quick_release_at
+                    self._state = PttState.IDLE
+                    callbacks.append(self._on_cancel)
+                    if gap < DOUBLE_CLICK_MAX_GAP_SEC:
+                        self._last_quick_release_at = 0.0
+                        callbacks.append(self._on_double_click)
+                    else:
+                        self._last_quick_release_at = now
             else:
                 self._state = PttState.BUSY
                 callbacks.append(self._on_release)

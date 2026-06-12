@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_gps_location
 from argos.services.dashboard.state import DashboardState
 
 
@@ -31,6 +32,7 @@ class DashboardServer:
         port: int,
         token: str,
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
+        gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
@@ -40,6 +42,7 @@ class DashboardServer:
         self._port = port
         self._token = token
         self._camera_snapshot_path = camera_snapshot_path
+        self._gps_device_path = gps_device_path
         self._screensaver_seconds = screensaver_seconds
         self._control_handler = control_handler
         self._server: ThreadingHTTPServer | None = None
@@ -58,6 +61,7 @@ class DashboardServer:
             self._state,
             self._token,
             self._camera_snapshot_path,
+            self._gps_device_path,
             self._screensaver_seconds,
             self._control_handler,
         )
@@ -82,6 +86,7 @@ def _create_handler(
     state: DashboardState,
     token: str,
     camera_snapshot_path: Path,
+    gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
@@ -101,6 +106,8 @@ def _create_handler(
                 self._send_json({"status": "ok"})
             elif path == "/api/state":
                 self._send_json(state.snapshot())
+            elif path == "/api/location":
+                self._send_json(read_gps_location(gps_device_path))
             elif path == "/api/stream":
                 self._send_sse()
             elif path == "/camera/latest.jpg":
