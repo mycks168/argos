@@ -63,15 +63,23 @@ class FakeRecorder:
     def __init__(self, *args):
         self.started = False
         self.cancelled = False
+        self.recording = False
+
+    @property
+    def is_recording(self):
+        return self.recording
 
     def start(self):
         self.started = True
+        self.recording = True
 
     def stop(self):
+        self.recording = False
         return "/tmp/u.wav"
 
     def cancel(self):
         self.cancelled = True
+        self.recording = False
 
 
 class FakeAudio:
@@ -264,8 +272,8 @@ def test_cancel_clears_listening_status(monkeypatch):
     assert snapshot["status"]["code"] == "ready"
 
 
-def test_locked_ptt_keeps_dashboard_locked(monkeypatch):
-    """ロック中のPTT録音は通常の録音中表示にしない。"""
+def test_locked_ptt_shows_auth_recording_status(monkeypatch):
+    """ロック中のPTT録音は本人確認用の録音表示にする。"""
     _patch_app(monkeypatch)
     settings = Settings(
         **{
@@ -279,8 +287,13 @@ def test_locked_ptt_keeps_dashboard_locked(monkeypatch):
     app._on_ptt_press()
     snapshot = app._dashboard_state.snapshot()
     assert app._recorder.started is True
-    assert snapshot["status"]["code"] == "locked"
-    assert snapshot["status"]["label"] == "ロック中"
+    assert snapshot["status"]["code"] == "auth_listening"
+    assert snapshot["status"]["label"] == "本人確認録音中"
+
+    app._on_ptt_release()
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "authenticating"
+    assert snapshot["status"]["label"] == "本人確認中"
 
 
 def test_dashboard_control_updates_mute_state(monkeypatch):
@@ -408,6 +421,21 @@ def test_locked_recording_does_not_reach_codex(monkeypatch):
     assert snapshot["notifications"][0]["title"] == "本人確認 エラー"
 
 
+def test_empty_transcript_adds_notification(monkeypatch):
+    """文字起こし結果が空の場合はログ確認用に通知を残す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: ""
+    app._local_stt.transcribe = lambda _wav: ""
+
+    app._process_recording()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][0]["title"] == "文字起こし エラー"
+    assert snapshot["notifications"][0]["text"] == "音声を認識できませんでした。"
+
+
 def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
     """起動後に未認証なら本人確認を促す。"""
     _patch_app(monkeypatch)
@@ -514,6 +542,32 @@ def test_auth_warning_repeats_until_authenticated(monkeypatch):
     snapshot = app._dashboard_state.snapshot()
     assert app._audio.played
     assert snapshot["status"]["code"] == "locked"
+
+
+def test_auth_warning_is_suppressed_while_recording(monkeypatch):
+    """録音中は本人確認案内を読み上げず、マイクへの回り込みを避ける。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_warning_delay_seconds": 0,
+            "auth_alert_delay_seconds": 0,
+            "auth_warning_interval_seconds": 0.01,
+        }
+    )
+    app = ArgosApp(settings)
+    app._recorder.recording = True
+
+    app._start_auth_warning_timer(0)
+    import time
+
+    time.sleep(0.03)
+    app._stop_auth_warning()
+
+    assert not app._audio.played
 
 
 def test_auth_warning_enters_alert_mode_after_delay(monkeypatch):

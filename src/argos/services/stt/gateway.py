@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -27,10 +28,11 @@ class SttGatewayClient:
         """WAV ファイルを送信し、認識テキストを返す。"""
         if not os.path.exists(wav_path):
             raise FileNotFoundError(f"WAV ファイルが見つかりません: {wav_path}")
+        upload_name = Path(wav_path).name
         with open(wav_path, "rb") as wav_file:
             response = self._session.post(
                 f"{self._base_url}/transcribe",
-                files={"file": ("utterance.wav", wav_file, "audio/wav")},
+                files={"file": (upload_name, wav_file, "audio/wav")},
                 data={"language": self._language},
                 headers=self._headers(),
                 timeout=30,

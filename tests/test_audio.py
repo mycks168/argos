@@ -1,7 +1,16 @@
+import os
 import wave
 from io import BytesIO
+from pathlib import Path
 
-from argos.hardware.audio import AudioPlayer, Recorder, _repair_wav_header, select_available_input_device
+from argos.hardware.audio import (
+    AudioPlayer,
+    Recorder,
+    _pad_wav_silence,
+    _repair_wav_header,
+    cleanup_stale_recordings,
+    select_available_input_device,
+)
 
 
 class FakeProc:
@@ -46,6 +55,11 @@ class FakeProc:
         pass
 
 
+def _recording_path(command):
+    """arecordコマンドから録音先WAVパスを取り出す。"""
+    return command[-1]
+
+
 def test_recorder_start_stop_cancel(monkeypatch, tmp_path):
     proc = FakeProc()
     calls = []
@@ -58,12 +72,18 @@ def test_recorder_start_stop_cancel(monkeypatch, tmp_path):
     assert recorder.is_recording
     assert calls[0][0] == "arecord"
     assert "-D" in calls[0]
-    wav_path.write_bytes(b"RIFF" + b"0" * 200)
-    assert recorder.stop().endswith("u.wav")
+    first_path = _recording_path(calls[0])
+    assert first_path != str(wav_path)
+    assert first_path.startswith(str(tmp_path))
+    Path(first_path).write_bytes(b"RIFF" + b"0" * 200)
+    assert recorder.stop() == first_path
 
     recorder.start()
+    second_path = _recording_path(calls[1])
+    Path(second_path).write_bytes(b"RIFF" + b"1" * 200)
     recorder.cancel()
     assert proc.killed
+    assert not Path(second_path).exists()
 
 
 def test_recorder_selects_available_device_on_start(monkeypatch, tmp_path):
@@ -161,15 +181,40 @@ def test_recorder_stop_accepts_arecord_sigint_message(monkeypatch, tmp_path):
             return b"Aborted by signal Interrupt...\narecord: pcm_read:2272: read error: Interrupted system call"
 
     proc.stderr = FakeStderr()
+    calls = []
     wav_path = tmp_path / "u.wav"
     monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(wav_path))
-    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: proc)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: calls.append(command) or proc)
     recorder = Recorder("mic", 16000)
 
     recorder.start()
-    wav_path.write_bytes(b"RIFF" + b"0" * 200)
+    written_path = _recording_path(calls[0])
+    Path(written_path).write_bytes(b"RIFF" + b"0" * 200)
 
-    assert recorder.stop() == str(wav_path)
+    assert recorder.stop() == written_path
+
+
+def test_cleanup_stale_recordings_removes_old_temp_files(monkeypatch, tmp_path):
+    """起動時掃除で古い録音一時ファイルだけ削除する。"""
+    base_path = tmp_path / "utterance.wav"
+    stale_path = tmp_path / "utterance-old.wav"
+    fresh_path = tmp_path / "utterance-fresh.wav"
+    other_path = tmp_path / "other.wav"
+    stale_path.write_bytes(b"old")
+    fresh_path.write_bytes(b"fresh")
+    other_path.write_bytes(b"other")
+    monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(base_path))
+    monkeypatch.setattr("argos.hardware.audio.time.time", lambda: 10_000)
+    old_mtime = 10_000 - 7200
+    fresh_mtime = 10_000 - 30
+    os.utime(stale_path, (old_mtime, old_mtime))
+    os.utime(fresh_path, (fresh_mtime, fresh_mtime))
+    os.utime(other_path, (old_mtime, old_mtime))
+
+    assert cleanup_stale_recordings(max_age_seconds=3600) == 1
+    assert not stale_path.exists()
+    assert fresh_path.exists()
+    assert other_path.exists()
 
 
 def test_repair_wav_header_fixes_arecord_interrupted_size(tmp_path):
@@ -193,6 +238,21 @@ def test_repair_wav_header_fixes_arecord_interrupted_size(tmp_path):
 
     with wave.open(str(wav_path), "rb") as wav_file:
         assert wav_file.getnframes() == 1600
+
+
+def test_pad_wav_silence_adds_leading_and_trailing_frames(tmp_path):
+    """短い発話向けの前後無音追加でWAVフレーム数が増える。"""
+    wav_path = tmp_path / "short.wav"
+    with wave.open(str(wav_path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes((1000).to_bytes(2, "little", signed=True) * 1600)
+
+    _pad_wav_silence(str(wav_path), leading_seconds=0.1, trailing_seconds=0.2)
+
+    with wave.open(str(wav_path), "rb") as wav_file:
+        assert wav_file.getnframes() == 1600 + 1600 + 3200
 
 
 def test_audio_player_play_and_cancel(monkeypatch):

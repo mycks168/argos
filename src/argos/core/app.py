@@ -13,7 +13,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from argos.config import Settings
-from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level
+from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level, cleanup_stale_recordings
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
@@ -113,6 +113,7 @@ class ArgosApp:
     def __init__(self, settings: Settings) -> None:
         """各サービスクライアントと状態機械を初期化する。"""
         self._settings = settings
+        cleanup_stale_recordings()
         self._recorder = Recorder(settings.audio_input_devices or (settings.audio_input_device,), settings.audio_sample_rate)
         self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
         self._local_stt = FasterWhisperClient(
@@ -179,6 +180,7 @@ class ArgosApp:
             on_release=self._on_ptt_release,
             on_double_click=self._on_double_click,
             on_cancel=self._on_cancel,
+            should_record_short_press=self._is_auth_locked,
         )
         self._shutdown = threading.Event()
         self._auth_warning_stop = threading.Event()
@@ -414,6 +416,10 @@ class ArgosApp:
         started_at = time.monotonic()
         alert_announced = False
         while not self._auth_warning_stop.is_set() and not self._auth.is_authenticated():
+            if self._recorder.is_recording:
+                if self._auth_warning_stop.wait(0.2):
+                    return
+                continue
             alert_mode = force_alert or time.monotonic() - started_at + delay_seconds >= self._settings.auth_alert_delay_seconds
             if alert_mode:
                 self._dashboard_state.set_status("alert", "警戒中")
@@ -447,7 +453,7 @@ class ArgosApp:
         """PTT 押下時に録音を開始する。"""
         log.info("PTT ON: 録音開始")
         if self._is_auth_locked():
-            self._dashboard_state.set_status("locked", "ロック中")
+            self._dashboard_state.set_status("auth_listening", "本人確認録音中")
         else:
             self._dashboard_state.set_status("listening", "録音中")
         self._cancel_active_audio()
@@ -457,7 +463,7 @@ class ArgosApp:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
         log.info("PTT OFF: 録音停止と処理開始")
         if self._is_auth_locked():
-            self._dashboard_state.set_status("locked", "ロック中")
+            self._dashboard_state.set_status("authenticating", "本人確認中")
         else:
             self._dashboard_state.set_status("thinking", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
@@ -512,6 +518,7 @@ class ArgosApp:
 
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
+        wav_path = ""
         try:
             wav_path = self._recorder.stop()
             level = check_audio_level(wav_path)
@@ -525,6 +532,8 @@ class ArgosApp:
                 self._report_error("文字起こし", exc)
                 return
             if not transcript:
+                log.info("文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
             if self._ensure_authenticated(transcript):
                 self._greet_on_interaction()
@@ -534,8 +543,19 @@ class ArgosApp:
             self._report_error("録音", exc)
             self._speak_status(f"処理に失敗しました。{exc}")
         finally:
+            if wav_path:
+                self._remove_recording_file(wav_path)
             self._button.mark_idle()
             self._set_ready_or_locked()
+
+    def _remove_recording_file(self, wav_path: str) -> None:
+        """処理済みの録音ファイルを削除する。"""
+        try:
+            Path(wav_path).unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning("処理済み録音ファイルを削除できませんでした: %s: %s", wav_path, exc)
 
     def _transcribe_wav(self, wav_path: str) -> str:
         """stt-gatewayを優先し、未設定または失敗時はfaster-whisperで文字起こしする。"""

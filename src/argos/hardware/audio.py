@@ -9,6 +9,8 @@ import signal
 import struct
 import subprocess
 import threading
+import time
+import uuid
 import wave
 import logging
 from pathlib import Path
@@ -16,6 +18,10 @@ from collections.abc import Iterable
 
 
 WAV_PATH = "/tmp/argos/utterance.wav"
+WAV_PREFIX = "utterance-"
+STALE_RECORDING_SECONDS = 60 * 60
+STT_LEADING_SILENCE_SECONDS = 0.2
+STT_TRAILING_SILENCE_SECONDS = 0.5
 log = logging.getLogger(__name__)
 
 
@@ -44,6 +50,7 @@ class Recorder:
         self._device = self._devices[0]
         self._sample_rate = sample_rate
         self._proc: subprocess.Popen | None = None
+        self._wav_path = WAV_PATH
 
     @property
     def is_recording(self) -> bool:
@@ -55,11 +62,9 @@ class Recorder:
         if self.is_recording:
             log.warning("録音開始をスキップしました: 既に arecord が動作中です")
             return
-        Path(WAV_PATH).parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.remove(WAV_PATH)
-        except FileNotFoundError:
-            pass
+        recording_dir = Path(WAV_PATH).parent
+        recording_dir.mkdir(parents=True, exist_ok=True)
+        self._wav_path = str(recording_dir / f"{WAV_PREFIX}{time.time_ns()}-{uuid.uuid4().hex}.wav")
         self._device = select_available_input_device((self._device, *self._devices))
         cmd = [
             "arecord",
@@ -73,7 +78,7 @@ class Recorder:
             "1",
             "-t",
             "wav",
-            WAV_PATH,
+            self._wav_path,
         ]
         log.info("録音開始: %s", " ".join(cmd))
         self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -82,7 +87,8 @@ class Recorder:
         """録音を停止し、WAV パスを返す。"""
         proc = self._proc
         if proc is None:
-            return WAV_PATH
+            return self._wav_path
+        wav_path = self._wav_path
         try:
             proc.send_signal(signal.SIGINT)
             proc.wait(timeout=3)
@@ -94,9 +100,9 @@ class Recorder:
         stderr = ""
         if proc.stderr:
             stderr = proc.stderr.read().decode(errors="replace").strip()
-        if not os.path.exists(WAV_PATH):
+        if not os.path.exists(wav_path):
             raise RuntimeError(f"録音ファイルが作成されませんでした。device={self._device}, stderr={stderr}")
-        file_size = os.path.getsize(WAV_PATH)
+        file_size = os.path.getsize(wav_path)
         if file_size < 100:
             raise RuntimeError(f"録音ファイルが小さすぎます。size={file_size}, device={self._device}, stderr={stderr}")
         if proc.returncode not in (0, -signal.SIGINT):
@@ -104,8 +110,9 @@ class Recorder:
                 log.debug("arecord は SIGINT 停止時に code=%s を返しましたが、WAV は作成済みです", proc.returncode)
             else:
                 raise RuntimeError(f"arecord が失敗しました。device={self._device}, code={proc.returncode}, stderr={stderr}")
-        _repair_wav_header(WAV_PATH)
-        return WAV_PATH
+        _repair_wav_header(wav_path)
+        _pad_wav_silence(wav_path, STT_LEADING_SILENCE_SECONDS, STT_TRAILING_SILENCE_SECONDS)
+        return wav_path
 
     def cancel(self) -> None:
         """録音を破棄して停止する。"""
@@ -120,6 +127,57 @@ class Recorder:
         except OSError:
             pass
         self._proc = None
+        _remove_file_quietly(self._wav_path)
+
+
+def cleanup_stale_recordings(max_age_seconds: int = STALE_RECORDING_SECONDS) -> int:
+    """古い録音一時ファイルを削除し、削除数を返す。"""
+    recording_dir = Path(WAV_PATH).parent
+    if not recording_dir.exists():
+        return 0
+    threshold = time.time() - max_age_seconds
+    removed = 0
+    for path in recording_dir.glob(f"{WAV_PREFIX}*.wav"):
+        try:
+            if path.stat().st_mtime < threshold:
+                path.unlink()
+                removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.warning("古い録音ファイルを削除できませんでした: %s: %s", path, exc)
+    return removed
+
+
+def _remove_file_quietly(path: str) -> None:
+    """不要になった録音ファイルを存在する場合だけ削除する。"""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("録音ファイルを削除できませんでした: %s: %s", path, exc)
+
+
+def _pad_wav_silence(wav_path: str, leading_seconds: float, trailing_seconds: float) -> None:
+    """短い発話でもSTTが扱いやすいよう、WAVの前後へ無音を追加する。"""
+    try:
+        with wave.open(wav_path, "rb") as wav_file:
+            params = wav_file.getparams()
+            frames = wav_file.readframes(wav_file.getnframes())
+        if params.comptype != "NONE":
+            return
+        frame_size = params.nchannels * params.sampwidth
+        leading_frames = max(0, int(params.framerate * leading_seconds))
+        trailing_frames = max(0, int(params.framerate * trailing_seconds))
+        silence = b"\x00" * frame_size
+        padded = silence * leading_frames + frames + silence * trailing_frames
+        with wave.open(wav_path, "wb") as wav_file:
+            wav_file.setparams(params)
+            wav_file.writeframes(padded)
+        log.debug("STT向けにWAVへ無音を追加しました: %s leading=%.2f trailing=%.2f", wav_path, leading_seconds, trailing_seconds)
+    except (wave.Error, OSError) as exc:
+        log.debug("WAV無音追加をスキップしました: %s: %s", wav_path, exc)
 
 
 class AudioPlayer:
