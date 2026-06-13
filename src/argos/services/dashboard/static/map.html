@@ -86,6 +86,7 @@
     const curLat = parseFloat(params.get('cur_lat'));
     const curLng = parseFloat(params.get('cur_lng'));
     const followCurrentLocation = params.get('follow') === '1';
+    const labelMode = params.get('label_mode') || 'permanent';
 
     // 地図の初期化
     const map = L.map('map', {
@@ -117,13 +118,21 @@
     });
 
     function labelMarker(marker, title) {
-      // 音声操作中でも見分けやすいように、ラベルを常時表示する。
-      marker.bindTooltip(title, {
-        permanent: true,
-        direction: 'top',
-        offset: [0, -10],
-        className: 'map-label'
-      });
+      if (labelMode === 'permanent') {
+        marker.bindTooltip(title, {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -10],
+          className: 'map-label'
+        });
+      } else if (labelMode === 'hover') {
+        marker.bindTooltip(title, {
+          permanent: false,
+          direction: 'top',
+          offset: [0, -10],
+          className: 'map-label'
+        });
+      }
       marker.bindPopup(title);
       return marker;
     }

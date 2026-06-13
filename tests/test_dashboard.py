@@ -43,9 +43,21 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
+    assert snapshot["display_activity"]["sequence"] == 0
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
+
+
+def test_dashboard_state_wake_display_updates_activity():
+    """音声再生などで画面を起こすためのアクティビティを更新できる。"""
+    state = DashboardState()
+
+    state.wake_display()
+    snapshot = state.snapshot()
+
+    assert snapshot["display_activity"]["sequence"] == 1
+    assert snapshot["display_activity"]["updated_at"]
 
 
 def test_dashboard_state_notifies_subscribers():
@@ -194,13 +206,17 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
         assert 'id="screensaver"' in html
         assert "resetScreensaver()" in html
-        assert 'state.status.code === "listening" || state.status.code === "locked" || state.status.code === "auth_listening"' in html
+        assert 'const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening", "locked"]);' in html
+        assert "state.display_activity?.sequence" in html
         assert "showScreensaver" in html
         assert '"pointermove"' not in html
         assert 'data-code="muted"' in html
-        assert 'id="overlay-container"' in html
-        assert 'id="overlay-iframe"' in html
-        assert 'sendEvent("clear_overlay")' in html
+        assert 'id="slot-center"' in html
+        assert 'id="slot-right"' in html
+        assert 'id="iframe-center"' in html
+        assert 'id="iframe-right"' in html
+        assert 'id="swap-button"' in html
+        assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
@@ -261,8 +277,10 @@ def test_dashboard_state_supports_overlay():
     # 初期状態
     snapshot = state.snapshot()
     assert snapshot["overlay"]["active"] is False
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "conversation"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "notifications"
 
-    # 設定
+    # 設定 (後方互換の set_overlay を経由)
     state.set_overlay(
         overlay_type="map",
         title="周辺地図",
@@ -277,18 +295,42 @@ def test_dashboard_state_supports_overlay():
     assert snapshot["overlay"]["content"] == "地図テスト"
     assert snapshot["overlay"]["url"] == "http://127.0.0.1/map"
     assert snapshot["overlay"]["options"] == {"lat": 35.6, "lng": 139.6}
+    # 後方互換で right スロットに積まれていること
+    assert len(snapshot["slot_stacks"]["right"]) == 2
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
 
-    # 消去
+    # 消去 (後方互換の clear_overlay を経由)
     state.clear_overlay()
     snapshot = state.snapshot()
     assert snapshot["overlay"]["active"] is False
+    assert len(snapshot["slot_stacks"]["right"]) == 1
+
+    # 新仕様スロットスタックの直接テスト
+    state.push_overlay("center", "map", "中央地図", url="http://map")
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["center"]) == 2
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "map"
+    assert snapshot["slot_stacks"]["center"][-1]["title"] == "中央地図"
+
+    # スロット入れ替え
+    state.swap_slots()
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "notifications"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
+    assert snapshot["slot_stacks"]["right"][-1]["title"] == "中央地図"
+
+    # スロットPop
+    state.pop_overlay("right")
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["right"]) == 1
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "conversation"  # swapしたので底はconversation
 
 
 def test_apply_event_supports_overlay():
     """外部イベントAPIを介してオーバーレイの表示・消去イベントを適用できる。"""
     state = DashboardState()
 
-    # overlayイベントの適用
+    # overlayイベントの適用 (target_slot 省略時は right)
     _apply_event(state, {
         "type": "overlay",
         "overlay_type": "markdown",
@@ -304,10 +346,35 @@ def test_apply_event_supports_overlay():
     assert snapshot["overlay"]["content"] == "# タスクリスト\n- [ ] 開発"
     assert snapshot["overlay"]["url"] == "/static/reader.html"
     assert snapshot["overlay"]["options"] == {"foo": "bar"}
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "markdown"
 
-    # clear_overlayイベントの適用
-    _apply_event(state, {"type": "clear_overlay"})
+    # target_slot="center" での overlay イベントの適用
+    _apply_event(state, {
+        "type": "overlay",
+        "target_slot": "center",
+        "overlay_type": "map",
+        "title": "中央地図",
+        "url": "http://map"
+    })
     snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "map"
+
+    # swap_slots イベントの適用
+    _apply_event(state, {"type": "swap_slots"})
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "markdown"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
+
+    # clear_overlay イベントの適用 (centerスロットをpop)
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "center"})
+    snapshot = state.snapshot()
+    # centerは notifications が pop できないのでそのまま
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "notifications"
+
+    # clear_overlay イベントの適用 (rightスロットをpop)
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "right"})
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "conversation"  # 地図が消えてデフォルトに戻る
     assert snapshot["overlay"]["active"] is False
 
 
@@ -332,6 +399,8 @@ def test_dashboard_server_serves_static_files():
             assert "current-location-marker" in html
             assert "destination-marker" in html
             assert "bindTooltip" in html
+            assert "labelMode" in html
+            assert "label_mode" in html
 
         # 存在しないファイルは404
         with pytest.raises(HTTPError) as exc:

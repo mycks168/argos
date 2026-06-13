@@ -886,6 +886,7 @@ def test_stream_response_splits_tts_chunks(monkeypatch):
         "正規化:二文目です。".encode(),
         "正規化:三文目".encode(),
     ]
+    assert app._dashboard_state.snapshot()["display_activity"]["sequence"] == 3
 
 
 def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
@@ -981,6 +982,30 @@ def test_speak_response_plays_normalized_voice(monkeypatch):
     app._speak_response("返答")
 
     assert app._audio.played == ["正規化:返答".encode()]
+
+
+def test_speak_response_wakes_dashboard_display(monkeypatch):
+    """読み上げ開始時にスクリーンセーバー解除用の表示アクティビティを更新する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+
+    app._speak_response("返答")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["display_activity"]["sequence"] == 1
+
+
+def test_status_speech_wakes_dashboard_display(monkeypatch):
+    """状態通知の読み上げ開始時にも表示アクティビティを更新する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+
+    app._speak_status("確認中")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["display_activity"]["sequence"] == 1
 
 
 def test_speak_response_uses_current_slot_voicevox_speaker(monkeypatch):

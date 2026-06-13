@@ -308,7 +308,11 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
         state.clear_notifications()
         return {"status": "cleared"}
     if event_type == "overlay":
-        state.set_overlay(
+        target_slot = _optional_text(payload, "target_slot", 20) or "right"
+        if target_slot not in {"center", "right"}:
+            raise ValueError(f"無効な target_slot です: {target_slot}")
+        state.push_overlay(
+            target_slot=target_slot,
             overlay_type=_required_text(payload, "overlay_type", 40),
             title=_required_text(payload, "title", 120),
             content=_optional_text(payload, "content", 64000),
@@ -317,8 +321,14 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
         )
         return {"status": "overlay_updated"}
     if event_type == "clear_overlay":
-        state.clear_overlay()
+        target_slot = _optional_text(payload, "target_slot", 20) or "all"
+        if target_slot not in {"center", "right", "all"}:
+            raise ValueError(f"無効な target_slot です: {target_slot}")
+        state.pop_overlay(target_slot)
         return {"status": "overlay_cleared"}
+    if event_type == "swap_slots":
+        state.swap_slots()
+        return {"status": "slots_swapped"}
     raise ValueError(f"未対応のイベント種別です: {event_type}")
 
 

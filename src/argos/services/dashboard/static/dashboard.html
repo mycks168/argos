@@ -284,34 +284,37 @@
       .messages, .notifications { max-height: none; }
     }
 
-    /* オーバーレイコンテナのスタイル設定 */
-    .overlay-container {
-      position: fixed;
-      inset: 0;
-      z-index: 30;
+    /* 各スロット内の相対配置用コンテナ */
+    .slot-container {
+      position: relative;
+      height: 100%;
+      width: 100%;
+    }
+    /* スロット内オーバーレイのスタイル設定 */
+    .slot-overlay {
+      position: relative;
+      z-index: 10;
       background: rgba(7, 11, 15, 0.95);
       backdrop-filter: blur(12px);
-      display: flex;
+      display: none;
       flex-direction: column;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 250ms ease;
+      height: 100%;
+      width: 100%;
     }
-    .overlay-container.is-active {
-      opacity: 1;
-      pointer-events: auto;
+    .slot-overlay.is-active {
+      display: flex;
     }
     .overlay-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 14px 24px;
+      padding: 10px 16px;
       border-bottom: 1px solid #26323b;
       background: #0b1117;
     }
     .overlay-header h2 {
       margin: 0;
-      font-size: 20px;
+      font-size: 16px;
       color: #f4d35e;
       font-weight: 800;
     }
@@ -319,9 +322,10 @@
       border: 1px solid #e63946;
       background: rgba(230, 57, 70, 0.1);
       color: #e63946;
-      padding: 6px 18px;
+      padding: 4px 12px;
+      font-size: 12px;
       font-weight: 800;
-      border-radius: 6px;
+      border-radius: 4px;
       cursor: pointer !important;
       transition: background 150ms ease, transform 100ms ease;
     }
@@ -363,7 +367,10 @@
       <p class="eyebrow">VOICE AGENT</p>
       <div class="brand-row">
         <h1 class="brand">ARGOS</h1>
-        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+        <div style="display: flex; gap: 5px;">
+          <button id="swap-button" class="control-button" type="button">入れ替え</button>
+          <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+        </div>
       </div>
       <div class="font-size-control" role="group" aria-label="フォントサイズ">
         <button class="font-size-button" type="button" data-font-size-option="small" aria-pressed="false">小</button>
@@ -373,6 +380,7 @@
       <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       <div id="clock" class="clock">--:--</div>
       <div id="date" class="date"></div>
+      <div id="window-size" style="color: #aebdc6; font-size: 14px; margin-top: 8px;">-- x --</div>
       <div class="agent">
         <div class="agent-label">CURRENT SLOT</div>
         <div id="agent-name" class="agent-name">--</div>
@@ -382,26 +390,45 @@
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
     </section>
-    <section>
-      <p class="eyebrow">CONVERSATION</p>
-      <div id="messages" class="messages"></div>
+    
+    <!-- 中央スロット (スロット1) -->
+    <section id="slot-center">
+      <div id="slot-container-center" class="slot-container">
+        <div id="conversation-view" class="slot-container">
+          <p class="eyebrow">CONVERSATION</p>
+          <div id="messages" class="messages"></div>
+        </div>
+        <div id="overlay-center" class="slot-overlay">
+          <div class="overlay-header">
+            <h2 id="overlay-title-center" class="overlay-title">--</h2>
+            <button class="overlay-close" type="button" data-slot="center">閉じる</button>
+          </div>
+          <div class="overlay-body">
+            <iframe id="iframe-center" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+          </div>
+        </div>
+      </div>
     </section>
-    <section class="notifications-panel">
-      <p class="eyebrow">NOTIFICATIONS</p>
-      <div id="notifications" class="notifications"></div>
+
+    <!-- 右スロット (スロット2) -->
+    <section class="notifications-panel" id="slot-right">
+      <div id="slot-container-right" class="slot-container">
+        <div id="notifications-view" class="slot-container">
+          <p class="eyebrow">NOTIFICATIONS</p>
+          <div id="notifications" class="notifications"></div>
+        </div>
+        <div id="overlay-right" class="slot-overlay">
+          <div class="overlay-header">
+            <h2 id="overlay-title-right" class="overlay-title">--</h2>
+            <button class="overlay-close" type="button" data-slot="right">閉じる</button>
+          </div>
+          <div class="overlay-body">
+            <iframe id="iframe-right" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
-
-  <!-- 汎用オーバーレイモーダルパネル -->
-  <div id="overlay-container" class="overlay-container" aria-hidden="true">
-    <div class="overlay-header">
-      <h2 id="overlay-title">--</h2>
-      <button id="overlay-close" class="overlay-close" type="button">閉じる</button>
-    </div>
-    <div class="overlay-body">
-      <iframe id="overlay-iframe" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
-    </div>
-  </div>
 
   <script>
     const messages = document.getElementById("messages");
@@ -419,21 +446,148 @@
     const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
 
-    // オーバーレイ用のDOM要素
-    const overlayContainer = document.getElementById("overlay-container");
-    const overlayTitle = document.getElementById("overlay-title");
-    const overlayIframe = document.getElementById("overlay-iframe");
-    const overlayClose = document.getElementById("overlay-close");
+    const swapButton = document.getElementById("swap-button");
+
+    // 各スロット用のDOM要素
+    const slotCenter = document.getElementById("slot-center");
+    const slotContainerCenter = document.getElementById("slot-container-center");
+    const conversationView = document.getElementById("conversation-view");
+    const overlayCenter = document.getElementById("overlay-center");
+    const overlayTitleCenter = document.getElementById("overlay-title-center");
+    const iframeCenter = document.getElementById("iframe-center");
+
+    const slotRight = document.getElementById("slot-right");
+    const slotContainerRight = document.getElementById("slot-container-right");
+    const notificationsView = document.getElementById("notifications-view");
+    const overlayRight = document.getElementById("overlay-right");
+    const overlayTitleRight = document.getElementById("overlay-title-right");
+    const iframeRight = document.getElementById("iframe-right");
+
+    const overlayCloseButtons = Array.from(document.querySelectorAll(".overlay-close"));
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
     const fontSizeStorageKey = "argos-dashboard-font-size";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    
+    // スロットごとの表示キャッシュ
+    let prevSlotsState = {
+      center: { type: "", url: "", content: "" },
+      right: { type: "", url: "", content: "" }
+    };
+
+    function renderSlots(state) {
+      const stacks = state.slot_stacks || {
+        center: [{"type": "conversation", "title": "会話"}],
+        right: [{"type": "notifications", "title": "通知"}]
+      };
+
+      const centerTop = stacks.center[stacks.center.length - 1];
+      const rightTop = stacks.right[stacks.right.length - 1];
+
+      // デフォルトビューの物理的な配置（アペンド先）をスタックに合わせて移動する
+      if (centerTop.type === "conversation") {
+        if (conversationView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(conversationView, overlayCenter);
+        }
+      } else if (centerTop.type === "notifications") {
+        if (notificationsView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(notificationsView, overlayCenter);
+        }
+      }
+
+      if (rightTop.type === "conversation") {
+        if (conversationView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(conversationView, overlayRight);
+        }
+      } else if (rightTop.type === "notifications") {
+        if (notificationsView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(notificationsView, overlayRight);
+        }
+      }
+
+      const centerDefaultView = (centerTop.type === "notifications") ? notificationsView : conversationView;
+      const rightDefaultView = (rightTop.type === "conversation") ? conversationView : notificationsView;
+
+      renderSlot("center", centerTop, centerDefaultView, overlayCenter, overlayTitleCenter, iframeCenter);
+      renderSlot("right", rightTop, rightDefaultView, overlayRight, overlayTitleRight, iframeRight);
+    }
+
+    function renderSlot(slotName, topItem, defaultView, overlayEl, titleEl, iframeEl) {
+      const prev = prevSlotsState[slotName];
+      const type = topItem.type;
+      const url = topItem.url || "";
+      const content = topItem.content || "";
+      const title = topItem.title || "表示";
+
+      // チラつきと再描画を防ぐため、状態に変更がない場合は何もしない
+      if (prev.type === type && prev.url === url && prev.content === content) {
+        return;
+      }
+
+      prev.type = type;
+      prev.url = url;
+      prev.content = content;
+
+      if (type === "conversation") {
+        defaultView.style.display = "";
+        overlayEl.classList.remove("is-active");
+        iframeEl.src = "about:blank";
+        iframeEl.setAttribute("data-src", "about:blank");
+        iframeEl.onload = null;
+      } else if (type === "notifications") {
+        defaultView.style.display = "";
+        overlayEl.classList.remove("is-active");
+        iframeEl.src = "about:blank";
+        iframeEl.setAttribute("data-src", "about:blank");
+        iframeEl.onload = null;
+      } else {
+        defaultView.style.display = "none";
+        titleEl.textContent = title;
+        const targetUrl = url || "about:blank";
+
+        if (iframeEl.getAttribute("data-src") !== targetUrl) {
+          iframeEl.setAttribute("data-src", targetUrl);
+          
+          if (content) {
+            iframeEl.onload = () => {
+              setTimeout(() => {
+                try {
+                  iframeEl.contentWindow.postMessage({
+                    type: "content",
+                    data: content,
+                    options: topItem.options || {}
+                  }, "*");
+                } catch (e) {
+                  console.error("Failed to post message to iframe:", e);
+                }
+              }, 50);
+            };
+          } else {
+            iframeEl.onload = null;
+          }
+          iframeEl.src = targetUrl;
+        } else if (content) {
+          try {
+            iframeEl.contentWindow.postMessage({
+              type: "content",
+              data: content,
+              options: topItem.options || {}
+            }, "*");
+          } catch (e) {
+            // onloadでの実行を待つ
+          }
+        }
+
+        overlayEl.classList.add("is-active");
+      }
+    }
     let splashTimer = null;
     let screensaverTimer = null;
     let muted = false;
     let changingVolume = false;
+    let previousDisplayActivitySequence = null;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -441,6 +595,7 @@
       const now = new Date();
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
       document.getElementById("date").textContent = now.toLocaleDateString("ja-JP", {month:"long", day:"numeric", weekday:"short"});
+      document.getElementById("window-size").textContent = `${window.innerWidth} x ${window.innerHeight}`;
     }
     function applyFontSize(size) {
       const normalized = fontSizeOptions.has(size) ? size : "medium";
@@ -497,9 +652,15 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      if (state.status.code === "listening" || state.status.code === "locked" || state.status.code === "auth_listening") {
+      const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening", "locked"]);
+      if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }
+      const displayActivitySequence = state.display_activity?.sequence ?? 0;
+      if (previousDisplayActivitySequence !== null && displayActivitySequence !== previousDisplayActivitySequence) {
+        resetScreensaver();
+      }
+      previousDisplayActivitySequence = displayActivitySequence;
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
       if (nextMessages !== previousMessages) {
@@ -529,53 +690,8 @@
         previousNotifications = nextNotifications;
       }
 
-      // オーバーレイの描画処理
-      if (state.overlay && state.overlay.active) {
-        overlayTitle.textContent = state.overlay.title || "表示";
-        const targetUrl = state.overlay.url || "about:blank";
-        if (overlayIframe.getAttribute("data-src") !== targetUrl) {
-          overlayIframe.setAttribute("data-src", targetUrl);
-          if (state.overlay.content) {
-            overlayIframe.onload = () => {
-              // iframe内の受信スクリプトが確実に準備完了するよう、わずかに遅延させる
-              setTimeout(() => {
-                try {
-                  overlayIframe.contentWindow.postMessage({
-                    type: "content",
-                    data: state.overlay.content,
-                    options: state.overlay.options || {}
-                  }, "*");
-                } catch (e) {
-                  console.error("Failed to post message to iframe:", e);
-                }
-              }, 50);
-            };
-          } else {
-            overlayIframe.onload = null;
-          }
-          overlayIframe.src = targetUrl;
-        } else if (state.overlay.content) {
-          try {
-            overlayIframe.contentWindow.postMessage({
-              type: "content",
-              data: state.overlay.content,
-              options: state.overlay.options || {}
-            }, "*");
-          } catch (e) {
-            // iframeのコンテンツウインドウがまだ読み込み完了していない可能性があり、その場合はonloadで処理される
-          }
-        }
-        overlayContainer.classList.add("is-active");
-        overlayContainer.setAttribute("aria-hidden", "false");
-      } else {
-        overlayContainer.classList.remove("is-active");
-        overlayContainer.setAttribute("aria-hidden", "true");
-        if (overlayIframe.getAttribute("data-src") !== "about:blank") {
-          overlayIframe.setAttribute("data-src", "about:blank");
-          overlayIframe.src = "about:blank";
-          overlayIframe.onload = null;
-        }
-      }
+      // スロットスタックの描画処理
+      renderSlots(state);
     }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});
@@ -649,8 +765,15 @@
         console.error("Failed to send event:", error);
       }
     }
-    overlayClose.addEventListener("click", () => {
-      sendEvent("clear_overlay").catch(error => console.error(error));
+    overlayCloseButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        const slot = button.getAttribute("data-slot");
+        sendEvent("clear_overlay", { target_slot: slot }).catch(error => console.error(error));
+      });
+    });
+
+    swapButton.addEventListener("click", () => {
+      sendEvent("swap_slots").catch(error => console.error(error));
     });
 
     const stream = new EventSource("/api/stream");
