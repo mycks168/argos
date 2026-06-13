@@ -618,6 +618,7 @@ class ArgosApp:
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
+            self._set_ready_or_locked()
 
     def _speak_response(self, text: str) -> None:
         """エージェント応答を tts-filter と TTS に通して再生する。"""
@@ -642,6 +643,7 @@ class ArgosApp:
             log.exception("TTSに失敗しました")
             return
         try:
+            self._wake_dashboard_display()
             self._audio.play_wav(wav_data)
         except Exception as exc:
             log.exception("音声再生に失敗しました")
@@ -763,6 +765,7 @@ class ArgosApp:
                 self._drain_tts_queue(tts_queue)
                 return
             try:
+                self._wake_dashboard_display()
                 self._audio.play_wav(wav_data)
             except Exception as exc:
                 log.exception("音声再生に失敗しました")
@@ -802,10 +805,15 @@ class ArgosApp:
             log.exception("状態通知のTTSに失敗しました")
             return
         try:
+            self._wake_dashboard_display()
             self._audio.play_wav(wav_data)
         except Exception as exc:
             log.exception("状態通知の音声再生に失敗しました")
             self._report_error("音声再生", exc)
+
+    def _wake_dashboard_display(self) -> None:
+        """読み上げ開始に合わせてダッシュボードのスクリーンセーバーを解除する。"""
+        self._dashboard_state.wake_display()
 
     def _synthesize_tts(self, text: str, slot_key: str = "") -> bytes:
         """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Navigation Map</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+      color: #edf3f7;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+    .leaflet-tile-container {
+      filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(95%);
+    }
+    .leaflet-container {
+      background: #0d151c !important;
+    }
+    .current-location-marker {
+      align-items: center;
+      background: #28a8ff;
+      border: 4px solid #fff;
+      border-radius: 999px;
+      box-shadow: 0 0 0 8px rgba(40, 168, 255, 0.2), 0 4px 12px rgba(0, 0, 0, 0.6);
+      display: flex;
+      height: 30px;
+      justify-content: center;
+      width: 30px;
+    }
+    .current-location-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 9px;
+      width: 9px;
+    }
+    .heading-arrow {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 700;
+      width: 0;
+      height: 0;
+      margin-left: -10px;
+      margin-top: -47px;
+      border-left: 10px solid transparent;
+      border-right: 10px solid transparent;
+      border-bottom: 24px solid #f4d35e;
+      filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.7));
+      pointer-events: none;
+      transform-origin: 10px 47px;
+      opacity: 0;
+      transition: opacity 160ms ease, transform 120ms linear;
+    }
+    .heading-arrow.is-visible {
+      opacity: 1;
+    }
+    .nav-controls {
+      position: absolute;
+      left: 12px;
+      top: 12px;
+      z-index: 800;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .nav-button {
+      border: 1px solid rgba(237, 243, 247, 0.35);
+      background: rgba(11, 17, 23, 0.86);
+      color: #edf3f7;
+      border-radius: 8px;
+      padding: 8px 11px;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+    .nav-button[aria-pressed="true"] {
+      border-color: #f4d35e;
+      color: #f4d35e;
+      background: rgba(42, 36, 19, 0.9);
+    }
+    .nav-status {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      z-index: 800;
+      max-width: calc(100% - 24px);
+      border: 1px solid rgba(237, 243, 247, 0.2);
+      border-radius: 8px;
+      background: rgba(11, 17, 23, 0.82);
+      color: #c3d0d7;
+      font-size: 13px;
+      font-weight: 700;
+      padding: 7px 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="heading-arrow" class="heading-arrow" aria-hidden="true"></div>
+  <div class="nav-controls" role="group" aria-label="ナビ表示">
+    <button id="north-up" class="nav-button" type="button" data-orientation="north" aria-pressed="true">北上</button>
+    <button id="heading-up" class="nav-button" type="button" data-orientation="heading" aria-pressed="false">進行方向</button>
+    <button id="zoom-out" class="nav-button" type="button" aria-label="縮小">−</button>
+    <button id="zoom-in" class="nav-button" type="button" aria-label="拡大">＋</button>
+  </div>
+  <div id="nav-status" class="nav-status">現在地を取得中</div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const params = new URLSearchParams(window.location.search);
+    const initialZoom = Number.parseInt(params.get("zoom") || "15", 10);
+    const intervalMs = Math.max(1000, Number.parseInt(params.get("interval") || "2000", 10));
+    const defaultOrientation = params.get("orientation") === "heading" ? "heading" : "north";
+
+    const map = L.map("map", {
+      zoomControl: false,
+      attributionControl: false,
+    });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+    }).addTo(map);
+
+    const currentLocationIcon = L.divIcon({
+      className: "",
+      html: '<div class="current-location-marker" aria-label="現在地"></div>',
+      iconSize: [38, 38],
+      iconAnchor: [19, 19],
+    });
+
+    const statusEl = document.getElementById("nav-status");
+    const headingArrow = document.getElementById("heading-arrow");
+    const orientationButtons = Array.from(document.querySelectorAll("[data-orientation]"));
+    let orientation = defaultOrientation;
+    let currentMarker = null;
+    let currentCircle = null;
+    let currentCourse = null;
+    let hasCentered = false;
+    let mapRotation = 0;
+
+    function updateOrientationButtons() {
+      orientationButtons.forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.orientation === orientation ? "true" : "false");
+      });
+    }
+
+    function stripRotation(transform) {
+      return String(transform || "").replace(/\s*rotate\([^)]*\)/g, "");
+    }
+
+    function applyMapRotation() {
+      const pane = map.getPane("mapPane");
+      if (!pane) {
+        return;
+      }
+      const baseTransform = stripRotation(pane.style.transform);
+      pane.style.transformOrigin = "50% 50%";
+      pane.style.transform = mapRotation ? `${baseTransform} rotate(${mapRotation}deg)` : baseTransform;
+    }
+
+    function setOrientation(nextOrientation) {
+      orientation = nextOrientation === "heading" ? "heading" : "north";
+      updateOrientationButtons();
+      updateRotation();
+    }
+
+    function updateRotation() {
+      if (orientation === "heading" && Number.isFinite(currentCourse)) {
+        mapRotation = -currentCourse;
+      } else {
+        mapRotation = 0;
+      }
+      applyMapRotation();
+      if (Number.isFinite(currentCourse)) {
+        headingArrow.classList.add("is-visible");
+        headingArrow.style.transform = `rotate(${orientation === "heading" ? 0 : currentCourse}deg)`;
+      } else {
+        headingArrow.classList.remove("is-visible");
+      }
+    }
+
+    function upsertCurrentLocation(location) {
+      const lat = Number(location.lat);
+      const lng = Number(location.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+        throw new Error("現在地の座標がありません");
+      }
+      const latLng = [lat, lng];
+      currentCourse = Number.isFinite(Number(location.course)) ? Number(location.course) : null;
+
+      if (!currentCircle) {
+        currentCircle = L.circle(latLng, {
+          color: "#69b7e4",
+          fillColor: "#69b7e4",
+          fillOpacity: 0.16,
+          radius: 80,
+        }).addTo(map);
+      } else {
+        currentCircle.setLatLng(latLng);
+      }
+
+      if (!currentMarker) {
+        currentMarker = L.marker(latLng, { icon: currentLocationIcon }).addTo(map);
+      } else {
+        currentMarker.setLatLng(latLng);
+      }
+
+      map.setView(latLng, hasCentered ? map.getZoom() : initialZoom, { animate: hasCentered });
+      hasCentered = true;
+      updateRotation();
+      const speed = Number(location.speed_kmh);
+      const speedText = Number.isFinite(speed) ? ` / ${Math.round(speed)} km/h` : "";
+      statusEl.textContent = `現在地追従中${speedText}`;
+    }
+
+    async function updateLocation() {
+      try {
+        const response = await fetch("/api/location", { cache: "no-store" });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        const location = await response.json();
+        if (!location.available) {
+          throw new Error("現在地を取得できません");
+        }
+        upsertCurrentLocation(location);
+      } catch (error) {
+        statusEl.textContent = `現在地更新エラー: ${error.message}`;
+      }
+    }
+
+    orientationButtons.forEach(button => {
+      button.addEventListener("click", () => setOrientation(button.dataset.orientation));
+    });
+    document.getElementById("zoom-in").addEventListener("click", () => {
+      map.setZoom(map.getZoom() + 1);
+      requestAnimationFrame(applyMapRotation);
+    });
+    document.getElementById("zoom-out").addEventListener("click", () => {
+      map.setZoom(map.getZoom() - 1);
+      requestAnimationFrame(applyMapRotation);
+    });
+    map.on("move zoom", () => requestAnimationFrame(applyMapRotation));
+
+    updateOrientationButtons();
+    map.setView([35.6895, 139.6917], initialZoom);
+    updateLocation();
+    setInterval(updateLocation, intervalMs);
+  </script>
+</body>
+</html>
