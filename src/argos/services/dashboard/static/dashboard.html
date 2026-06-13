@@ -111,10 +111,10 @@
     .status-panel { position: relative; padding-left: 54px; }
     .volume-control {
       position: absolute;
-      left: 13px;
+      left: 10px;
       top: 16px;
       bottom: 16px;
-      width: 26px;
+      width: 38px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -122,7 +122,7 @@
     }
     .volume-slider {
       flex: 1;
-      width: 26px;
+      width: 38px;
       min-height: 180px;
       accent-color: #69b7e4;
       writing-mode: vertical-lr;
@@ -130,9 +130,9 @@
       cursor: pointer !important;
     }
     .volume-label {
-      width: 32px;
+      width: 38px;
       color: #aebdc6;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 800;
       text-align: center;
       font-variant-numeric: tabular-nums;
@@ -140,8 +140,8 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
-    .clock { margin-top: 18px; color: #f4d35e; font-size: var(--clock-font-size); font-variant-numeric: tabular-nums; }
-    .date { margin-top: 4px; color: #aebdc6; font-size: 15px; }
+    .clock { margin-top: 0; color: #f4d35e; font-size: var(--clock-font-size); font-variant-numeric: tabular-nums; }
+    .date { margin-top: 0; color: #aebdc6; font-size: 18px; }
     .agent {
       margin-top: 18px;
       padding: 9px 10px;
@@ -355,6 +355,66 @@
       border: none;
       background: transparent;
     }
+
+    .clock-date-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .slots-container {
+      margin-top: auto;
+    }
+
+    /* 設定モーダル */
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .settings-modal-content {
+      width: min(400px, 90vw);
+      border: 1px solid #354855;
+      background: #0b1117;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    .settings-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #26323b;
+      background: #0d151c;
+    }
+    .settings-modal-header h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #edf3f7;
+      font-weight: 800;
+    }
+    .settings-modal-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .settings-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .settings-label {
+      color: #8ca0ad;
+      font-size: 12px;
+      font-weight: 700;
+    }
   </style>
 </head>
 <body>
@@ -367,8 +427,36 @@
       <div class="splash-bars"><span></span><span></span><span></span></div>
     </div>
   </div>
+  <!-- 設定モーダル -->
+  <div id="settings-modal" class="settings-modal" aria-hidden="true" style="display: none;">
+    <div class="settings-modal-content">
+      <div class="settings-modal-header">
+        <h2>システム設定</h2>
+        <button id="settings-close-button" class="control-button" type="button">閉じる</button>
+      </div>
+      <div class="settings-modal-body">
+        <div class="settings-row">
+          <span class="settings-label">画面レイアウト</span>
+          <button id="swap-button" class="control-button" type="button" style="width: 100%;">左右入れ替え</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">表示フォントサイズ</span>
+          <div class="font-size-control" role="group" aria-label="フォントサイズ">
+            <button class="font-size-button" type="button" data-font-size-option="small" aria-pressed="false">小</button>
+            <button class="font-size-button" type="button" data-font-size-option="medium" aria-pressed="true">中</button>
+            <button class="font-size-button" type="button" data-font-size-option="large" aria-pressed="false">大</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">会話セッション</span>
+          <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <main class="dashboard">
-    <section class="status-panel">
+    <section class="status-panel" style="display: flex; flex-direction: column;">
       <div class="volume-control">
         <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" step="5" value="90" aria-label="読み上げ音量">
         <div id="volume-label" class="volume-label">90</div>
@@ -377,27 +465,28 @@
       <div class="brand-row">
         <h1 class="brand">ARGOS</h1>
         <div style="display: flex; gap: 5px;">
-          <button id="swap-button" class="control-button" type="button">入れ替え</button>
           <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+          <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
         </div>
       </div>
-      <div class="font-size-control" role="group" aria-label="フォントサイズ">
-        <button class="font-size-button" type="button" data-font-size-option="small" aria-pressed="false">小</button>
-        <button class="font-size-button" type="button" data-font-size-option="medium" aria-pressed="true">中</button>
-        <button class="font-size-button" type="button" data-font-size-option="large" aria-pressed="false">大</button>
+      
+      <div class="clock-date-row">
+        <div id="clock" class="clock">--:--</div>
+        <div id="date" class="date"></div>
       </div>
-      <div id="slots" class="slots" aria-label="エージェントスロット"></div>
-      <div id="clock" class="clock">--:--</div>
-      <div id="date" class="date"></div>
-      <div id="window-size" style="color: #aebdc6; font-size: 14px; margin-top: 8px;">-- x --</div>
+
       <div class="agent">
         <div class="agent-label">CURRENT SLOT</div>
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
-        <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
       </div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
+      </div>
+
+      <div class="slots-container">
+        <p class="eyebrow" style="margin-top: 18px; margin-bottom: 4px;">SLOTS</p>
+        <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       </div>
     </section>
     
@@ -609,7 +698,6 @@
       const now = new Date();
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
       document.getElementById("date").textContent = now.toLocaleDateString("ja-JP", {month:"long", day:"numeric", weekday:"short"});
-      document.getElementById("window-size").textContent = `${window.innerWidth} x ${window.innerHeight}`;
     }
     function applyFontSize(size) {
       const normalized = fontSizeOptions.has(size) ? size : "medium";
@@ -798,6 +886,28 @@
         console.error("Failed to send event:", error);
       }
     }
+
+    // 設定モーダルの制御
+    const settingsModal = document.getElementById("settings-modal");
+    const settingsOpenButton = document.getElementById("settings-open-button");
+    const settingsCloseButton = document.getElementById("settings-close-button");
+
+    settingsOpenButton.addEventListener("click", () => {
+      settingsModal.style.display = "flex";
+      settingsModal.setAttribute("aria-hidden", "false");
+    });
+
+    settingsCloseButton.addEventListener("click", () => {
+      settingsModal.style.display = "none";
+      settingsModal.setAttribute("aria-hidden", "true");
+    });
+
+    settingsModal.addEventListener("click", (e) => {
+      if (e.target === settingsModal) {
+        settingsModal.style.display = "none";
+        settingsModal.setAttribute("aria-hidden", "true");
+      }
+    });
     overlayCloseButtons.forEach(button => {
       button.addEventListener("click", () => {
         const slot = button.getAttribute("data-slot");
