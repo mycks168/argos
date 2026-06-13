@@ -325,6 +325,25 @@ def test_dashboard_control_updates_audio_volume(monkeypatch):
     assert snapshot["audio"]["volume"] == 42
 
 
+def test_dashboard_control_resets_current_agent_session(monkeypatch):
+    """ダッシュボード操作で現在スロットのエージェントセッションをリセットする。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    result = app._handle_dashboard_control({"action": "reset_agent_session"})
+    snapshot = app._dashboard_state.snapshot()
+
+    assert result == {
+        "muted": False,
+        "volume": 90,
+        "session_reset": True,
+        "slot": {"name": "作業", "provider": "codex"},
+    }
+    assert app._agent.reset is True
+    assert snapshot["notifications"][0]["title"] == "セッションリセット"
+    assert snapshot["notifications"][0]["source"] == "ARGOS"
+
+
 def test_app_restores_audio_state(monkeypatch, tmp_path):
     """起動時に保存済みの音量とミュート状態を復元する。"""
     _patch_app(monkeypatch)

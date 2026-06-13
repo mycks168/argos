@@ -220,6 +220,15 @@
       opacity: 1;
     }
     .control-button:disabled { opacity: 0.55; }
+    .session-reset-button {
+      margin-top: 10px;
+      width: 100%;
+    }
+    .session-reset-button[data-confirm="true"] {
+      border-color: #f4d35e;
+      color: #f4d35e;
+      opacity: 1;
+    }
     .font-size-control {
       display: flex;
       gap: 5px;
@@ -385,6 +394,7 @@
         <div class="agent-label">CURRENT SLOT</div>
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
+        <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
       </div>
       <div id="status" class="status" data-code="ready">
         <span class="status-dot"></span><span id="status-label">待機中</span>
@@ -441,6 +451,7 @@
     const agentProvider = document.getElementById("agent-provider");
     const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
+    const sessionResetButton = document.getElementById("session-reset-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
     const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
@@ -588,6 +599,7 @@
     let muted = false;
     let changingVolume = false;
     let previousDisplayActivitySequence = null;
+    let sessionResetConfirmTimer = null;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -700,6 +712,7 @@
     async function sendControl(action, values = {}) {
       muteButton.disabled = true;
       volumeSlider.disabled = true;
+      sessionResetButton.disabled = true;
       try {
         const headers = {"Content-Type": "application/json"};
         if (dashboardToken) {
@@ -717,10 +730,27 @@
       } finally {
         muteButton.disabled = false;
         volumeSlider.disabled = false;
+        sessionResetButton.disabled = false;
       }
     }
     muteButton.addEventListener("click", () => {
       sendControl(muted ? "unmute" : "mute").catch(error => console.error(error));
+    });
+    sessionResetButton.addEventListener("click", () => {
+      if (sessionResetButton.dataset.confirm !== "true") {
+        sessionResetButton.dataset.confirm = "true";
+        sessionResetButton.textContent = "もう一度で実行";
+        window.clearTimeout(sessionResetConfirmTimer);
+        sessionResetConfirmTimer = window.setTimeout(() => {
+          sessionResetButton.dataset.confirm = "false";
+          sessionResetButton.textContent = "セッションリセット";
+        }, 5000);
+        return;
+      }
+      window.clearTimeout(sessionResetConfirmTimer);
+      sessionResetButton.dataset.confirm = "false";
+      sessionResetButton.textContent = "セッションリセット";
+      sendControl("reset_agent_session").catch(error => console.error(error));
     });
     volumeSlider.addEventListener("input", () => {
       changingVolume = true;

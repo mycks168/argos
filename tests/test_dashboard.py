@@ -191,6 +191,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="volume-slider"' in html
         assert 'aria-label="読み上げ音量"' in html
         assert 'sendControl("set_volume", {volume})' in html
+        assert 'id="session-reset-button"' in html
+        assert "セッションリセット" in html
+        assert "もう一度で実行" in html
+        assert 'sendControl("reset_agent_session")' in html
         assert 'aria-label="フォントサイズ"' in html
         assert 'data-font-size-option="small"' in html
         assert 'data-font-size-option="medium"' in html
