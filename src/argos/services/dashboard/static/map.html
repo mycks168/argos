@@ -91,7 +91,7 @@
     // 地図の初期化
     const map = L.map('map', {
       zoomControl: false // すっきりしたダッシュボード外観にするためズームコントロールを非表示に
-    });
+    }).setView([35.6895, 139.6917], 13); // ビュー初期化前のオブジェクト追加エラーを防ぐため仮の初期ビューを設定
 
     // OpenStreetMapタイルレイヤーを追加
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -117,6 +117,11 @@
       tooltipAnchor: [0, -30]
     });
 
+    /**
+     * 目的地アイコンを特定の色で作成する。
+     * @param {string} color - カラーコード
+     * @returns {L.DivIcon} Leaflet DivIcon オブジェクト
+     */
     function createDestinationIcon(color) {
       const bgColor = color || '#ff4d4d';
       return L.divIcon({
@@ -129,6 +134,12 @@
       });
     }
 
+    /**
+     * マーカーにラベルをバインドする。
+     * @param {L.Marker} marker - マーカー
+     * @param {string} title - 表示テキスト
+     * @returns {L.Marker} マーカー
+     */
     function labelMarker(marker, title) {
       if (labelMode === 'permanent') {
         marker.bindTooltip(title, {
@@ -149,6 +160,59 @@
       return marker;
     }
 
+    /**
+     * マップの表示範囲をマーカー群（現在地・目的地など）に合わせて調整する。
+     * ズームレベルが変わる必要がある場合、または現在地が画面外に出そうな場合のみ再描画する。
+     * @param {boolean} force - 真の場合、ズーム等の変化の有無に関わらず強制的に即座に（アニメーションなしで）調整する。
+     */
+    function adjustMapView(force = false) {
+      if (markers.length === 0) {
+        return;
+      }
+      const group = new L.featureGroup(markers);
+      if (markers.length === 1) {
+        map.setView(markers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
+      } else {
+        const targetBounds = group.getBounds().pad(0.15);
+        if (force) {
+          map.fitBounds(targetBounds, { animate: false });
+          const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
+          if (zoomOffset !== 0) {
+            map.setZoom(map.getZoom() + zoomOffset, { animate: false });
+          }
+          return;
+        }
+
+        // 全マーカーが収まる最適なズームレベルを取得
+        const idealZoom = map.getBoundsZoom(targetBounds);
+        const currentZoom = map.getZoom();
+
+        // 現在地が現在の表示範囲（マージン付き）からはみ出ているかチェック
+        let isOutOfFrame = false;
+        if (currentMarker) {
+          const currentBounds = map.getBounds();
+          const innerBounds = currentBounds.pad(-0.1);
+          if (!innerBounds.contains(currentMarker.getLatLng())) {
+            isOutOfFrame = true;
+          }
+        }
+
+        // ズームが変わるか、現在地が範囲外にはみ出たときだけ再描画
+        if (idealZoom !== currentZoom || isOutOfFrame) {
+          map.fitBounds(targetBounds);
+          const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
+          if (zoomOffset !== 0) {
+            map.setZoom(map.getZoom() + zoomOffset);
+          }
+        }
+      }
+    }
+
+    /**
+     * 現在地をマップ上に追加、または更新する。
+     * @param {number} lat - 緯度
+     * @param {number} lng - 経度
+     */
     function upsertCurrentLocation(lat, lng) {
       if (isNaN(lat) || isNaN(lng)) {
         return;
@@ -174,8 +238,16 @@
       } else {
         currentMarker.setLatLng(latLng);
       }
+
+      // 追従モードの場合は、現在地更新時に必要に応じて表示範囲を調整
+      if (followCurrentLocation) {
+        adjustMapView(false);
+      }
     }
 
+    /**
+     * 現在地追従のループを開始する。
+     */
     function startCurrentLocationFollow() {
       async function updateLocation() {
         try {
@@ -232,20 +304,7 @@
     }
 
     // 地図範囲の自動調整
-    if (markers.length > 0) {
-      const group = new L.featureGroup(markers);
-      if (markers.length === 1) {
-        map.setView(markers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
-      } else {
-        map.fitBounds(group.getBounds().pad(0.15));
-        const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
-        if (zoomOffset !== 0) {
-          map.setZoom(map.getZoom() + zoomOffset);
-        }
-      }
-    } else {
-      map.setView([35.6895, 139.6917], 13);
-    }
+    adjustMapView(true);
 
     if (followCurrentLocation) {
       startCurrentLocationFollow();
