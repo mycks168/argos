@@ -212,7 +212,11 @@
       if (markers.length === 1) {
         map.setView(markers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
       } else {
-        map.fitBounds(group.getBounds().pad(0.25));
+        map.fitBounds(group.getBounds().pad(0.15));
+        const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
+        if (zoomOffset !== 0) {
+          map.setZoom(map.getZoom() + zoomOffset);
+        }
       }
     } else {
       map.setView([35.6895, 139.6917], 13);
