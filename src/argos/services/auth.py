@@ -35,11 +35,17 @@ class AuthGate:
         self._failure_threshold = failure_threshold
         self._trusted_until: datetime | None = None
         self._failures = 0
+        self._has_authenticated_once = False
 
     @property
     def enabled(self) -> bool:
         """認証ゲートが有効か返す。"""
         return self._enabled
+
+    @property
+    def has_authenticated_once(self) -> bool:
+        """一度でも認証されたか返す。"""
+        return self._has_authenticated_once
 
     def is_authenticated(self, now: datetime | None = None) -> bool:
         """現在の認証状態を返す。"""
@@ -54,6 +60,7 @@ class AuthGate:
             return
         current = now or datetime.now().astimezone()
         self._trusted_until = current + self._trust_duration
+        self._has_authenticated_once = True
 
     def verify_keyword(self, phrase: str, now: datetime | None = None) -> AuthResult:
         """音声キーワードでロック解除を試みる。"""

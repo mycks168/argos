@@ -452,11 +452,24 @@ class ArgosApp:
             log.exception("本人確認警告音の再生に失敗しました")
             self._report_error("本人確認警告音", exc)
 
+    def _play_auth_lock_warning(self) -> None:
+        """本人確認ロック中の警告音を非同期に再生する。"""
+        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
+            return
+        try:
+            tone = build_auth_warning_tone(self._settings.voicevox_sample_rate)
+            threading.Thread(target=self._audio.play_wav, args=(tone,), daemon=True).start()
+        except Exception as exc:
+            log.exception("本人確認ロック警告音の再生に失敗しました")
+            self._report_error("本人確認警告音", exc)
+
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         log.info("PTT ON: 録音開始")
         if self._is_auth_locked():
             self._dashboard_state.set_status("auth_listening", "本人確認録音中")
+            if self._auth.has_authenticated_once:
+                self._play_auth_lock_warning()
         else:
             self._dashboard_state.set_status("listening", "録音中")
         self._cancel_active_audio()
