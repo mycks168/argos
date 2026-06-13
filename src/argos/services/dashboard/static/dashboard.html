@@ -531,12 +531,14 @@
       prev.content = content;
 
       if (type === "conversation") {
+        previousMessages = "";
         defaultView.style.display = "";
         overlayEl.classList.remove("is-active");
         iframeEl.src = "about:blank";
         iframeEl.setAttribute("data-src", "about:blank");
         iframeEl.onload = null;
       } else if (type === "notifications") {
+        previousNotifications = "";
         defaultView.style.display = "";
         overlayEl.classList.remove("is-active");
         iframeEl.src = "about:blank";
@@ -661,6 +663,10 @@
         resetScreensaver();
       }
       previousDisplayActivitySequence = displayActivitySequence;
+
+      // スロットスタックを先に反映し、会話/通知へ戻る場合は描画キャッシュを破棄する
+      renderSlots(state);
+
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
       if (nextMessages !== previousMessages) {
@@ -689,9 +695,6 @@
         </article>`).join("") : `<div class="empty">新しい通知はありません</div>`;
         previousNotifications = nextNotifications;
       }
-
-      // スロットスタックの描画処理
-      renderSlots(state);
     }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});

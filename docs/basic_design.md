@@ -148,7 +148,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 3. **差分更新によるチラつき防止**
    - ダッシュボードのデータ更新時において、各表示コンポーネントは状態（URLやコンテンツ種別など）に変更がない限り、DOMの再生成（`innerHTML` の書き換えや iframe の再読み込みなど）を行わない。
-   - 地図（`map.html`）は親画面からリロードされず、iframe内部で2秒ごとに `/api/location` を呼び出す自律的な現在地マーカー部分更新を維持する。
+   - 地図（`map.html`）とナビ地図（`nav.html`）は親画面からリロードされず、iframe内部で2秒ごとに `/api/location` を呼び出す自律的な現在地部分更新を維持する。
 
 4. **現在地取得API (`GET /api/location`)**
    - 既定ではローカルのgpsdを優先し、使えない場合だけGPSデバイスから短時間だけNMEAを読み、現在地をJSONで返す。
@@ -156,9 +156,11 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
    - リモート現在地JSONは、緯度経度を直下に持つ形式と、`point` オブジェクト配下に持つ形式を扱える。
    - `ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS` でリモート現在地APIのタイムアウト秒数を指定する。
    - 地図で `follow=1` を指定した場合、`map.html` はこのAPIを2秒ごとに呼び出し、現在地マーカーだけを更新する。
+   - ナビ地図（`nav.html`）はこのAPIを2秒ごとに呼び出し、現在地を常に画面中央へ追従させる。`orientation=north` では北を上に固定し、`orientation=heading` では取得できた進行方向を上にする。進行方向が取得できない場合は北上表示に近い挙動へフォールバックする。
 
 ダッシュボードは `/static/*` へのGETリクエストを受け取った際、パッケージ内の `static` ディレクトリに配備された静的アセットを適切なMIMEタイプで返す。
 - `map.html` (地図): Leaflet.js を使用して、クエリパラメータで指定された座標をダークモード風の地図へ表示する。現在地は青い円形マーカー、目的地は赤いピンで表示する。`label_mode=permanent|hover|popup` でラベルを常時表示、ホバー時表示、タップ時のみ表示から選べる。
+- `nav.html` (ナビ地図): Leaflet.js を使用して、現在地を中心へ追従するカーナビ風の地図を表示する。`zoom`、`orientation=north|heading`、`interval` をクエリパラメータで指定できる。通常地図とは別の一時コンテンツとして扱い、中央スロットに `nav.html`、右スロットに `map.html` を同時表示できる。
 - `reader.html` (Markdown): marked.js を使用し、`postMessage` やクエリで受け取ったMarkdownテキストを綺麗にレンダリングする。
 - `viewer.html` (画像): クエリで指定された画像URLをアスペクト比維持で表示し、ズームイン・アウト・リセット機能を提供する。
 

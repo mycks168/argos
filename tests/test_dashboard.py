@@ -165,6 +165,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "cursor: none" in html
         assert "cursor: none !important" in html
         assert "nextNotifications !== previousNotifications" in html
+        assert "previousMessages = \"\";" in html
+        assert "previousNotifications = \"\";" in html
+        assert "renderSlots(state);" in html
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html
@@ -401,6 +404,16 @@ def test_dashboard_server_serves_static_files():
             assert "bindTooltip" in html
             assert "labelMode" in html
             assert "label_mode" in html
+
+        # nav.html を取得してみる
+        with urlopen(base_url + "/static/nav.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Navigation Map" in html
+            assert "現在地追従中" in html
+            assert 'params.get("orientation")' in html
+            assert "進行方向" in html
+            assert "/api/location" in html
 
         # 存在しないファイルは404
         with pytest.raises(HTTPError) as exc:
