@@ -528,6 +528,21 @@ class ArgosApp:
             volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
             self._dashboard_state.set_audio_volume(volume)
             self._save_audio_state()
+        elif action == "reset_agent_session":
+            slot_name = self._agent.current_name
+            slot_provider = self._agent.current_provider
+            self._agent.reset_current()
+            self._dashboard_state.add_notification(
+                "セッションリセット",
+                f"{slot_name} の次回エージェント呼び出しを新規セッションにします。",
+                source="ARGOS",
+            )
+            return {
+                "muted": self._is_muted(),
+                "volume": self._audio.volume,
+                "session_reset": True,
+                "slot": {"name": slot_name, "provider": slot_provider},
+            }
         else:
             raise ValueError(f"未対応の操作です: {action}")
         return {"muted": self._is_muted(), "volume": self._audio.volume}
@@ -550,7 +565,6 @@ class ArgosApp:
             if not transcript:
                 log.info("文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
-                return
             if self._ensure_authenticated(transcript):
                 self._greet_on_interaction()
                 self._handle_text(transcript)

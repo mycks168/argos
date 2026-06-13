@@ -117,6 +117,18 @@
       tooltipAnchor: [0, -30]
     });
 
+    function createDestinationIcon(color) {
+      const bgColor = color || '#ff4d4d';
+      return L.divIcon({
+        className: '',
+        html: `<div class="destination-marker" style="background: ${bgColor};" aria-label="目的地"></div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 28],
+        popupAnchor: [0, -28],
+        tooltipAnchor: [0, -30]
+      });
+    }
+
     function labelMarker(marker, title) {
       if (labelMode === 'permanent') {
         marker.bindTooltip(title, {
@@ -188,7 +200,7 @@
       upsertCurrentLocation(curLat, curLng);
     }
 
-    // 複数目的地の描画 (points=lat,lng,title|lat,lng,title...)
+    // 複数目的地の描画 (points=lat,lng,title,color|lat,lng,title,color...)
     const pointsParam = params.get('points');
     if (pointsParam) {
       const pointStrings = pointsParam.split('|');
@@ -198,19 +210,23 @@
           const lat = parseFloat(parts[0]);
           const lng = parseFloat(parts[1]);
           const title = parts[2] || "目的地";
+          const color = parts[3] || "";
           if (!isNaN(lat) && !isNaN(lng)) {
-            const marker = labelMarker(L.marker([lat, lng], { icon: destinationIcon }).addTo(map), title);
+            const icon = color ? createDestinationIcon(color) : destinationIcon;
+            const marker = labelMarker(L.marker([lat, lng], { icon: icon }).addTo(map), title);
             markers.push(marker);
           }
         }
       });
     } else {
-      // 従来の単一目的地 (lat, lng, title)
+      // 従来の単一目的地 (lat, lng, title, color)
       const lat = parseFloat(params.get('lat')) || 35.6895;
       const lng = parseFloat(params.get('lng')) || 139.6917;
       const title = params.get('title') || "目的地";
+      const color = params.get('color') || "";
       if (!isNaN(lat) && !isNaN(lng)) {
-        const marker = labelMarker(L.marker([lat, lng], { icon: destinationIcon }).addTo(map), title);
+        const icon = color ? createDestinationIcon(color) : destinationIcon;
+        const marker = labelMarker(L.marker([lat, lng], { icon: icon }).addTo(map), title);
         markers.push(marker);
       }
     }

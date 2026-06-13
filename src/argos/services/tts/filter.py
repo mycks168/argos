@@ -15,18 +15,19 @@ class TtsFilterClient:
 
     def normalize(self, text: str) -> str:
         """テキストを TTS 向けに正規化する。失敗時は元テキストを返す。"""
+        normalized = text.replace("5タップ", "ごタップ")
         if not self._base_url or not self._bearer_token:
-            return text
+            return normalized
         try:
             response = requests.post(
                 f"{self._base_url}/normalize",
-                json={"text": text},
+                json={"text": normalized},
                 headers={"Authorization": f"Bearer {self._bearer_token}"},
                 timeout=10,
             )
         except requests.RequestException:
-            return text
+            return normalized
         if response.status_code != 200:
-            return text
-        return str(response.json().get("normalized", text))
+            return normalized
+        return str(response.json().get("normalized", normalized))
 

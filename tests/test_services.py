@@ -85,13 +85,17 @@ def test_tts_filter_normalize(monkeypatch):
 
     def fake_post(url, json, headers, timeout):
         calls.append((url, json, headers))
-        return Response(payload={"normalized": "リードミー"})
+        text = json["text"]
+        if text == "README":
+            return Response(payload={"normalized": "リードミー"})
+        return Response(payload={"normalized": text})
 
     monkeypatch.setattr("argos.services.tts.filter.requests.post", fake_post)
     client = TtsFilterClient("http://filter", "token")
 
     assert client.normalize("README") == "リードミー"
     assert calls[0][2]["Authorization"] == "Bearer token"
+    assert client.normalize("5タップされた") == "ごタップされた"
 
 
 def test_voicevox_synthesize(monkeypatch):
