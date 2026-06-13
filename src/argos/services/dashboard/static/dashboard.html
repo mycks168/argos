@@ -18,6 +18,7 @@
       --notice-title-font-size: 16px;
       --slot-font-size: 12px;
       --status-font-size: 21px;
+      --date-font-size: 16px;
     }
     body[data-font-size="small"] {
       --agent-name-font-size: 18px;
@@ -28,6 +29,7 @@
       --notice-title-font-size: 15px;
       --slot-font-size: 11px;
       --status-font-size: 19px;
+      --date-font-size: 14px;
     }
     body[data-font-size="large"] {
       --agent-name-font-size: 23px;
@@ -38,6 +40,7 @@
       --notice-title-font-size: 18px;
       --slot-font-size: 13px;
       --status-font-size: 24px;
+      --date-font-size: 18px;
     }
     *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
     body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
@@ -362,12 +365,21 @@
       gap: 12px;
       margin-top: 14px;
       width: 100%;
+      white-space: nowrap;
+    }
+    .clock-date-row .clock {
+      white-space: nowrap;
+    }
+    .clock-date-row .date {
+      font-size: var(--date-font-size);
+      white-space: nowrap;
     }
     .clock-date-row .weather {
       margin-left: auto;
       font-size: 18px;
       font-weight: 800;
       color: #69b7e4;
+      white-space: nowrap;
     }
     .slots-container {
       margin-top: auto;
