@@ -50,7 +50,7 @@ class RoutedAgentClient:
 
     def __init__(self, settings: Settings) -> None:
         """設定から各スロットのproviderクライアントを作成する。"""
-        self._routes = [AgentRoute(slot=slot, client=_create_provider_client(settings, slot)) for slot in settings.agent_slots]
+        self._routes = [AgentRoute(slot=slot, client=create_provider_client(settings, slot)) for slot in settings.agent_slots]
         if not self._routes:
             raise ValueError("エージェントスロットが設定されていません")
         self._index = 0
@@ -85,10 +85,14 @@ class RoutedAgentClient:
 
 def create_agent_client(settings: Settings) -> AgentClient:
     """設定に応じてLLMエージェントクライアントを作成する。"""
+    if settings.agent_runner_url.strip():
+        from argos.services.agent.runner_client import RunnerAgentClient
+
+        return RunnerAgentClient(settings)
     return RoutedAgentClient(settings)
 
 
-def _create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
+def create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
     """1スロット分のproviderクライアントを作成する。"""
     provider = slot.provider.strip().lower()
     slot_settings = replace(settings, agent_provider=provider, agent_slots=(slot,))

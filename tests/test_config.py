@@ -23,6 +23,23 @@ def test_load_agent_provider(monkeypatch):
     assert settings.agent_provider == "codex"
 
 
+def test_load_agent_runner_settings(monkeypatch):
+    """Agent Runner接続設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_URL", "http://127.0.0.1:28765")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_TOKEN", "runner-token")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_HOST", "127.0.0.2")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_PORT", "28766")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_STATE_DIR", "/tmp/runner")
+
+    settings = load_settings()
+
+    assert settings.agent_runner_url == "http://127.0.0.1:28765"
+    assert settings.agent_runner_token == "runner-token"
+    assert settings.agent_runner_host == "127.0.0.2"
+    assert settings.agent_runner_port == 28766
+    assert settings.agent_runner_state_dir == "/tmp/runner"
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)

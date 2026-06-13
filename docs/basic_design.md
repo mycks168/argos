@@ -78,6 +78,12 @@ ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェ�
 
 Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
+`ARGOS_AGENT_RUNNER_URL` が設定されている場合、ARGOS 本体は Codex、Antigravity、Hermes を直接起動せず、Agent Runner HTTP APIへジョブを作成する。Runnerは `argos-agent-runner` コマンドで別プロセスとして起動し、`ARGOS_AGENT_RUNNER_HOST`、`ARGOS_AGENT_RUNNER_PORT` で待ち受ける。更新系APIは `ARGOS_AGENT_RUNNER_TOKEN` によるBearer認証に対応する。
+
+Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。
+
+初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、未読表示と通知を出してから配信済みにする。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
+
 ### Codex CLI
 
 初回発話:
@@ -234,6 +240,16 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 - `network-online.target`、`tailscale-online.target`、`autossh-clove.service`、`sound.target` の後に起動する
 - 起動直後にTailscale越しのVOICEVOXなどへ早すぎる接続を行わないよう、`tailscale-online.target` と `autossh-clove.service` を `Wants` と `After` に含める
 - 異常終了時は `Restart=on-failure` で再起動する
+
+`systemd/argos-agent-runner.service` は Agent Runner をARGOS本体とは別に常駐させるための配布用ユニットファイルである。
+
+- `User=pi`、`Group=pi` で実行する
+- `WorkingDirectory=/home/pi/argos` を作業ディレクトリにする
+- `EnvironmentFile=/home/pi/argos/.env` から設定を読み込む
+- `ExecStart=/home/pi/argos/.venv/bin/argos-agent-runner` でRunnerを起動する
+- 異常終了時は `Restart=on-failure` で再起動する
+
+Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
 実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、`pi` ユーザを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 

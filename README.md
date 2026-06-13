@@ -196,4 +196,12 @@ Codex のセッションIDは `CODEX_HOME/argos-sessions.json` にスロット�
 
 Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目に話者IDを指定し、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8` のように設定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
 
+ARGOS本体の再起動で実行中エージェントを巻き込まない構成にする場合は、別サービスとして Agent Runner を起動します。
+
+```bash
+uv run argos-agent-runner
+```
+
+ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。
+
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

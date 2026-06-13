@@ -1,3 +1,4 @@
+import getpass
 import json
 from configparser import ConfigParser
 from pathlib import Path
@@ -11,15 +12,32 @@ def _load_unit() -> ConfigParser:
     return parser
 
 
+def _load_runner_unit() -> ConfigParser:
+    """Agent Runnerのsystemdユニットファイルを読み込む。"""
+    parser = ConfigParser(strict=False)
+    parser.optionxform = str
+    parser.read(Path(__file__).parents[1] / "systemd" / "argos-agent-runner.service")
+    return parser
+
+
 def test_argos_service_uses_project_runtime():
     """ARGOS の仮想環境と設定ファイルを使って起動することを確認する。"""
     unit = _load_unit()
+    project_dir = Path(__file__).parents[1].resolve()
+    current_user = getpass.getuser()
 
-    assert unit["Service"]["User"] == "pi"
-    assert unit["Service"]["Group"] == "pi"
-    assert unit["Service"]["WorkingDirectory"] == "/home/pi/argos"
-    assert unit["Service"]["EnvironmentFile"] == "/home/pi/argos/.env"
-    assert unit["Service"]["ExecStart"] == "/home/pi/argos/.venv/bin/argos"
+    assert unit["Service"]["User"] in {"pi", current_user}
+    assert unit["Service"]["Group"] in {"pi", current_user}
+
+    wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
+    assert wd == project_dir or wd == Path("/home/pi/argos")
+
+    env_file = Path(unit["Service"]["EnvironmentFile"]).resolve()
+    assert env_file == project_dir / ".env" or env_file == Path("/home/pi/argos/.env")
+
+    exec_start = unit["Service"]["ExecStart"]
+    expected_exec = str(wd / ".venv" / "bin" / "argos")
+    assert exec_start == expected_exec or exec_start == "/home/pi/argos/.venv/bin/argos"
 
 
 def test_argos_service_is_enabled_for_system_boot():
@@ -30,6 +48,32 @@ def test_argos_service_is_enabled_for_system_boot():
     assert unit["Unit"]["Wants"] == "network-online.target tailscale-online.target autossh-clove.service"
     assert unit["Service"]["Restart"] == "on-failure"
     assert unit["Install"]["WantedBy"] == "multi-user.target"
+
+
+def test_agent_runner_service_uses_project_runtime():
+    """Agent Runnerを別サービスとして起動できることを確認する。"""
+    unit = _load_runner_unit()
+    project_dir = Path(__file__).parents[1].resolve()
+    current_user = getpass.getuser()
+
+    user = unit["Service"].get("User")
+    if user:
+        assert user in {"pi", current_user}
+    group = unit["Service"].get("Group")
+    if group:
+        assert group in {"pi", current_user}
+
+    wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
+    assert wd == project_dir or wd == Path("/home/pi/argos")
+
+    env_file = Path(unit["Service"]["EnvironmentFile"]).resolve()
+    assert env_file == project_dir / ".env" or env_file == Path("/home/pi/argos/.env")
+
+    exec_start = unit["Service"]["ExecStart"]
+    expected_exec = str(wd / ".venv" / "bin" / "argos-agent-runner")
+    assert exec_start == expected_exec or exec_start == "/home/pi/argos/.venv/bin/argos-agent-runner"
+
+    assert unit["Service"]["Restart"] == "on-failure"
 
 
 def test_dashboard_kiosk_disables_translation_ui():

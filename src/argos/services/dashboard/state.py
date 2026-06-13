@@ -150,6 +150,26 @@ class DashboardState:
             self._publish_locked()
         return message_id
 
+    def add_message_to_slot(self, name: str, provider: str, role: str, text: str) -> str:
+        """指定スロットへ会話メッセージを追加し、メッセージIDを返す。"""
+        message_id = uuid.uuid4().hex
+        key = _slot_key(name, provider)
+        with self._lock:
+            self._ensure_slot_locked(name, provider)
+            self._messages_by_slot.setdefault(key, deque(maxlen=self._max_messages)).append(
+                {
+                    "id": message_id,
+                    "role": role,
+                    "text": text,
+                    "streaming": False,
+                    "created_at": _now_iso(),
+                }
+            )
+            self._message_slots[message_id] = key
+            self._cleanup_message_slots_locked()
+            self._publish_locked()
+        return message_id
+
     def append_message(self, message_id: str, delta: str) -> None:
         """指定メッセージへ応答差分を追記する。"""
         if not delta:

@@ -1,0 +1,21 @@
+[Unit]
+Description=ARGOS agent runner
+Documentation=file:/home/yuki/argos/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=yuki
+Group=yuki
+WorkingDirectory=/home/yuki/argos
+EnvironmentFile=/home/yuki/argos/.env
+Environment=PATH=/home/yuki/.local/bin:/home/yuki/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/yuki/argos/.venv/bin/argos-agent-runner
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

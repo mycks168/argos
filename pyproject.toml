@@ -31,6 +31,7 @@ whisper = [
 
 [project.scripts]
 argos = "argos.main:main"
+argos-agent-runner = "argos.agent_runner_main:main"
 
 [build-system]
 requires = ["hatchling"]

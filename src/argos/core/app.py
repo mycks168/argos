@@ -191,6 +191,7 @@ class ArgosApp:
         self._muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
+        self._agent_delivery_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
         self._dashboard_state.set_audio_muted(self._muted)
@@ -235,6 +236,7 @@ class ArgosApp:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         self._announce_auth_required()
         self._start_auth_status_monitor()
+        self._start_agent_delivery_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -264,6 +266,58 @@ class ArgosApp:
             if self._ensure_authenticated(text):
                 self._greet_on_interaction()
                 self._handle_text(text)
+
+    def _start_agent_delivery_monitor(self) -> None:
+        """Runner側で完了した未配信ジョブをダッシュボードへ反映する。"""
+        if not hasattr(self._agent, "list_undelivered") or not hasattr(self._agent, "mark_delivered"):
+            return
+        self._agent_delivery_thread = threading.Thread(target=self._run_agent_delivery_monitor, daemon=True)
+        self._agent_delivery_thread.start()
+
+    def _run_agent_delivery_monitor(self) -> None:
+        """Agent Runnerの未配信結果を定期的に回収する。"""
+        while not self._shutdown.is_set():
+            try:
+                list_undelivered = getattr(self._agent, "list_undelivered")
+                mark_delivered = getattr(self._agent, "mark_delivered")
+                for job in list_undelivered():
+                    if not isinstance(job, dict):
+                        continue
+                    job_id = str(job.get("job_id", ""))
+                    slot_name = str(job.get("slot_name", ""))
+                    provider = str(job.get("provider", ""))
+                    status = str(job.get("status", ""))
+                    result = str(job.get("result", "")).strip()
+                    error = str(job.get("error", "")).strip()
+                    if status == "completed" and result:
+                        self._deliver_runner_result(job_id, slot_name, provider, result)
+                        mark_delivered(job_id)
+                    elif status == "failed":
+                        self._deliver_runner_error(job_id, slot_name, provider, error)
+                        mark_delivered(job_id)
+            except Exception:
+                log.exception("Agent Runner未配信ジョブの確認に失敗しました")
+            self._shutdown.wait(5)
+
+    def _deliver_runner_result(self, job_id: str, slot_name: str, provider: str, result: str) -> None:
+        """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        slot_key = _app_slot_key(slot_name, provider)
+        self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+        self._pending_slot_speech[slot_key] = result
+        if not self._is_current_slot_key(slot_key):
+            self._dashboard_state.set_slot_unread(slot_name, provider, True)
+        self._dashboard_state.add_notification(
+            f"{slot_name} 応答完了",
+            "Runnerで完了した応答を会話履歴に反映しました。",
+            source="ARGOS",
+        )
+        log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
+
+    def _deliver_runner_error(self, job_id: str, slot_name: str, provider: str, error: str) -> None:
+        """Runnerで失敗したジョブを通知へ反映する。"""
+        text = error or "Agent Runnerジョブに失敗しました"
+        self._dashboard_state.add_error_notification(f"{slot_name} Runner", text[:300])
+        log.info("Agent Runner未配信エラーを反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
 
     def _run_startup_sequence(self) -> None:
         """起動状態を画面へ出し、設定に応じて起動音を鳴らす。"""

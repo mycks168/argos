@@ -139,6 +139,11 @@ class Settings:
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
+    agent_runner_url: str = ""
+    agent_runner_token: str = ""
+    agent_runner_host: str = "127.0.0.1"
+    agent_runner_port: int = 28765
+    agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -254,6 +259,11 @@ def load_settings() -> Settings:
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
         audio_state_path=os.environ.get("ARGOS_AUDIO_STATE_PATH", "~/.local/state/argos/audio-state.json"),
+        agent_runner_url=os.environ.get("ARGOS_AGENT_RUNNER_URL", ""),
+        agent_runner_token=os.environ.get("ARGOS_AGENT_RUNNER_TOKEN", ""),
+        agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
+        agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
+        agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),

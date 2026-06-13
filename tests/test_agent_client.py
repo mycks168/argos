@@ -71,6 +71,16 @@ def test_create_agent_client_routes_hermes_slot():
     assert client.current_provider == "hermes"
 
 
+def test_create_agent_client_uses_runner_when_url_is_set():
+    """Runner URLが設定されている場合はRunnerクライアントを使う。"""
+    settings = Settings(**{**_settings().__dict__, "agent_runner_url": "http://127.0.0.1:28765"})
+
+    client = create_agent_client(settings)
+
+    assert client.current_name == "作業"
+    assert client.current_provider == "codex"
+
+
 def test_unknown_agent_provider_raises():
     """未対応プロバイダーは起動時に検出できる。"""
     settings = Settings(**{**_settings().__dict__, "agent_slots": (AgentSlot("謎", "unknown", "/tmp"),)})

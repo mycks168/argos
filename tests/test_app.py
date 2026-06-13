@@ -246,6 +246,31 @@ def test_dashboard_shows_current_agent_slot(monkeypatch):
     assert snapshot["agent"]["provider"] == "codex"
 
 
+def test_deliver_runner_result_adds_slot_message_and_notification(monkeypatch):
+    """Runnerで完了した未配信応答をスロット履歴へ反映する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._deliver_runner_result("job-1", "作業", "codex", "Runner応答")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["messages"][-1]["text"] == "Runner応答"
+    assert snapshot["notifications"][-1]["title"] == "作業 応答完了"
+    assert app._pending_slot_speech["codex\0作業"] == "Runner応答"
+
+
+def test_deliver_runner_error_adds_notification(monkeypatch):
+    """Runnerで失敗した未配信ジョブを通知へ反映する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._deliver_runner_error("job-1", "作業", "codex", "失敗しました")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["notifications"][-1]["source"] == "作業 Runner"
+    assert snapshot["notifications"][-1]["priority"] == "high"
+
+
 def test_double_click_updates_agent_and_clears_listening_status(monkeypatch):
     """スロット切替後は現在スロット表示を更新し、録音中表示を残さない。"""
     _patch_app(monkeypatch)
