@@ -215,6 +215,9 @@ class ArgosApp:
             port=settings.dashboard_port,
             token=settings.dashboard_token,
             screensaver_seconds=settings.dashboard_screensaver_seconds,
+            location_provider=settings.location_provider,
+            remote_location_url=settings.remote_location_url,
+            remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
             control_handler=self._handle_dashboard_control,
         )
 

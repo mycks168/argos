@@ -135,7 +135,10 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
    - 表示中のオーバーレイを閉じて非表示にする。
 
 3. **現在地取得API (`GET /api/location`)**
-   - GPSデバイスから短時間だけNMEAを読み、現在地をJSONで返す。
+   - 既定ではローカルのgpsdを優先し、使えない場合だけGPSデバイスから短時間だけNMEAを読み、現在地をJSONで返す。
+   - `ARGOS_LOCATION_PROVIDER=remote` の場合は `ARGOS_REMOTE_LOCATION_URL` から現在地JSONを取得する。
+   - リモート現在地JSONは、緯度経度を直下に持つ形式と、`point` オブジェクト配下に持つ形式を扱える。
+   - `ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS` でリモート現在地APIのタイムアウト秒数を指定する。
    - 地図オーバーレイで `follow=1` を指定した場合、`map.html` はこのAPIを2秒ごとに呼び出し、画面を再読み込みせず現在地マーカーだけを更新する。
 
 ダッシュボードは `/static/*` へのGETリクエストを受け取った際、パッケージ内の `static` ディレクトリに配備された静的アセットを適切なMIMEタイプで返す。

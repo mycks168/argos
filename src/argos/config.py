@@ -135,6 +135,9 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    location_provider: str = "local"
+    remote_location_url: str = ""
+    remote_location_timeout_seconds: float = 2.0
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
 
 
@@ -268,6 +271,9 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
+        remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
+        remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
         ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),

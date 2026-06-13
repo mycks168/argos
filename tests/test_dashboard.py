@@ -5,7 +5,8 @@ from urllib.request import Request, urlopen
 import pytest
 
 from argos.services.dashboard import location as dashboard_location
-from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location
+from argos.services.dashboard import server as dashboard_server
+from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location, parse_remote_location
 from argos.services.dashboard.server import DashboardServer, _apply_event
 from argos.services.dashboard.state import DashboardState
 
@@ -371,6 +372,50 @@ def test_parse_gpsd_tpv():
     assert location["course"] == 347.2306
 
 
+def test_parse_remote_location_from_car_logger_latest():
+    """カーロガーの /api/latest レスポンスを現在地形式へ変換できる。"""
+    location = parse_remote_location(
+        {
+            "point": {
+                "lat": 37.110871441,
+                "lon": 139.720415378,
+                "speed_kmh": 12.3,
+                "course": 242.7,
+                "recorded_at": "2026-06-12T12:34:56+09:00",
+            }
+        }
+    )
+
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.110871441)
+    assert location["lng"] == pytest.approx(139.720415378)
+    assert location["speed_kmh"] == 12.3
+    assert location["course"] == 242.7
+    assert location["updated_at"] == "2026-06-12T12:34:56+09:00"
+    assert location["source"] == "remote"
+
+
+def test_parse_remote_location_from_car_logger_gps():
+    """カーロガーの /gps レスポンスを現在地形式へ変換できる。"""
+    location = parse_remote_location(
+        {
+            "has_fix": True,
+            "lat": 35.681236,
+            "lon": 139.767125,
+            "speed_kmh": 0.0,
+            "last_fix_at": "2026-06-12T22:09:08+00:00",
+        }
+    )
+
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(35.681236)
+    assert location["lng"] == pytest.approx(139.767125)
+    assert location["speed_kmh"] == 0.0
+    assert location["updated_at"] == "2026-06-12T22:09:08+00:00"
+    assert location["source"] == "remote"
+    assert location["has_fix"] is True
+
+
 def test_dashboard_server_serves_location(monkeypatch, tmp_path):
     """GPSデバイス相当のNMEAファイルから現在地APIを返せる。"""
     monkeypatch.setattr(dashboard_location, "read_gpsd_location", lambda timeout_seconds=1.2: {"available": False, "error": "gpsdなし"})
@@ -391,3 +436,39 @@ def test_dashboard_server_serves_location(monkeypatch, tmp_path):
     assert payload["available"] is True
     assert payload["lat"] == pytest.approx(37.2281788)
     assert payload["lng"] == pytest.approx(139.8475948)
+
+
+def test_dashboard_server_serves_remote_location(monkeypatch):
+    """リモートGPS設定時は指定URLから現在地を返す。"""
+    calls = []
+
+    def fake_read_location(provider, device_path, remote_url, timeout_seconds):
+        calls.append((provider, remote_url, timeout_seconds))
+        return {
+            "available": True,
+            "lat": 35.0,
+            "lng": 139.0,
+            "updated_at": "2026-06-12T12:34:56+09:00",
+        }
+
+    monkeypatch.setattr(dashboard_server, "read_location", fake_read_location)
+    state = DashboardState()
+    server = DashboardServer(
+        state,
+        "127.0.0.1",
+        0,
+        "secret",
+        location_provider="remote",
+        remote_location_url="http://example.test/gps",
+        remote_location_timeout_seconds=1.5,
+    )
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        _, payload = _read_json(base_url + "/api/location")
+    finally:
+        server.stop()
+
+    assert payload["available"] is True
+    assert payload["lat"] == 35.0
+    assert calls == [("remote", "http://example.test/gps", 1.5)]

@@ -10,11 +10,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 
 DEFAULT_GPS_DEVICE_PATH = Path("/dev/ttyACM0")
 GPSD_HOST = "127.0.0.1"
 GPSD_PORT = 2947
+
+
+def read_location(
+    provider: str,
+    device_path: Path = DEFAULT_GPS_DEVICE_PATH,
+    remote_url: str = "",
+    timeout_seconds: float = 1.2,
+) -> dict[str, Any]:
+    """設定された取得元から地図表示用の現在地を返す。"""
+    if provider == "remote":
+        if not remote_url:
+            return _unavailable("ARGOS_REMOTE_LOCATION_URL が未設定です")
+        return read_remote_location(remote_url, timeout_seconds=timeout_seconds)
+    return read_gps_location(device_path, timeout_seconds=timeout_seconds)
 
 
 def read_gps_location(device_path: Path = DEFAULT_GPS_DEVICE_PATH, timeout_seconds: float = 1.2) -> dict[str, Any]:
@@ -82,6 +98,47 @@ def read_nmea_device_location(device_path: Path = DEFAULT_GPS_DEVICE_PATH, timeo
     finally:
         os.close(fd)
     return _unavailable("GPSの有効な現在地を取得できません")
+
+
+def read_remote_location(url: str, timeout_seconds: float = 2.0) -> dict[str, Any]:
+    """リモートGPS APIから現在地を取得する。"""
+    try:
+        with urlopen(url, timeout=timeout_seconds) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
+        return _unavailable(f"リモートGPSを取得できません: {exc}")
+    if not isinstance(payload, dict):
+        return _unavailable("リモートGPSのレスポンスがJSONオブジェクトではありません")
+    return parse_remote_location(payload)
+
+
+def parse_remote_location(payload: dict[str, Any]) -> dict[str, Any]:
+    """カーロガーの /gps または /api/latest レスポンスを現在地形式へ変換する。"""
+    point = payload.get("point")
+    if isinstance(point, dict):
+        lat = point.get("lat")
+        lng = point.get("lng", point.get("lon"))
+        updated_at = point.get("recorded_at") or payload.get("updated_at")
+        speed_kmh = point.get("speed_kmh")
+        course = point.get("course")
+    else:
+        lat = payload.get("lat")
+        lng = payload.get("lng", payload.get("lon"))
+        updated_at = payload.get("last_fix_at") or payload.get("updated_at")
+        speed_kmh = payload.get("speed_kmh")
+        course = payload.get("course")
+    if not isinstance(lat, int | float) or not isinstance(lng, int | float):
+        return _unavailable("リモートGPSの緯度経度が不正です")
+    return {
+        "available": True,
+        "lat": float(lat),
+        "lng": float(lng),
+        "speed_kmh": float(speed_kmh) if isinstance(speed_kmh, int | float) else None,
+        "course": float(course) if isinstance(course, int | float) else None,
+        "updated_at": str(updated_at) if updated_at else datetime.now().astimezone().isoformat(timespec="seconds"),
+        "source": "remote",
+        "has_fix": payload.get("has_fix"),
+    }
 
 
 def parse_gpsd_tpv(line: str) -> dict[str, Any] | None:

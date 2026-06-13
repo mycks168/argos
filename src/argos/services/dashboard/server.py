@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
-from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_gps_location
+from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
 
 
@@ -34,6 +34,9 @@ class DashboardServer:
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
+        location_provider: str = "local",
+        remote_location_url: str = "",
+        remote_location_timeout_seconds: float = 2.0,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
@@ -44,6 +47,9 @@ class DashboardServer:
         self._camera_snapshot_path = camera_snapshot_path
         self._gps_device_path = gps_device_path
         self._screensaver_seconds = screensaver_seconds
+        self._location_provider = location_provider
+        self._remote_location_url = remote_location_url
+        self._remote_location_timeout_seconds = remote_location_timeout_seconds
         self._control_handler = control_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -63,6 +69,9 @@ class DashboardServer:
             self._camera_snapshot_path,
             self._gps_device_path,
             self._screensaver_seconds,
+            self._location_provider,
+            self._remote_location_url,
+            self._remote_location_timeout_seconds,
             self._control_handler,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
@@ -88,6 +97,9 @@ def _create_handler(
     camera_snapshot_path: Path,
     gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
+    location_provider: str = "local",
+    remote_location_url: str = "",
+    remote_location_timeout_seconds: float = 2.0,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
@@ -107,7 +119,14 @@ def _create_handler(
             elif path == "/api/state":
                 self._send_json(state.snapshot())
             elif path == "/api/location":
-                self._send_json(read_gps_location(gps_device_path))
+                self._send_json(
+                    read_location(
+                        location_provider,
+                        gps_device_path,
+                        remote_location_url,
+                        remote_location_timeout_seconds,
+                    )
+                )
             elif path == "/api/stream":
                 self._send_sse()
             elif path == "/camera/latest.jpg":
