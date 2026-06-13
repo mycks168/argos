@@ -130,6 +130,7 @@ class ArgosApp:
             settings.voicevox_speaker,
             settings.voicevox_sample_rate,
             settings.voicevox_speed_scale,
+            settings.voicevox_volume_scale,
         )
         self._voicevox_speakers_by_slot_key = {
             _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker

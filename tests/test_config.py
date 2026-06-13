@@ -129,6 +129,15 @@ def test_load_voicevox_speed_scale(monkeypatch):
     assert settings.voicevox_speed_scale == 1.1
 
 
+def test_load_voicevox_volume_scale(monkeypatch):
+    """VOICEVOXの音量スケール設定を読み込む。"""
+    monkeypatch.setenv("VOICEVOX_VOLUME_SCALE", "1.5")
+
+    settings = load_settings()
+
+    assert settings.voicevox_volume_scale == 1.5
+
+
 def test_load_audio_input_devices(monkeypatch):
     """複数の録音デバイス候補を読み込む。"""
     monkeypatch.setenv("AUDIO_INPUT_DEVICES", "plughw:CARD=One,DEV=0; plughw:CARD=Two,DEV=0")

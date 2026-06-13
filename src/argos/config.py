@@ -144,6 +144,7 @@ class Settings:
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    voicevox_volume_scale: float = 1.0
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -369,6 +370,7 @@ def load_settings() -> Settings:
         whisper_model_size=os.environ.get("ARGOS_WHISPER_MODEL_SIZE", "small"),
         whisper_device=os.environ.get("ARGOS_WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
+        voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
     )
 
 
