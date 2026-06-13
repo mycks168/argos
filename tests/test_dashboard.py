@@ -362,11 +362,25 @@ def test_apply_event_supports_overlay():
     snapshot = state.snapshot()
     assert snapshot["slot_stacks"]["center"][-1]["type"] == "map"
 
+    # replace_top 付きの overlay イベントは同じスロットの最前面を差し替える
+    _apply_event(state, {
+        "type": "overlay",
+        "target_slot": "center",
+        "overlay_type": "nav",
+        "title": "ナビ",
+        "url": "/static/nav.html?zoom=14",
+        "replace_top": True,
+    })
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["center"]) == 2
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "nav"
+    assert snapshot["slot_stacks"]["center"][-1]["url"] == "/static/nav.html?zoom=14"
+
     # swap_slots イベントの適用
     _apply_event(state, {"type": "swap_slots"})
     snapshot = state.snapshot()
     assert snapshot["slot_stacks"]["center"][-1]["type"] == "markdown"
-    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "nav"
 
     # clear_overlay イベントの適用 (centerスロットをpop)
     _apply_event(state, {"type": "clear_overlay", "target_slot": "center"})

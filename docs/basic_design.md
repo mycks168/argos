@@ -141,6 +141,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
      - `title`: タイトル。
      - `url`: コンテンツURL。
      - `content` / `options` (任意): コンテンツデータやオプション。
+     - `replace_top` (任意): `true` の場合、対象スロットに一時コンテンツが既にあれば最前面を差し替え、スタックを増やさない。ナビ地図のズーム変更など、同じ表示を更新する操作で使う。
    - **消去イベント (`type: "clear_overlay"`)**:
      - `target_slot`: 消去対象スロット（`center` または `right`、あるいは `all`）。指定されたスロットのスタックから一時コンテンツを Pop し、非表示（デフォルトコンテンツへの復帰）にする。
    - **入れ替えイベント (`type: "swap_slots"`)**:
@@ -160,7 +161,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 ダッシュボードは `/static/*` へのGETリクエストを受け取った際、パッケージ内の `static` ディレクトリに配備された静的アセットを適切なMIMEタイプで返す。
 - `map.html` (地図): Leaflet.js を使用して、クエリパラメータで指定された座標をダークモード風の地図へ表示する。現在地は青い円形マーカー、目的地は赤いピンで表示する。`label_mode=permanent|hover|popup` でラベルを常時表示、ホバー時表示、タップ時のみ表示から選べる。
-- `nav.html` (ナビ地図): Leaflet.js を使用して、現在地を中心へ追従するカーナビ風の地図を表示する。`zoom`、`orientation=north|heading`、`interval` をクエリパラメータで指定できる。通常地図とは別の一時コンテンツとして扱い、中央スロットに `nav.html`、右スロットに `map.html` を同時表示できる。
+- `nav.html` (ナビ地図): Leaflet.js を使用して、現在地を中心へ追従するカーナビ風の地図を表示する。`zoom`、`orientation=north|heading`、`interval` をクエリパラメータで指定できる。通常地図とは別の一時コンテンツとして扱い、中央スロットに `nav.html`、右スロットに `map.html` を同時表示できる。スキルからのナビ表示は `replace_top=true` を指定し、ズーム変更のたびに閉じる回数が増えないよう最前面を差し替える。
 - `reader.html` (Markdown): marked.js を使用し、`postMessage` やクエリで受け取ったMarkdownテキストを綺麗にレンダリングする。
 - `viewer.html` (画像): クエリで指定された画像URLをアスペクト比維持で表示し、ズームイン・アウト・リセット機能を提供する。
 

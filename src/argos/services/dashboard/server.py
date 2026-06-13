@@ -318,6 +318,7 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
             content=_optional_text(payload, "content", 64000),
             url=_optional_text(payload, "url", 2000),
             options=payload.get("options"),
+            replace_top=bool(payload.get("replace_top", False)),
         )
         return {"status": "overlay_updated"}
     if event_type == "clear_overlay":

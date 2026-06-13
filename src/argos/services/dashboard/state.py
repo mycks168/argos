@@ -271,18 +271,23 @@ class DashboardState:
         content: str = "",
         url: str = "",
         options: dict[str, Any] | None = None,
+        replace_top: bool = False,
     ) -> None:
-        """指定したスロットにオーバーレイを表示（スタックに積む）。"""
+        """指定したスロットにオーバーレイを表示する。"""
         with self._lock:
             stack = self._slot_stack_center if target_slot == "center" else self._slot_stack_right
-            stack.append({
+            item = {
                 "type": overlay_type,
                 "title": title,
                 "content": content,
                 "url": url,
                 "options": deepcopy(options) if options is not None else {},
                 "created_at": _now_iso(),
-            })
+            }
+            if replace_top and len(stack) > 1:
+                stack[-1] = item
+            else:
+                stack.append(item)
             # 互換用の _overlay を更新
             self._overlay = {
                 "active": True,

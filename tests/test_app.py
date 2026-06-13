@@ -186,6 +186,8 @@ def test_handle_text_dry_run(monkeypatch, capsys):
     snapshot = app._dashboard_state.snapshot()
     assert [message["role"] for message in snapshot["messages"]] == ["user", "assistant"]
     assert snapshot["messages"][1]["text"] == "応答"
+    assert snapshot["status"]["code"] == "ready"
+    assert snapshot["status"]["label"] == "待機中"
     output = capsys.readouterr().out
     assert "わかった。少し待ね" in output or "わかった。少し待ってね" in output
     assert "ARGOS> 応答" in output

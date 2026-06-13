@@ -605,6 +605,7 @@ class ArgosApp:
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
+            self._set_ready_or_locked()
 
     def _speak_response(self, text: str) -> None:
         """エージェント応答を tts-filter と TTS に通して再生する。"""
