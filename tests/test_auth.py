@@ -33,9 +33,12 @@ def test_auth_gate_unlocks_with_keyword_and_expires():
     now = datetime(2026, 6, 3, 8, tzinfo=timezone.utc)
     gate = AuthGate(True, ";".join([hash_keyword("解除"), hash_keyword("かいじょ")]), 60, 3)
 
+    assert gate.has_authenticated_once is False
+
     result = gate.verify_keyword("かいじょ", now)
 
     assert result.authenticated is True
+    assert gate.has_authenticated_once is True
     assert gate.is_authenticated(now + timedelta(seconds=59)) is True
     assert gate.is_authenticated(now + timedelta(seconds=61)) is False
 
