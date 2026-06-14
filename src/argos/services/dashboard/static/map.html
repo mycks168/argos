@@ -102,6 +102,16 @@
     const dynamicMarkers = [];
     let currentMarker = null;
     let currentCircle = null;
+
+    // 接近判定用のパラメータ（クエリパラメータから取得）
+    const nearThreshold = parseInt(params.get('near_threshold')) || 2000;
+    const farOffset = parseInt(params.get('far_offset')) || 500;
+
+    // 接近判定用の状態変数
+    let activeNearMarker = null; // 現在接近中の目的地マーカー
+    let minDistanceToActive = Infinity; // activeNearMarker への最接近距離 (メートル)
+    let lastNearMarker = null; // 前回の接近中マーカー（切り替わり検知用）
+
     const currentLocationIcon = L.divIcon({
       className: '',
       html: '<div class="current-location-marker" aria-label="現在地"></div>',
@@ -169,17 +179,91 @@
       if (markers.length === 0) {
         return;
       }
-      const group = new L.featureGroup(markers);
-      if (markers.length === 1) {
-        map.setView(markers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
+
+      // 目的地マーカー（現在地以外のマーカー）を抽出
+      const destinationMarkers = markers.filter(m => m !== currentMarker);
+      if (destinationMarkers.length === 0) {
+        if (currentMarker) {
+          map.setView(currentMarker.getLatLng(), parseInt(params.get('zoom')) || 13);
+        }
+        return;
+      }
+
+      let nearMarker = null;
+      if (currentMarker) {
+        const curLatLng = currentMarker.getLatLng();
+
+        // 各目的地への距離を計算
+        const dists = destinationMarkers.map(m => {
+          return { marker: m, distance: curLatLng.distanceTo(m.getLatLng()) };
+        });
+        dists.sort((a, b) => a.distance - b.distance);
+        const closest = dists[0];
+
+        // すでに接近中の目的地がある場合の離脱判定
+        if (activeNearMarker) {
+          const currentDist = curLatLng.distanceTo(activeNearMarker.getLatLng());
+
+          // 最接近距離を更新
+          if (currentDist < minDistanceToActive) {
+            minDistanceToActive = currentDist;
+          }
+
+          // 最接近地点から farOffset 以上離れたら離脱（全体表示へ戻す ＆ マーカー削除）
+          if (currentDist > minDistanceToActive + farOffset) {
+            activeNearMarker.unbindTooltip();
+            map.removeLayer(activeNearMarker);
+
+            // markers配列から削除
+            const idx = markers.indexOf(activeNearMarker);
+            if (idx > -1) {
+              markers.splice(idx, 1);
+            }
+
+            activeNearMarker = null;
+            minDistanceToActive = Infinity;
+          } else {
+            nearMarker = activeNearMarker;
+          }
+        }
+
+        // 新たに接近判定 (nearThreshold 以内に入った場合)
+        if (!activeNearMarker && closest && closest.distance <= nearThreshold) {
+          activeNearMarker = closest.marker;
+          minDistanceToActive = closest.distance;
+          nearMarker = closest.marker;
+        }
+      } else {
+        activeNearMarker = null;
+        minDistanceToActive = Infinity;
+      }
+
+      // ズーム対象とするマーカーを選定
+      let targetMarkers = [];
+      if (nearMarker && currentMarker) {
+        // 接近中の目的地がある場合は、その目的地と現在地だけをズーム対象にする
+        targetMarkers = [currentMarker, nearMarker];
+      } else {
+        // そうでない場合はすべてのマーカー（現在地＋すべての目的地）をズーム対象にする
+        targetMarkers = markers;
+      }
+
+      const group = new L.featureGroup(targetMarkers);
+      if (targetMarkers.length === 1) {
+        map.setView(targetMarkers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
       } else {
         const targetBounds = group.getBounds().pad(0.15);
-        if (force) {
-          map.fitBounds(targetBounds, { animate: false });
+
+        // 接近状態が変化した瞬間（クローズアップに入った、あるいは全体に戻った時）は強制的に再描画する
+        const stateChanged = (nearMarker !== lastNearMarker);
+
+        if (force || stateChanged) {
+          map.fitBounds(targetBounds, { animate: !force });
           const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
           if (zoomOffset !== 0) {
-            map.setZoom(map.getZoom() + zoomOffset, { animate: false });
+            map.setZoom(map.getZoom() + zoomOffset, { animate: !force });
           }
+          lastNearMarker = nearMarker;
           return;
         }
 
@@ -206,6 +290,7 @@
           }
         }
       }
+      lastNearMarker = nearMarker;
     }
 
     /**
