@@ -38,6 +38,13 @@
     .leaflet-tooltip-top.map-label::before {
       border-top-color: rgba(12, 18, 24, 0.88);
     }
+    .leaflet-control-scale-line {
+      background: rgba(12, 18, 24, 0.88) !important;
+      border: 1px solid rgba(255, 255, 255, 0.22) !important;
+      border-top: none !important;
+      color: #fff !important;
+      font-weight: bold;
+    }
     .current-location-marker {
       align-items: center;
       background: #28a8ff;
@@ -97,6 +104,9 @@
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '&copy; OpenStreetMap contributors'
     }).addTo(map);
+
+    // 距離の凡例（スケール）を表示
+    L.control.scale({ imperial: false }).addTo(map);
 
     const markers = [];
     const dynamicMarkers = [];
