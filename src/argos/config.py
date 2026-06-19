@@ -31,6 +31,14 @@ class AgentSlot:
 
 
 @dataclass(frozen=True)
+class AgentUsageCommand:
+    """LLMエージェント利用枠を取得する外部コマンド設定。"""
+
+    provider: str
+    command: str
+
+
+@dataclass(frozen=True)
 class Settings:
     """アプリ全体の設定値。"""
 
@@ -145,6 +153,9 @@ class Settings:
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
     voicevox_volume_scale: float = 1.0
+    agent_usage_commands: tuple[AgentUsageCommand, ...] = ()
+    agent_usage_refresh_seconds: float = 300.0
+    agent_usage_command_timeout_seconds: float = 5.0
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -225,6 +236,19 @@ def _optional_int(raw: str | None) -> int | None:
     return int(raw.strip())
 
 
+def _load_agent_usage_commands() -> tuple[AgentUsageCommand, ...]:
+    """環境変数からエージェント別の利用枠取得コマンドを読み込む。"""
+    commands: list[AgentUsageCommand] = []
+    prefix = "ARGOS_AGENT_USAGE_COMMAND_"
+    for name, value in sorted(os.environ.items()):
+        if not name.startswith(prefix) or not value.strip():
+            continue
+        provider = name[len(prefix) :].strip().lower()
+        if provider and provider not in {"timeout_seconds"}:
+            commands.append(AgentUsageCommand(provider=provider, command=value.strip()))
+    return tuple(commands)
+
+
 def _load_audio_input_devices() -> tuple[str, ...]:
     """互換の環境変数名から録音デバイス候補を読み込む。"""
     for name in ("AUDIO_INPUT_DEVICES", "ARGOS_AUDIO_INPUT_DEVICES", "ARGOS_INPUT_DEVICES", "ARGOS_INPUT_DEVICE"):
@@ -244,6 +268,14 @@ def load_settings() -> Settings:
         agent_provider=agent_provider,
         agent_state_path=os.environ.get("ARGOS_AGENT_STATE_PATH", "~/.argos/agent-sessions.json"),
         agent_slots=_load_agent_slots(agent_provider),
+        agent_usage_commands=_load_agent_usage_commands(),
+        agent_usage_refresh_seconds=float(os.environ.get("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "300")),
+        agent_usage_command_timeout_seconds=float(
+            os.environ.get(
+                "ARGOS_AGENT_USAGE_TIMEOUT_SECONDS",
+                os.environ.get("ARGOS_AGENT_USAGE_COMMAND_TIMEOUT_SECONDS", "5"),
+            )
+        ),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),

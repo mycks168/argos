@@ -154,6 +154,63 @@
     .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
     .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .agent {
+      margin-top: 10px;
+      padding: 6px 8px;
+      border-left: 3px solid #69b7e4;
+      background: #101820;
+    }
+    .agent-usage {
+      display: none;
+      margin-top: 8px;
+      padding: 6px 8px;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #0d151c;
+      color: #aebdc6;
+      font-size: var(--date-font-size);
+      box-sizing: border-box;
+    }
+    .agent-usage.is-visible { display: block; }
+    .agent-usage-title {
+      color: #8ca0ad;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .agent-usage-provider {
+      color: #f4d35e;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .agent-usage-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .agent-usage-label { color: #edf3f7; font-weight: 800; }
+    .agent-usage-value { color: #f4d35e; font-weight: 800; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 4px; }
+    .agent-usage-value-text { color: #edf3f7; font-weight: 800; word-break: break-all; }
+    .agent-usage-reset { color: #8ca0ad; font-size: 11px; font-weight: normal; }
+    .agent-usage-error { margin-top: 4px; color: #ff8c42; font-weight: 700; font-size: 12px; overflow-wrap: anywhere; }
+    .agent-usage-row-wrapper {
+      margin-top: 4px;
+    }
+    .agent-usage-progress-container {
+      width: 100%;
+      height: 6px;
+      background: #20303c;
+      border-radius: 3px;
+      margin-top: 3px;
+      overflow: hidden;
+    }
+    .agent-usage-progress-bar {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
     .slots {
       display: flex;
       gap: 6px;
@@ -188,7 +245,7 @@
     .slot-button[data-unread="true"] { border-color: #f4d35e; color: #f4d35e; background: #211d0e; }
     .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
-      display: flex; align-items: center; gap: 10px; margin-top: 22px;
+      display: flex; align-items: center; gap: 10px; margin-top: 10px;
       font-size: var(--status-font-size); font-weight: 700;
     }
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
@@ -495,17 +552,20 @@
         <div id="weather" class="weather"></div>
       </div>
 
+      <div id="status" class="status" data-code="ready">
+        <span class="status-dot"></span><span id="status-label">待機中</span>
+      </div>
+
       <div class="agent">
         <div class="agent-label">CURRENT SLOT</div>
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
       </div>
-      <div id="status" class="status" data-code="ready">
-        <span class="status-dot"></span><span id="status-label">待機中</span>
-      </div>
+
+      <div id="agent-usage" class="agent-usage" aria-live="polite"></div>
 
       <div class="slots-container">
-        <p class="eyebrow" style="margin-top: 18px; margin-bottom: 4px;">SLOTS</p>
+        <p class="eyebrow" style="margin-top: 10px; margin-bottom: 4px;">SLOTS</p>
         <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       </div>
     </section>
@@ -558,6 +618,7 @@
     const statusLabel = document.getElementById("status-label");
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
+    const agentUsage = document.getElementById("agent-usage");
     const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
     const sessionResetButton = document.getElementById("session-reset-button");
@@ -756,6 +817,7 @@
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
+      renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `
         <button class="slot-button" type="button" disabled
           data-active="${slot.active ? "true" : "false"}"
@@ -815,6 +877,92 @@
         </article>`).join("") : `<div class="empty">新しい通知はありません</div>`;
         previousNotifications = nextNotifications;
       }
+    }
+    function extractPercent(str) {
+      if (!str) return null;
+      const m = str.match(/(\d+(?:\.\d+)?)\s*%/);
+      return m ? parseFloat(m[1]) : null;
+    }
+    function renderAgentUsage(usage) {
+      if (!usage || !usage.provider) {
+        agentUsage.classList.remove("is-visible");
+        agentUsage.innerHTML = "";
+        return;
+      }
+      
+      let rowsHtml = "";
+      
+      // 5時間枠
+      if (usage.five_hour) {
+        const usePct = usage.five_hour.use_percentage;
+        let color = "#00b140"; // 緑
+        if (usePct >= 80) color = "#ff4d4d"; // 赤
+        else if (usePct >= 50) color = "#f4d35e"; // 黄
+        
+        rowsHtml += `
+          <div class="agent-usage-row-wrapper">
+            <div class="agent-usage-row">
+              <span class="agent-usage-label">5時間</span>
+              <span class="agent-usage-value">${usePct}% <span class="agent-usage-reset">(更新: ${escapeHtml(usage.five_hour.reset_at || "")})</span></span>
+            </div>
+            <div class="agent-usage-progress-container">
+              <div class="agent-usage-progress-bar" style="width: ${usePct}%; background-color: ${color};"></div>
+            </div>
+          </div>
+        `;
+      }
+      
+      // 週の枠
+      if (usage.weekly) {
+        const usePct = usage.weekly.use_percentage;
+        let color = "#00b140"; // 緑
+        if (usePct >= 80) color = "#ff4d4d"; // 赤
+        else if (usePct >= 50) color = "#f4d35e"; // 黄
+        
+        rowsHtml += `
+          <div class="agent-usage-row-wrapper">
+            <div class="agent-usage-row">
+              <span class="agent-usage-label">週間</span>
+              <span class="agent-usage-value">${usePct}% <span class="agent-usage-reset">(更新: ${escapeHtml(usage.weekly.reset_at || "")})</span></span>
+            </div>
+            <div class="agent-usage-progress-container">
+              <div class="agent-usage-progress-bar" style="width: ${usePct}%; background-color: ${color};"></div>
+            </div>
+          </div>
+        `;
+      }
+      
+      // 追加情報
+      const otherText = usage.other_text || "--";
+      rowsHtml += `
+        <div class="agent-usage-row-wrapper">
+          <div class="agent-usage-row">
+            <span class="agent-usage-label">追加情報</span>
+            <span class="agent-usage-value-text">${escapeHtml(otherText)}</span>
+          </div>
+        </div>
+      `;
+
+      const error = usage.error ? `<div class="agent-usage-error">${escapeHtml(usage.error)}</div>` : "";
+      agentUsage.innerHTML = `
+        <div class="agent-usage-title">USAGE <span class="agent-usage-provider">${escapeHtml(usage.provider)}</span></div>
+        ${rowsHtml}
+        ${error}`;
+      agentUsage.classList.add("is-visible");
+    }
+    function formatUsageBucket(bucket) {
+      const remaining = bucket.remaining || "";
+      const limit = bucket.limit || "";
+      if (remaining && limit) {
+        return `${remaining} / ${limit}`;
+      }
+      if (remaining) {
+        return `残り ${remaining}`;
+      }
+      if (limit) {
+        return `上限 ${limit}`;
+      }
+      return bucket.reset_at ? `更新 ${bucket.reset_at}` : "--";
     }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});
