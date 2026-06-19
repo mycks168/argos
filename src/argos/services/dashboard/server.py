@@ -38,6 +38,7 @@ class DashboardServer:
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -51,6 +52,7 @@ class DashboardServer:
         self._remote_location_url = remote_location_url
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
         self._control_handler = control_handler
+        self._event_handler = event_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -73,6 +75,7 @@ class DashboardServer:
             self._remote_location_url,
             self._remote_location_timeout_seconds,
             self._control_handler,
+            self._event_handler,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -101,6 +104,7 @@ def _create_handler(
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -146,6 +150,8 @@ def _create_handler(
                 payload = self._read_json()
                 if path == "/api/events":
                     response = _apply_event(state, payload)
+                    if event_handler is not None:
+                        event_handler(payload, response)
                     status = HTTPStatus.CREATED
                 else:
                     response = self._apply_control(payload)
