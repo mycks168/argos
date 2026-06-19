@@ -32,6 +32,7 @@ from argos.services.stt.gateway import SttGatewayClient
 from argos.services.stt.whisper import FasterWhisperClient
 from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
+from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
 
@@ -147,6 +148,11 @@ class ArgosApp:
             settings.kokoro_speed,
             settings.kokoro_repo_id,
             settings.kokoro_sample_rate,
+        )
+        self._tts_cache = TTSCacheManager(
+            settings.tts_cache_dir,
+            settings.tts_cache_max_chars,
+            settings.tts_cache_max_size_mb,
         )
         self._audio_state = AudioStateStore(settings.audio_state_path)
         saved_audio_state = self._audio_state.load()
@@ -936,14 +942,26 @@ class ArgosApp:
 
     def _synthesize_tts(self, text: str, slot_key: str = "") -> bytes:
         """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""
+        speaker_id = self._voicevox_speaker_for_slot(slot_key)
+        if self._settings.tts_cache_enabled:
+            cached = self._tts_cache.get(text, speaker_id)
+            if cached is not None:
+                return cached
+
         if self._settings.voicevox_url.strip():
             try:
-                return self._voicevox.synthesize(text, speaker=self._voicevox_speaker_for_slot(slot_key))
+                wav_data = self._voicevox.synthesize(text, speaker=speaker_id)
+                if self._settings.tts_cache_enabled:
+                    self._tts_cache.set(text, speaker_id, wav_data)
+                return wav_data
             except Exception as exc:
                 log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
                 self._report_error("VOICEVOX", exc)
         try:
-            return self._kokoro.synthesize(text)
+            wav_data = self._kokoro.synthesize(text)
+            if self._settings.tts_cache_enabled:
+                self._tts_cache.set(text, speaker_id, wav_data)
+            return wav_data
         except Exception as exc:
             log.exception("Kokoroに失敗しました")
             self._report_error("Kokoro", exc)
