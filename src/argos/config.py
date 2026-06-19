@@ -153,6 +153,10 @@ class Settings:
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
     voicevox_volume_scale: float = 1.0
+    tts_cache_enabled: bool = True
+    tts_cache_max_chars: int = 30
+    tts_cache_max_size_mb: int = 200
+    tts_cache_dir: str = "cache/tts"
     agent_usage_commands: tuple[AgentUsageCommand, ...] = ()
     agent_usage_refresh_seconds: float = 300.0
     agent_usage_command_timeout_seconds: float = 5.0
@@ -349,6 +353,10 @@ def load_settings() -> Settings:
         hermes_pass_session_id=_bool_env("ARGOS_HERMES_PASS_SESSION_ID", True),
         hermes_resume_saved=_bool_env("ARGOS_HERMES_RESUME_SAVED", True),
         hermes_extra_args=hermes_extra_args,
+        tts_cache_enabled=_bool_env("ARGOS_TTS_CACHE_ENABLED", True),
+        tts_cache_max_chars=int(os.environ.get("ARGOS_TTS_CACHE_MAX_CHARS", "30")),
+        tts_cache_max_size_mb=int(os.environ.get("ARGOS_TTS_CACHE_MAX_SIZE_MB", "200")),
+        tts_cache_dir=os.environ.get("ARGOS_TTS_CACHE_DIR", "cache/tts"),
         codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
         codex_progress_first_delay_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")

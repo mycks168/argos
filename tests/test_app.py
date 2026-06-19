@@ -56,6 +56,7 @@ def _settings():
         antigravity_extra_args=(),
         greeting_enabled=False,
         greeting_state_path="",
+        tts_cache_enabled=False,
     )
 
 
@@ -1180,3 +1181,30 @@ def test_stt_uses_local_whisper_when_gateway_url_is_empty(monkeypatch):
     app._process_recording()
 
     assert app._agent.asked == ["ローカル認識"]
+
+
+def test_tts_cache_integration(monkeypatch):
+    """TTSキャッシュ有効時、同じ短文の2回目の合成はキャッシュを使う。"""
+    import tempfile
+
+    _patch_app(monkeypatch)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        settings = Settings(
+            **{
+                **_settings().__dict__,
+                "tts_cache_enabled": True,
+                "tts_cache_dir": tmpdir,
+                "tts_cache_max_chars": 30,
+            }
+        )
+        app = ArgosApp(settings)
+
+        text = "キャッシュテスト"
+        wav_data_1 = app._synthesize_tts(text)
+        assert wav_data_1 == text.encode()
+        assert len(app._voicevox.calls) == 1
+        assert app._voicevox.calls[0] == (text, 2)
+
+        wav_data_2 = app._synthesize_tts(text)
+        assert wav_data_2 == wav_data_1
+        assert len(app._voicevox.calls) == 1

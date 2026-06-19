@@ -66,6 +66,12 @@ VOICEVOX Engine は次の順で呼び出す。
 
 Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_ID`、`ARGOS_KOKORO_SAMPLE_RATE` で調整する。Kokoro を使う環境では `uv sync --extra kokoro` を実行し、必要に応じて `uv run python -m unidic download` で日本語辞書を用意する。
 
+### TTSキャッシュ
+
+ARGOS は短い読み上げ文の合成結果をWAVファイルとしてローカルにキャッシュする。既定では30文字以下を `cache/tts` に保存し、同じテキストとVOICEVOX話者IDの組み合わせを再利用する。上限容量は `ARGOS_TTS_CACHE_MAX_SIZE_MB` で制御し、超過時は最終アクセス時刻が古いファイルから削除する。
+
+設定は `ARGOS_TTS_CACHE_ENABLED`、`ARGOS_TTS_CACHE_MAX_CHARS`、`ARGOS_TTS_CACHE_MAX_SIZE_MB`、`ARGOS_TTS_CACHE_DIR` で変更できる。VOICEVOX失敗時にKokoroへフォールバックした音声も、同じキーでキャッシュする。
+
 ### ST7789 LCD
 
 `ARGOS_LCD_ENABLED=true` の場合、ARGOS は読み上げる文を ST7789 LCD にも表示する。物理解像度は既定で 76x284 とし、横向き表示になるよう描画内容を90度回転して転送する。日本語フォントは IPA Gothic、IPA P Gothic、IPAex Gothic の順に探し、`ARGOS_LCD_FONT_PATH` が指定されている場合はそれを優先する。IPA系フォントが見つからない場合、LCD表示だけを無効化する。夜間でも明るくなりすぎないよう、ST7789 の色反転を無効にして黒背景に白文字で表示する。
