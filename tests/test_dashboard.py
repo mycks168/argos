@@ -29,6 +29,17 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state.set_agent("アンチグラビティ", "antigravity")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
+    state.set_agent_usage(
+        "antigravity",
+        {
+            "available": True,
+            "label": "利用枠",
+            "five_hour": {"label": "5時間", "remain_percentage": 95.0, "use_percentage": 5.0, "reset_at": "10:00"},
+            "weekly": {"label": "週間", "remain_percentage": 34.0, "use_percentage": 66.0, "reset_at": "06/19 06:59"},
+            "other_text": "878 credits",
+            "error": "",
+        },
+    )
     message_id = state.add_message("assistant", "", streaming=True)
     state.append_message(message_id, "返答")
     state.finish_message(message_id)
@@ -43,6 +54,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
+    assert snapshot["agent_usage"]["current"]["weekly"]["remain_percentage"] == 34.0
     assert snapshot["display_activity"]["sequence"] == 0
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
@@ -182,6 +194,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-code="alert"' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
+        assert 'id="agent-usage"' in html
+        assert "renderAgentUsage(state.agent_usage?.current)" in html
+        assert "formatUsageBucket(bucket)" in html
         assert 'id="slots"' in html
         assert ".slots::-webkit-scrollbar" in html
         assert "overflow-x: auto" in html

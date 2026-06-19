@@ -36,6 +36,7 @@ class DashboardState:
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
+        self._agent_usage: dict[str, dict[str, Any]] = {}
         self._overlay = {"active": False, "updated_at": _now_iso()}
         self._display_activity = {"sequence": 0, "updated_at": _now_iso()}
         self._slot_stack_center = [{"type": "conversation", "title": "会話", "created_at": _now_iso()}]
@@ -49,6 +50,10 @@ class DashboardState:
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
                 "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
+                "agent_usage": {
+                    "current": deepcopy(self._agent_usage.get(str(self._agent["provider"]).lower())),
+                    "providers": deepcopy(self._agent_usage),
+                },
                 "audio": deepcopy(self._audio),
                 "overlay": deepcopy(self._overlay),
                 "display_activity": deepcopy(self._display_activity),
@@ -121,6 +126,18 @@ class DashboardState:
         with self._lock:
             self._audio = {**self._audio, "volume": max(0, min(100, int(volume))), "updated_at": _now_iso()}
             self._publish_locked()
+
+    def set_agent_usage(self, provider: str, usage: dict[str, Any]) -> None:
+        """エージェントプロバイダ別の利用枠表示を更新する。"""
+        with self._lock:
+            normalized = provider.strip().lower()
+            self._agent_usage[normalized] = {**deepcopy(usage), "provider": normalized}
+            self._publish_locked()
+
+    def has_agent_usage(self, provider: str) -> bool:
+        """指定プロバイダの利用枠表示が既にあるか返す。"""
+        with self._lock:
+            return provider.strip().lower() in self._agent_usage
 
     def wake_display(self) -> None:
         """音声再生などの利用者向け出力に合わせて画面を起こす。"""

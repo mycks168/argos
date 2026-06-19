@@ -40,6 +40,23 @@ def test_load_agent_runner_settings(monkeypatch):
     assert settings.agent_runner_state_dir == "/tmp/runner"
 
 
+def test_load_agent_usage_commands(monkeypatch):
+    """エージェント別の利用枠取得コマンドを読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_COMMAND_CODEX", "/tmp/codex-usage")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY", "/tmp/agy-usage")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "60")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_TIMEOUT_SECONDS", "3")
+
+    settings = load_settings()
+    commands = {command.provider: command.command for command in settings.agent_usage_commands}
+
+    assert commands["codex"] == "/tmp/codex-usage"
+    assert commands["antigravity"] == "/tmp/agy-usage"
+    assert "timeout_seconds" not in commands
+    assert settings.agent_usage_refresh_seconds == 60
+    assert settings.agent_usage_command_timeout_seconds == 3
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)

@@ -19,6 +19,7 @@ from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
+from argos.services.agent_usage import AgentUsageProvider
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
 from argos.services.dashboard.server import DashboardServer
@@ -123,6 +124,10 @@ class ArgosApp:
             settings.whisper_compute_type,
         )
         self._agent = create_agent_client(settings)
+        self._agent_usage = AgentUsageProvider(
+            settings.agent_usage_commands,
+            settings.agent_usage_command_timeout_seconds,
+        )
         self._tts_filter = TtsFilterClient(settings.tts_filter_url, settings.tts_filter_token)
         self._acknowledgement = AcknowledgementClient(settings.acknowledgement_url, settings.acknowledgement_token)
         self._voicevox = VoicevoxClient(
@@ -193,6 +198,7 @@ class ArgosApp:
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
         self._agent_delivery_thread: threading.Thread | None = None
+        self._agent_usage_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._gpio: GpioPttInput | None = None
         self._dashboard_state.set_audio_muted(self._muted)
@@ -238,6 +244,7 @@ class ArgosApp:
         self._announce_auth_required()
         self._start_auth_status_monitor()
         self._start_agent_delivery_monitor()
+        self._start_agent_usage_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -354,6 +361,49 @@ class ArgosApp:
     def _sync_agent_display(self) -> None:
         """現在のエージェントスロットをダッシュボード表示へ反映する。"""
         self._dashboard_state.set_agent(self._agent.current_name, self._agent.current_provider)
+        self._publish_agent_usage_pending()
+        self._refresh_current_agent_usage()
+
+    def _start_agent_usage_monitor(self) -> None:
+        """現在エージェントの利用枠を定期的に取得する。"""
+        if not self._agent_usage.providers:
+            return
+        self._agent_usage_thread = threading.Thread(target=self._run_agent_usage_monitor, daemon=True)
+        self._agent_usage_thread.start()
+
+    def _run_agent_usage_monitor(self) -> None:
+        """利用枠取得コマンドを一定間隔で実行する。"""
+        while not self._shutdown.is_set():
+            self._refresh_current_agent_usage()
+            interval = max(10.0, self._settings.agent_usage_refresh_seconds)
+            if self._shutdown.wait(interval):
+                return
+
+    def _publish_agent_usage_pending(self) -> None:
+        """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
+        provider = self._agent.current_provider
+        if not self._agent_usage.has_provider(provider) or self._dashboard_state.has_agent_usage(provider):
+            return
+        self._dashboard_state.set_agent_usage(
+            provider,
+            {
+                "provider": provider.lower(),
+                "available": False,
+                "label": "取得待ち",
+                "five_hour": None,
+                "weekly": None,
+                "other_text": "",
+                "error": "",
+            },
+        )
+
+    def _refresh_current_agent_usage(self) -> None:
+        """現在プロバイダの利用枠を取得してダッシュボードへ反映する。"""
+        provider = self._agent.current_provider
+        if not self._agent_usage.has_provider(provider):
+            return
+        snapshot = self._agent_usage.fetch(provider)
+        self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
 
     def _announce_auth_required(self) -> None:
         """起動後に未認証なら本人確認を促す。"""
