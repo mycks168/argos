@@ -51,7 +51,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 {"normalized": "リードミー エムディー と エルエルエム"}
 ```
 
-tts-filter を呼び出す前に、ARGOS本体で読み上げの軽いローカル補正を通す。現時点では「5タップ」を「ごタップ」へ補正し、音声合成エンジン（VOICEVOXやKokoro TTS）が誤って「あやまたっぷ」と発音するのを防ぐ。
+ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
 
 ### VOICEVOX
 
