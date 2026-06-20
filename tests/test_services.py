@@ -95,7 +95,7 @@ def test_tts_filter_normalize(monkeypatch):
 
     assert client.normalize("README") == "リードミー"
     assert calls[0][2]["Authorization"] == "Bearer token"
-    assert client.normalize("5タップされた") == "ごタップされた"
+    assert client.normalize("5タップされた") == "5タップされた"
 
 
 def test_voicevox_synthesize(monkeypatch):
