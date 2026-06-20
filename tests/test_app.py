@@ -95,6 +95,10 @@ class FakeAudio:
     def play_wav(self, wav):
         self.played.append(wav)
 
+    @property
+    def is_playing(self):
+        return False
+
     def set_volume(self, volume):
         self.volume = max(0, min(100, int(volume)))
         return self.volume

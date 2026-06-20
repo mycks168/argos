@@ -671,6 +671,7 @@ class ArgosApp:
     def _announce_dashboard_notification(self, payload: dict[str, object]) -> None:
         """外部通知を音と音声で知らせる。"""
         self._dashboard_state.wake_display()
+        self._wait_for_notification_audio_slot()
         if payload.get("sound") and not self._settings.dry_run:
             try:
                 self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
@@ -682,7 +683,13 @@ class ArgosApp:
             text = str(payload.get("text", "")).strip()
             phrase = "。".join(part for part in (title, text) if part)
             if phrase:
+                self._wait_for_notification_audio_slot()
                 self._speak_status(phrase)
+
+    def _wait_for_notification_audio_slot(self) -> None:
+        """通知音声が他の読み上げと重ならないよう、再生中なら待つ。"""
+        while not self._shutdown.is_set() and getattr(self._audio, "is_playing", False):
+            time.sleep(0.2)
 
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
