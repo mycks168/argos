@@ -233,6 +233,7 @@ class ArgosApp:
             remote_location_url=settings.remote_location_url,
             remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
             control_handler=self._handle_dashboard_control,
+            event_handler=self._handle_dashboard_event,
         )
 
     def run(self) -> None:
@@ -657,6 +658,38 @@ class ArgosApp:
         else:
             raise ValueError(f"未対応の操作です: {action}")
         return {"muted": self._is_muted(), "volume": self._audio.volume}
+
+    def _handle_dashboard_event(self, payload: dict[str, object], response: dict[str, object]) -> None:
+        """外部表示イベントに応じて通知音や読み上げを行う。"""
+        if payload.get("type") != "notification":
+            return
+        if not payload.get("sound") and not payload.get("speak"):
+            return
+        thread = threading.Thread(target=self._announce_dashboard_notification, args=(payload,), daemon=True)
+        thread.start()
+
+    def _announce_dashboard_notification(self, payload: dict[str, object]) -> None:
+        """外部通知を音と音声で知らせる。"""
+        self._dashboard_state.wake_display()
+        self._wait_for_notification_audio_slot()
+        if payload.get("sound") and not self._settings.dry_run:
+            try:
+                self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
+            except Exception as exc:
+                log.exception("通知音の再生に失敗しました")
+                self._report_error("通知音", exc)
+        if payload.get("speak"):
+            title = str(payload.get("title", "")).strip()
+            text = str(payload.get("text", "")).strip()
+            phrase = "。".join(part for part in (title, text) if part)
+            if phrase:
+                self._wait_for_notification_audio_slot()
+                self._speak_status(phrase)
+
+    def _wait_for_notification_audio_slot(self) -> None:
+        """通知音声が他の読み上げと重ならないよう、再生中なら待つ。"""
+        while not self._shutdown.is_set() and getattr(self._audio, "is_playing", False):
+            time.sleep(0.2)
 
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""

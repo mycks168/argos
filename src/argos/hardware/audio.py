@@ -198,6 +198,12 @@ class AudioPlayer:
         with self._volume_lock:
             return self._volume
 
+    @property
+    def is_playing(self) -> bool:
+        """現在再生プロセスが動いている場合はTrueを返す。"""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
+
     def set_volume(self, volume: int) -> int:
         """再生音量を0から100の範囲に丸めて反映し、反映後の値を返す。"""
         with self._volume_lock:

@@ -276,6 +276,26 @@ def test_dashboard_control_api_calls_handler():
     assert calls == [{"action": "mute", "volume": 55}]
 
 
+def test_dashboard_event_api_calls_handler():
+    """外部イベントAPIは状態更新後にイベントハンドラーを呼ぶ。"""
+    calls = []
+
+    def handle_event(payload, response):
+        calls.append((payload, response))
+
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", event_handler=handle_event)
+    server.start()
+    url = f"http://{server.address[0]}:{server.address[1]}/api/events"
+    try:
+        status, body = _read_json(url, "POST", {"type": "notification", "title": "予定", "speak": True}, "secret")
+    finally:
+        server.stop()
+
+    assert status == 201
+    assert body["id"]
+    assert calls == [({"type": "notification", "title": "予定", "speak": True}, body)]
+
+
 def test_dashboard_server_rejects_invalid_token():
     """外部イベントAPIはBearer認証なしで更新できない。"""
     server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")

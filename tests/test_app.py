@@ -95,6 +95,10 @@ class FakeAudio:
     def play_wav(self, wav):
         self.played.append(wav)
 
+    @property
+    def is_playing(self):
+        return False
+
     def set_volume(self, volume):
         self.volume = max(0, min(100, int(volume)))
         return self.volume
@@ -370,6 +374,19 @@ def test_dashboard_control_resets_current_agent_session(monkeypatch):
     assert app._agent.reset is True
     assert snapshot["notifications"][0]["title"] == "セッションリセット"
     assert snapshot["notifications"][0]["source"] == "ARGOS"
+
+
+def test_dashboard_notification_event_can_speak(monkeypatch, capsys):
+    """外部通知イベントを読み上げ通知として処理できる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._announce_dashboard_notification({"type": "notification", "title": "予定", "text": "旅費申請", "speak": True})
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["display_activity"]["sequence"] == 1
+    output = capsys.readouterr().out
+    assert "予定。旅費申請" in output
 
 
 def test_app_restores_audio_state(monkeypatch, tmp_path):
