@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>全国天気予報</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1e1e24;
+            color: #ffffff;
+            font-family: 'Helvetica Neue', Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        .container {
+            position: relative;
+            width: 600px;
+            height: 600px;
+            background-image: url('https://upload.wikimedia.org/wikipedia/commons/thumb/a/af/Map_of_Japan_blank_blue.svg/640px-Map_of_Japan_blank_blue.svg.png');
+            background-size: contain;
+            background-repeat: no-repeat;
+            background-position: center;
+            border-radius: 12px;
+            box-shadow: inset 0 0 40px rgba(0,0,0,0.5);
+        }
+        .weather-card {
+            position: absolute;
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 8px;
+            padding: 4px 6px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            transform: translate(-50%, -50%);
+            animation: fadeIn 0.4s ease-out;
+            min-width: 48px;
+        }
+        .city-name {
+            font-size: 11px;
+            font-weight: bold;
+            color: #f1f5f9;
+            margin-bottom: 2px;
+        }
+        .weather-emoji {
+            font-size: 18px;
+            margin: 1px 0;
+        }
+        .temp {
+            font-size: 11px;
+            font-weight: bold;
+            color: #fbbf24;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translate(-50%, -40%); }
+            to { opacity: 1; transform: translate(-50%, -50%); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        
+        <div class="weather-card" style="top: 22%; left: 78%;">
+            <span class="city-name">札幌</span>
+            <span class="weather-emoji">☀️</span>
+            <span class="temp">25℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 38%; left: 70%;">
+            <span class="city-name">青森</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">21℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 48%; left: 67%;">
+            <span class="city-name">仙台</span>
+            <span class="weather-emoji">☔</span>
+            <span class="temp">20℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 58%; left: 63%;">
+            <span class="city-name">東京</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">27℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 54%; left: 51%;">
+            <span class="city-name">金沢</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">27℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 62%; left: 53%;">
+            <span class="city-name">名古屋</span>
+            <span class="weather-emoji">☀️</span>
+            <span class="temp">33℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 64%; left: 45%;">
+            <span class="city-name">大阪</span>
+            <span class="weather-emoji">☀️</span>
+            <span class="temp">30℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 65%; left: 32%;">
+            <span class="city-name">広島</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">29℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 72%; left: 35%;">
+            <span class="city-name">高知</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">33℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 68%; left: 20%;">
+            <span class="city-name">福岡</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">28℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 78%; left: 17%;">
+            <span class="city-name">鹿児島</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">30℃</span>
+        </div>
+        
+
+        <div class="weather-card" style="top: 88%; left: 10%;">
+            <span class="city-name">那覇</span>
+            <span class="weather-emoji">☁️</span>
+            <span class="temp">31℃</span>
+        </div>
+        
+    </div>
+</body>
+</html>

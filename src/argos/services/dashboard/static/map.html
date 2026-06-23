@@ -95,6 +95,12 @@
     const followCurrentLocation = params.get('follow') === '1';
     const labelMode = params.get('label_mode') || 'permanent';
 
+    // 経路描画用の変数とスロットリング
+    let routePolyline = null;
+    let lastRouteFetchTime = 0;
+    const routeParam = params.get('route') === '1' || params.get('route') === 'true';
+    const osrmUrl = params.get('osrm_url') || 'http://localhost:5001';
+
     // 地図の初期化
     const map = L.map('map', {
       zoomControl: false // すっきりしたダッシュボード外観にするためズームコントロールを非表示に
@@ -107,6 +113,72 @@
 
     // 距離の凡例（スケール）を表示
     L.control.scale({ imperial: false }).addTo(map);
+
+    async function fetchAndDrawRoute() {
+      if (!routeParam) return;
+      
+      const now = Date.now();
+      if (now - lastRouteFetchTime < 5000) { // 5秒以内の再呼び出しは無視
+        return;
+      }
+      lastRouteFetchTime = now;
+      
+      const coords = [];
+      
+      if (currentMarker) {
+        const curLatLng = currentMarker.getLatLng();
+        coords.push([curLatLng.lat, curLatLng.lng]);
+      } else if (!isNaN(curLat) && !isNaN(curLng)) {
+        coords.push([curLat, curLng]);
+      }
+      
+      const destinationMarkers = markers.filter(m => m !== currentMarker);
+      if (destinationMarkers.length > 0) {
+        destinationMarkers.forEach(m => {
+          const latLng = m.getLatLng();
+          coords.push([latLng.lat, latLng.lng]);
+        });
+      } else {
+        const pLat = parseFloat(params.get('lat'));
+        const pLng = parseFloat(params.get('lng'));
+        if (!isNaN(pLat) && !isNaN(pLng)) {
+          coords.push([pLat, pLng]);
+        }
+      }
+      
+      if (coords.length < 2) {
+        return;
+      }
+      
+      const coordStr = coords.map(c => `${c[1]},${c[0]}`).join(';');
+      const url = `${osrmUrl.replace(/\/$/, '')}/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+      
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`OSRM HTTP error: ${response.status}`);
+        }
+        const data = await response.json();
+        const routes = data.routes;
+        if (routes && routes.length > 0) {
+          const coordinates = routes[0].geometry.coordinates;
+          const latLngs = coordinates.map(c => [c[1], c[0]]);
+          
+          if (routePolyline) {
+            map.removeLayer(routePolyline);
+          }
+          
+          routePolyline = L.polyline(latLngs, {
+            color: '#28a8ff',
+            weight: 5,
+            opacity: 0.75,
+            lineJoin: 'round'
+          }).addTo(map);
+        }
+      } catch (error) {
+        console.warn('経路の取得に失敗しました:', error);
+      }
+    }
 
     const markers = [];
     const dynamicMarkers = [];
@@ -338,6 +410,9 @@
       if (followCurrentLocation) {
         adjustMapView(false);
       }
+      if (routeParam) {
+        fetchAndDrawRoute();
+      }
     }
 
     /**
@@ -398,8 +473,13 @@
       }
     }
 
+
     // 地図範囲の自動調整
     adjustMapView(true);
+
+    if (routeParam) {
+      fetchAndDrawRoute();
+    }
 
     if (followCurrentLocation) {
       startCurrentLocationFollow();

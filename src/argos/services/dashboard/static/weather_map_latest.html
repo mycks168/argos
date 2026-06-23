@@ -1,0 +1,49 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><title>日本の最新天気</title>
+<style>
+html,body{margin:0;height:100%;background:#10131a;color:#fff;font-family:system-ui,-apple-system,"Noto Sans JP",sans-serif;overflow:hidden;}
+.wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 45%,#26384f 0%,#10131a 68%);}
+.map{position:relative;width:min(94vw,660px);height:min(94vh,660px);background-image:url('https://upload.wikimedia.org/wikipedia/commons/thumb/a/af/Map_of_Japan_blank_blue.svg/640px-Map_of_Japan_blank_blue.svg.png');background-size:contain;background-repeat:no-repeat;background-position:center;}
+.title{position:absolute;left:12px;top:10px;font-size:20px;font-weight:800;text-shadow:0 2px 8px #000;}
+.source{position:absolute;left:12px;bottom:10px;font-size:11px;color:#cbd5e1;background:rgba(0,0,0,.42);padding:5px 7px;border-radius:6px;}
+.weather-card{position:absolute;transform:translate(-50%,-50%);min-width:64px;max-width:96px;background:rgba(15,23,42,.84);border:1px solid rgba(255,255,255,.22);border-radius:8px;padding:4px 5px;text-align:center;box-shadow:0 5px 18px rgba(0,0,0,.45);}
+.city{font-size:11px;font-weight:800;line-height:1.1;}
+.weather-icon{width:30px;height:30px;margin:1px auto;filter:drop-shadow(0 2px 3px rgba(0,0,0,.45));}
+.weather-icon svg{display:block;width:30px;height:30px;}
+.temp{font-size:12px;font-weight:800;color:#facc15;}
+.desc{font-size:9px;color:#e2e8f0;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+</style></head><body><div class="wrap"><div class="title">日本の最新天気</div><div class="map"><div class="weather-card" style="top:22%;left:78%;" title="晴れ　夕方　から　くもり">
+      <div class="city">札幌</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">23℃</div><div class="desc">晴れ夕方からくもり</div>
+    </div>
+<div class="weather-card" style="top:38%;left:70%;" title="雨　所により　霧">
+      <div class="city">青森</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="雨"><path d="M16 28h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 15.5 6.5 6.5 0 0 0 16 28Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/><g fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"><path d="M17 34l-2 5M25 34l-2 5M33 34l-2 5"/></g></svg></div><div class="temp">18℃</div><div class="desc">雨所により霧</div>
+    </div>
+<div class="weather-card" style="top:48%;left:67%;" title="雨　所により　昼過ぎ　まで　激しく　降る">
+      <div class="city">仙台</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="雨"><path d="M16 28h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 15.5 6.5 6.5 0 0 0 16 28Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/><g fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"><path d="M17 34l-2 5M25 34l-2 5M33 34l-2 5"/></g></svg></div><div class="temp">20℃</div><div class="desc">雨所により昼過ぎまで激しく降る</div>
+    </div>
+<div class="weather-card" style="top:58%;left:63%;" title="くもり　夕方　晴れ">
+      <div class="city">東京</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">29℃</div><div class="desc">くもり夕方晴れ</div>
+    </div>
+<div class="weather-card" style="top:54%;left:51%;" title="くもり　夕方　から　雨">
+      <div class="city">金沢</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="雨"><path d="M16 28h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 15.5 6.5 6.5 0 0 0 16 28Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/><g fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"><path d="M17 34l-2 5M25 34l-2 5M33 34l-2 5"/></g></svg></div><div class="temp">24℃</div><div class="desc">くもり夕方から雨</div>
+    </div>
+<div class="weather-card" style="top:62%;left:53%;" title="晴れ　昼過ぎ　から　くもり">
+      <div class="city">名古屋</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">29℃</div><div class="desc">晴れ昼過ぎからくもり</div>
+    </div>
+<div class="weather-card" style="top:64%;left:45%;" title="晴れ　昼過ぎ　から　くもり">
+      <div class="city">大阪</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">29℃</div><div class="desc">晴れ昼過ぎからくもり</div>
+    </div>
+<div class="weather-card" style="top:65%;left:32%;" title="くもり">
+      <div class="city">広島</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="くもり"><path d="M16 36h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 23.5 6.5 6.5 0 0 0 16 36Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/></svg></div><div class="temp">29℃</div><div class="desc">くもり</div>
+    </div>
+<div class="weather-card" style="top:72%;left:35%;" title="くもり　時々　晴れ">
+      <div class="city">高知</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">31℃</div><div class="desc">くもり時々晴れ</div>
+    </div>
+<div class="weather-card" style="top:68%;left:20%;" title="くもり　所により　昼過ぎ　雨">
+      <div class="city">福岡</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="雨"><path d="M16 28h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 15.5 6.5 6.5 0 0 0 16 28Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/><g fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"><path d="M17 34l-2 5M25 34l-2 5M33 34l-2 5"/></g></svg></div><div class="temp">28℃</div><div class="desc">くもり所により昼過ぎ雨</div>
+    </div>
+<div class="weather-card" style="top:78%;left:17%;" title="くもり　所により　昼前　雨">
+      <div class="city">鹿児島</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="雨"><path d="M16 28h20a8 8 0 0 0 0-16h-1.2A12 12 0 0 0 12 15.5 6.5 6.5 0 0 0 16 28Z" fill="#cbd5e1" stroke="#e2e8f0" stroke-width="2"/><g fill="none" stroke="#60a5fa" stroke-width="4" stroke-linecap="round"><path d="M17 34l-2 5M25 34l-2 5M33 34l-2 5"/></g></svg></div><div class="temp">29℃</div><div class="desc">くもり所により昼前雨</div>
+    </div>
+<div class="weather-card" style="top:88%;left:10%;" title="晴れ">
+      <div class="city">那覇</div><div class="weather-icon"><svg viewBox="0 0 48 48" aria-label="晴れ"><g fill="none" stroke="#fbbf24" stroke-width="4" stroke-linecap="round"><path d="M24 4v6M24 38v6M4 24h6M38 24h6M9.9 9.9l4.2 4.2M33.9 33.9l4.2 4.2M38.1 9.9l-4.2 4.2M14.1 33.9l-4.2 4.2"/></g><circle cx="24" cy="24" r="10" fill="#facc15"/></svg></div><div class="temp">31℃</div><div class="desc">晴れ</div>
+    </div></div><div class="source">気象庁 2026-06-21 11:00:00 発表</div></div></body></html>
