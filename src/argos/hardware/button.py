@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from enum import Enum
-from threading import Lock
+from threading import Lock, Timer
 from typing import Callable
 
 
@@ -41,6 +41,8 @@ class ButtonPtt:
         self._lock = Lock()
         self._press_started_at = 0.0
         self._last_quick_release_at = 0.0
+        self._pending_short_release_timer: Timer | None = None
+        self._double_click_candidate_without_recording = False
 
     @property
     def state(self) -> PttState:
@@ -62,7 +64,16 @@ class ButtonPtt:
         """物理ボタン押下イベントを処理する。"""
         callback = None
         with self._lock:
-            self._press_started_at = time.monotonic()
+            now = time.monotonic()
+            self._press_started_at = now
+            if self._pending_short_release_timer is not None:
+                gap = now - self._last_quick_release_at
+                if gap < DOUBLE_CLICK_MAX_GAP_SEC:
+                    self._pending_short_release_timer.cancel()
+                    self._pending_short_release_timer = None
+                    self._double_click_candidate_without_recording = True
+                    self._state = PttState.LISTENING
+                    return
             if self._state == PttState.BUSY:
                 self._state = PttState.LISTENING
                 callback = self._on_press
@@ -77,16 +88,26 @@ class ButtonPtt:
     def handle_release(self) -> None:
         """物理ボタン解放イベントを処理する。"""
         callbacks = []
+        timer_to_start = None
         with self._lock:
             if self._state != PttState.LISTENING:
                 return
             now = time.monotonic()
             duration = now - self._press_started_at
-            if duration < DOUBLE_CLICK_MAX_PRESS_SEC:
+            if self._double_click_candidate_without_recording:
+                self._double_click_candidate_without_recording = False
+                self._state = PttState.IDLE
+                self._last_quick_release_at = 0.0
+                if duration < DOUBLE_CLICK_MAX_PRESS_SEC:
+                    callbacks.extend([self._on_cancel, self._on_double_click])
+                else:
+                    callbacks.append(self._on_cancel)
+            elif duration < DOUBLE_CLICK_MAX_PRESS_SEC:
                 if self._should_record_short_press():
-                    self._state = PttState.BUSY
-                    self._last_quick_release_at = 0.0
-                    callbacks.append(self._on_release)
+                    self._state = PttState.IDLE
+                    self._last_quick_release_at = now
+                    timer_to_start = Timer(DOUBLE_CLICK_MAX_GAP_SEC, self._finish_deferred_short_release)
+                    self._pending_short_release_timer = timer_to_start
                 else:
                     gap = now - self._last_quick_release_at
                     self._state = PttState.IDLE
@@ -99,5 +120,21 @@ class ButtonPtt:
             else:
                 self._state = PttState.BUSY
                 callbacks.append(self._on_release)
+        if timer_to_start:
+            timer_to_start.start()
         for callback in callbacks:
+            callback()
+
+    def _finish_deferred_short_release(self) -> None:
+        """ダブルクリック猶予後、短押し録音を本人確認処理へ渡す。"""
+        callback = None
+        with self._lock:
+            if self._pending_short_release_timer is None:
+                return
+            self._pending_short_release_timer = None
+            self._last_quick_release_at = 0.0
+            if self._state == PttState.IDLE:
+                self._state = PttState.BUSY
+                callback = self._on_release
+        if callback:
             callback()

@@ -6,6 +6,26 @@ from argos.core.app import ArgosApp, CodexProgressAnnouncer
 from argos.services.auth import hash_keyword
 
 
+class FakeTimer:
+    """テスト内で任意に発火できるタイマー。"""
+
+    timers = []
+
+    def __init__(self, _interval, callback):
+        """コールバックを保存する。"""
+        self.callback = callback
+        self.cancelled = False
+        FakeTimer.timers.append(self)
+
+    def start(self):
+        """実タイマーのstart互換メソッド。"""
+        return None
+
+    def cancel(self):
+        """タイマーをキャンセル済みにする。"""
+        self.cancelled = True
+
+
 def _settings():
     return Settings(
         agent_provider="codex",
@@ -326,6 +346,35 @@ def test_locked_ptt_shows_auth_recording_status(monkeypatch):
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["status"]["code"] == "authenticating"
     assert snapshot["status"]["label"] == "本人確認中"
+
+
+def test_locked_double_click_switches_slot_without_auth_release(monkeypatch):
+    """ロック中のPTTダブルクリックは本人確認処理へ流さずスロットだけ切り替える。"""
+    _patch_app(monkeypatch)
+    times = iter([1.00, 1.10, 1.30, 1.40])
+    monkeypatch.setattr("argos.hardware.button.time.monotonic", lambda: next(times))
+    FakeTimer.timers = []
+    monkeypatch.setattr("argos.hardware.button.Timer", FakeTimer)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._button.handle_press()
+    app._button.handle_release()
+    app._button.handle_press()
+    app._button.handle_release()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert FakeTimer.timers[-1].cancelled is True
+    assert app._recorder.cancelled is True
+    assert app._worker is None
+    assert snapshot["agent"]["name"] == "次"
+    assert snapshot["status"]["code"] == "locked"
 
 
 def test_dashboard_control_updates_mute_state(monkeypatch):
