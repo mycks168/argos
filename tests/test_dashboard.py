@@ -228,7 +228,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
         assert 'id="screensaver"' in html
         assert "resetScreensaver()" in html
-        assert 'const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening", "locked"]);' in html
+        assert 'const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening"]);' in html
+        assert '"locked"]);' not in html
         assert "state.display_activity?.sequence" in html
         assert "showScreensaver" in html
         assert '"pointermove"' not in html

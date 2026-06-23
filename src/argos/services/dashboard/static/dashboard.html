@@ -836,7 +836,7 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening", "locked"]);
+      const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening"]);
       if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }
