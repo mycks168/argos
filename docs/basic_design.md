@@ -182,6 +182,8 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 - `reader.html` (Markdown): marked.js を使用し、`postMessage` やクエリで受け取ったMarkdownテキストを綺麗にレンダリングする。
 - `viewer.html` (画像): クエリで指定された画像URLをアスペクト比維持で表示し、ズームイン・アウト・リセット機能を提供する。
 
+`scripts/show-ttyd-tmux-overlay.py` は `tmux` セッションを作成し、`ttyd` で `tmux attach-session` を `127.0.0.1` に公開してから、`overlay_type="terminal"` の表示イベントをダッシュボードへ送る。表示自体は既存の iframe overlay を使う。ttyd はブラウザからシェルを操作できるため、既定はローカルホスト公開とし、LANやインターネットへ直接公開しない。
+
 ダッシュボード各スロットの「閉じる」ボタンをクリックすると、フロントエンド側から自動的に `clear_overlay` イベントが送信され、そのスロットがクリアされる。
 
 Codex CLI が最終回答前に途中イベントを出す場合、ARGOS はその差分を順次処理する。CLI 側が最終回答まで応答テキストを出さない場合、完全なトークンストリーミングにはならないが、最終回答の読み上げは句読点単位で分割される。

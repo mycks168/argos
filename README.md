@@ -186,6 +186,12 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 通知イベントに `sound: true` や `speak: true` を付けると、ARGOS本体が画面を起こし、通知音または通知本文の読み上げを行います。
 ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。変更した音量とミュート状態は `ARGOS_AUDIO_STATE_PATH` に保存し、ARGOS再起動後も前回の状態を復元します。
 
+ttyd がインストール済みなら、tmux セッションを中央または右ペインへ表示できます。既定では `127.0.0.1:7681` に ttyd を起動し、`argos-terminal` セッションを iframe 表示します。Webターミナルはシェル操作権限を持つため、外部公開せずローカル表示に閉じてください。
+
+```bash
+uv run scripts/show-ttyd-tmux-overlay.py --target-slot center --replace-top
+```
+
 `ARGOS_DASHBOARD_HOST=0.0.0.0` ではLAN内の他端末から画面も閲覧できます。会話履歴を含むため、インターネットへ直接公開しないでください。
 
 ## 必要な外部サービス
