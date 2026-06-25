@@ -47,7 +47,7 @@ def _settings() -> Settings:
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=(),
-        antigravity_command="/home/yuki/.local/bin/agy",
+        antigravity_command="agy",
         antigravity_home="~/.gemini/antigravity-cli",
         antigravity_extra_args=(),
     )

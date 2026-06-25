@@ -66,7 +66,7 @@ def test_load_default_slot_uses_pi_home(monkeypatch):
 
     settings = load_settings()
 
-    assert settings.agent_slots[0].cwd == "/home/pi"
+    assert settings.agent_slots[0].cwd == "/opt/argos"
 
 
 def test_load_numbered_slots(monkeypatch):

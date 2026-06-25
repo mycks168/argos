@@ -240,28 +240,27 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 
 ## systemd ユニット
 
-`systemd/argos.service` は Raspberry Pi 上で ARGOS を常駐させるための配布用ユニットファイルである。
+`systemd/argos.service` は Raspberry Pi 上で ARGOS を常駐させるための配布用ユニットテンプレートである。`scripts/install-systemd-services.sh` が `@PROJECT_DIR@`、`@ARGOS_USER@`、`@ARGOS_GROUP@`、`@USER_HOME@` を置換して `/etc/systemd/system` へ配置する。既定の本番配置先は `/opt/argos` とする。開発環境では `ARGOS_PROJECT_DIR=/home/<user>/argos` のように指定して同じテンプレートを使う。
 
-- `User=pi`、`Group=pi` で実行する
-- `WorkingDirectory=/home/pi/argos` を作業ディレクトリにする
-- `EnvironmentFile=/home/pi/argos/.env` から設定を読み込む
-- `ExecStart=/home/pi/argos/.venv/bin/argos` でプロジェクトの仮想環境内コマンドを起動する
-- `PATH` に `/home/pi/.local/bin` を含め、Codex CLI を解決できるようにする
-- `network-online.target`、`tailscale-online.target`、`autossh-clove.service`、`sound.target` の後に起動する
-- 起動直後にTailscale越しのVOICEVOXなどへ早すぎる接続を行わないよう、`tailscale-online.target` と `autossh-clove.service` を `Wants` と `After` に含める
+- `User`、`Group` は `ARGOS_SERVICE_USER` と `ARGOS_SERVICE_GROUP` で指定し、未指定時は `argos` とする
+- systemdユニットを有効化する前に、指定したサービスユーザーとグループをOS側に作成する
+- `WorkingDirectory=/opt/argos` を本番の既定作業ディレクトリにする
+- `EnvironmentFile=/opt/argos/.env` から設定を読み込む
+- `ExecStart=/opt/argos/.venv/bin/argos` でプロジェクトの仮想環境内コマンドを起動する
+- `PATH` にサービスユーザーの `.local/bin` と `.cargo/bin` を含め、Codex CLI を解決できるようにする
+- `network-online.target`、`tailscale-online.target`、`sound.target` の後に起動する
+- ホスト固有のautosshなどへ依存する場合は、ソースのユニットではなく実機側のsystemd drop-inで `After` と `Wants` を追加する
 - 異常終了時は `Restart=on-failure` で再起動する
 
-`systemd/argos-agent-runner.service` は Agent Runner をARGOS本体とは別に常駐させるための配布用ユニットファイルである。
+`systemd/argos-agent-runner.service` は Agent Runner をARGOS本体とは別に常駐させるための配布用ユニットテンプレートである。
 
-- `User=pi`、`Group=pi` で実行する
-- `WorkingDirectory=/home/pi/argos` を作業ディレクトリにする
-- `EnvironmentFile=/home/pi/argos/.env` から設定を読み込む
-- `ExecStart=/home/pi/argos/.venv/bin/argos-agent-runner` でRunnerを起動する
+- `User`、`Group`、`WorkingDirectory`、`EnvironmentFile` は ARGOS本体のユニットと同じ置換値を使う
+- `ExecStart=/opt/argos/.venv/bin/argos-agent-runner` でRunnerを起動する
 - 異常終了時は `Restart=on-failure` で再起動する
 
 Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
-実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、`pi` ユーザを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
+実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 
 ## 音声入力の設定
 
@@ -340,7 +339,7 @@ agy --print <prompt>
 agy --conversation <conversation_id> --print <prompt>
 ```
 
-`ARGOS_ANTIGRAVITY_COMMAND` で `agy` のパスを指定する。既定値は `/home/yuki/.local/bin/agy` とする。Antigravity のキャッシュは `ARGOS_ANTIGRAVITY_HOME` から読み、既定値は `~/.gemini/antigravity-cli` とする。`ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS=true` の場合は `--dangerously-skip-permissions` を渡す。`ARGOS_ANTIGRAVITY_SANDBOX=true` の場合は `--sandbox` を渡す。
+`ARGOS_ANTIGRAVITY_COMMAND` で `agy` のパスを指定する。既定値は `agy` とし、systemd の `PATH` から解決する。Antigravity のキャッシュは `ARGOS_ANTIGRAVITY_HOME` から読み、既定値は `~/.gemini/antigravity-cli` とする。`ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS=true` の場合は `--dangerously-skip-permissions` を渡す。`ARGOS_ANTIGRAVITY_SANDBOX=true` の場合は `--sandbox` を渡す。
 
 Antigravity は会話再開時に過去の画面出力を標準出力へ混ぜることがある。ARGOS は `agy` の標準出力を回答本文としては使わず、実行後に `transcript_full.jsonl` または `transcript.jsonl` の追加分を読み、末尾から `source=MODEL`、`type=PLANNER_RESPONSE`、`status=DONE`、`content` ありのエントリーだけを回答として扱う。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
 

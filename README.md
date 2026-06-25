@@ -5,7 +5,7 @@ ARGOS（Autonomous Road Guardian & Observation System）は、Raspberry Pi の P
 ## 使い方
 
 ```bash
-cd /home/pi/argos
+cd /opt/argos
 uv sync --extra dev
 cp .env.example .env
 uv run argos
@@ -24,14 +24,13 @@ DRY_RUN では `/next` で Codex スロット切替、`/reset` で現在スロ�
 サービスとして常駐させる場合:
 
 ```bash
-cd /home/pi/argos
+cd /opt/argos
 uv sync
-sudo cp systemd/argos.service /etc/systemd/system/argos.service
-sudo systemctl daemon-reload
+ARGOS_PROJECT_DIR=/opt/argos ARGOS_SERVICE_USER=argos ARGOS_SERVICE_GROUP=argos ./scripts/install-systemd-services.sh
 sudo systemctl enable --now argos.service
 ```
 
-ARGOSは `tailscale-online.target` と `autossh-clove.service` の後に起動します。Tailscale越しの VOICEVOX や周辺サービスを使う場合、起動直後に依存サービスへ早すぎる接続を行わないようにします。
+ARGOSは `network-online.target` と `tailscale-online.target` の後に起動します。Tailscale越しの VOICEVOX や周辺サービスを使う場合、追加の依存サービスは実機側のsystemd drop-inで指定してください。
 
 状態確認とログ確認:
 
@@ -152,7 +151,7 @@ ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 地図オーバーレイの現在地は、既定ではローカルのgpsdまたはGPSデバイスから取得します。外部端末のGPS APIを使う場合は、`.env` で `ARGOS_LOCATION_PROVIDER=remote` と `ARGOS_REMOTE_LOCATION_URL` を設定します。
 左側のミュートボタンで読み上げを一時停止できます。ミュート中は再生中の音声を止め、解除後はキューに残っている読み上げから再開します。ミュート状態はボタン表示で示し、録音中などの動作表示はそのまま維持します。
 左側のフォントサイズボタンで、ダッシュボードの主要テキストを `小`、`中`、`大` から切り替えられます。選択値はブラウザのローカルストレージに保存され、キオスク画面の再読み込み後も維持されます。
-`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/home/yuki/bin/codex-usage-status`
+`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
 文字起こし、Codex、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、右側の通知欄へ赤色で表示します。同じエラーが連続した場合は1件にまとめます。
 
 `/tmp/argos/camera-latest.jpg` に静止画を置くと、`/camera/latest.jpg` で配信できます。通知の `image_url` にこのURLを指定すると、カメラ画像も表示できます。

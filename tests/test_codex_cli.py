@@ -49,7 +49,7 @@ def _settings(tmp_path):
         codex_bypass_sandbox=False,
         codex_approval_policy="on-request",
         codex_extra_args=("--json",),
-        antigravity_command="/home/yuki/.local/bin/agy",
+        antigravity_command="agy",
         antigravity_home="~/.gemini/antigravity-cli",
         antigravity_extra_args=(),
     )

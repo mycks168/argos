@@ -165,7 +165,7 @@ class Settings:
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
     slots: list[AgentSlot] = []
-    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/home/pi"))
+    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
     index = 1
     while True:
         raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
@@ -330,7 +330,7 @@ def load_settings() -> Settings:
         codex_bypass_sandbox=_bool_env("ARGOS_CODEX_BYPASS_SANDBOX", False),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),
         codex_extra_args=extra_args,
-        antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "/home/yuki/.local/bin/agy"),
+        antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "agy"),
         antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
         antigravity_extra_args=antigravity_extra_args,
         antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", True),
