@@ -4,10 +4,13 @@ from io import BytesIO
 from pathlib import Path
 
 from argos.hardware.audio import (
+    AudioInputStream,
     AudioPlayer,
     Recorder,
+    StreamRecorder,
     _pad_wav_silence,
     _repair_wav_header,
+    _resample_pcm16,
     cleanup_stale_recordings,
     select_available_input_device,
 )
@@ -126,6 +129,56 @@ def test_recorder_reuses_detected_fallback_device(monkeypatch, tmp_path):
     assert calls[0][calls[0].index("-D") + 1] == "plughw:CARD=Microphone,DEV=0"
     assert calls[1][calls[1].index("-D") + 1] == "plughw:CARD=Microphone,DEV=0"
     assert scan_count == 1
+
+
+def test_stream_recorder_writes_shared_input_to_wav(monkeypatch, tmp_path):
+    """共有マイク入力からPTT録音用WAVを作成する。"""
+    wav_path = tmp_path / "utterance.wav"
+    frames = [b"\x00\x40" * 160, b"\x00\xc0" * 160]
+
+    class FakeSubscription:
+        def __init__(self):
+            self.closed = False
+
+        def read(self, timeout=1.0):
+            return frames.pop(0) if frames else b""
+
+        def close(self):
+            self.closed = True
+
+    class FakeSource:
+        def __init__(self):
+            self.subscription = FakeSubscription()
+
+        def subscribe(self):
+            return self.subscription
+
+    monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(wav_path))
+    recorder = StreamRecorder(FakeSource(), 16000)
+
+    recorder.start()
+    import time
+
+    time.sleep(0.05)
+    written = recorder.stop()
+
+    assert written.startswith(str(tmp_path))
+    with wave.open(written, "rb") as wav_file:
+        assert wav_file.getframerate() == 16000
+        assert wav_file.getnframes() > 320
+
+
+def test_audio_input_stream_resamples_before_publish(monkeypatch):
+    """共有マイク入力は購読者へ配信する前に指定レートへ変換する。"""
+    stream = AudioInputStream("mic", 48000, 16000)
+    monkeypatch.setattr(stream, "start", lambda: None)
+    subscription = stream.subscribe()
+    data = b"".join(int(value).to_bytes(2, "little", signed=True) for value in (0, 3, 6, 9, 12, 15))
+
+    stream._publish(_resample_pcm16(data, 48000, 16000))
+
+    assert subscription.read(timeout=0.01) == b"\x03\x00\x0c\x00"
+    subscription.close()
 
 
 def test_select_available_input_device_falls_back_to_first(monkeypatch):

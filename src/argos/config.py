@@ -177,6 +177,7 @@ class Settings:
     wakeword_vad_threshold: float = 0.35
     wakeword_vad_min_silence_seconds: float = 1.5
     wakeword_vad_check_seconds: float = 0.32
+    wakeword_tts_cooldown_seconds: float = 2.0
     wakeword_score_log_path: str = ""
 
 
@@ -315,6 +316,7 @@ def load_settings() -> Settings:
         wakeword_vad_threshold=float(os.environ.get("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.35")),
         wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
+        wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),

@@ -149,6 +149,66 @@ def test_wakeword_listener_records_after_detection(monkeypatch):
         assert wav_file.getnframes() == 1280 * 3
 
 
+def test_wakeword_listener_clears_buffer_when_detection_ignored(monkeypatch):
+    """アプリ側が検知を無視したら残音声バッファを捨てる。"""
+    loud = (b"\x00\x40" * 1280)
+    reads = [loud, loud, loud, loud]
+    ready = []
+    detected = 0
+
+    class FakeStdout:
+        def read(self, _size):
+            return reads.pop(0) if reads else b""
+
+    class FakeProc:
+        stdout = FakeStdout()
+
+        def poll(self):
+            return None
+
+        def send_signal(self, _signum):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    class FakeModel:
+        def predict_score(self, _waveform):
+            return 0.9
+
+    def on_detected():
+        nonlocal detected
+        detected += 1
+        if detected == 1:
+            return False
+        return True
+
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        window_seconds=0.08,
+        interval_seconds=0.0,
+        record_min_seconds=0.0,
+        record_silence_seconds=0.0,
+        min_actual_seconds=0.0,
+        endpoint_mode="rms",
+        on_detected=on_detected,
+        on_recording_ready=lambda path: (ready.append(path), listener.stop()),
+    )
+    monkeypatch.setattr(listener, "_open_arecord", lambda: FakeProc())
+
+    listener._run_stream(FakeModel(), 0.5)
+
+    assert detected >= 2
+    assert ready
+    with wave.open(ready[0], "rb") as wav_file:
+        assert wav_file.getnframes() == 1280 * 3
+
+
 def test_wakeword_listener_records_with_vad(monkeypatch):
     """VAD終了判定でウェイクワード後のWAVを作成できる。"""
     loud = (b"\x00\x40" * 1280)

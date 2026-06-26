@@ -281,7 +281,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 ```
 
 `arecord -l` が空でも、`/proc/asound/cards` に USB マイクが見えていればカード名指定で録音できる場合がある。
-ウェイクワードはraw音声を16kHz前提で扱うため、`dsnoop` が実機側で48kHzを返す場合は、ALSAの `plug` で16kHzへ変換した共有入力デバイスを `AUDIO_INPUT_DEVICES` の先頭に置く。
+ウェイクワード有効時はARGOSがマイク入力を1本だけ開き、PTT録音とウェイクワード監視へ内部配信する。`dsnoop` が実機側で48kHzを返す場合は、`ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE=48000` を指定し、ARGOS内部で16kHzへ変換する。
 
 ## ウェイクワード
 
@@ -291,16 +291,23 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - しきい値は `ARGOS_WAKEWORD_THRESHOLD` を最優先に使う。`argos_eval.json` の `optimal_threshold` や `threshold` は学習時の参考値で、常時監視では自動採用しない
 - 入力デバイスは通常録音と同じ `AUDIO_INPUT_DEVICES` または `AUDIO_DEVICE` を使う
 - `ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE` でraw入力の実サンプルレートを指定できる。`dsnoop` が16kHz指定でも48kHzを返す環境では `48000` を指定し、ARGOS内部で16kHzへ変換してモデルとVADへ渡す
+- ウェイクワード有効時は共有マイク入力を使い、PTT録音とウェイクワード監視が別々に `arecord` を起動しない
 - 推論窓は無音で前詰めして、起動直後でも `ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS` 秒ぶんの実音声が入った時点から判定する
 - 検知後は同じ音声ストリームから発話をWAV化し、既存のSTT、本人確認、エージェント処理へ渡す
+- ウェイクワード経由のSTT結果は、先頭に混ざった `アルゴス`、`アルコス`、`argos` などの呼びかけだけを除去してから本人確認と通常会話へ渡す。文中の同語は削除しない
+- ウェイクワードは `ready` または `locked` の時だけ受け付ける。考え中、文字起こし中、録音中、読み上げ中の検知は処理中タスクやTTSをキャンセルせず無視する
+- ウェイクワード検知後の録音中にPTTを押した場合は、別録音を開始せず、そのウェイクワード発話をPTT解放まで継続する
 - 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
+- 読み上げ終了後も `ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS` 秒間はウェイクワード検知を無視し、検知バッファをクリアする。これはウェイクワードだけの自己音声対策で、PTT録音には影響しない
 - 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
 - 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う
 - `ARGOS_WAKEWORD_ENDPOINT_MODE=rms` の場合、`ARGOS_WAKEWORD_RECORD_MIN_SECONDS` 以上録音した後、`SILENCE_RMS_THRESHOLD` 未満の状態が `ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS` 続いたら終了する
 - 最大録音秒数は `ARGOS_WAKEWORD_RECORD_MAX_SECONDS` で制限する
 - `ARGOS_WAKEWORD_SCORE_LOG_PATH` を指定すると、調査用に1秒ごとの最大スコアと検知有無を指定ファイルへ追記する。SDカード摩耗を避ける場合は `/tmp/argos/wakeword-score.log` のようにtmpfs配下を指定する
 
-ウェイクワード監視はマイクを常時開くため、デバイスによってはPTT録音と排他になる。実運用では `dsnoop` など同時入力可能なALSAデバイスを指定するか、ウェイクワード運用中はPTTを補助操作として扱う。
+ウェイクワード無効時は従来どおり、PTT録音の開始時だけ `arecord` を起動する。
+
+PTT録音はユーザーが明示的にボタンを押しているため、RMS音量だけでは破棄しない。車内では無発話時と小声発話時のRMS差が小さいため、録音後はSTTへ渡し、文字起こし結果が空の場合だけ通知する。ウェイクワード後録音は誤検知対策として、従来どおり `SILENCE_RMS_THRESHOLD` を最低限の破棄判定に使う。
 
 ## 読み上げ分割
 

@@ -17,6 +17,8 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from pathlib import Path
 
+from argos.hardware.audio import AudioInputStream, AudioInputSubscription
+
 
 SAMPLE_RATE = 16000
 EMBEDDING_WINDOW = 76
@@ -137,6 +139,8 @@ class WakeWordListener:
         on_recording_ready: Callable[[str], None],
         *,
         on_detected: Callable[[], bool | None] | None = None,
+        audio_source: AudioInputStream | None = None,
+        should_continue_recording: Callable[[], bool] | None = None,
         capture_sample_rate: int = SAMPLE_RATE,
         window_seconds: float = 2.0,
         interval_seconds: float = 0.25,
@@ -163,6 +167,8 @@ class WakeWordListener:
         self._capture_sample_rate = max(1, int(capture_sample_rate))
         self._on_recording_ready = on_recording_ready
         self._on_detected = on_detected
+        self._audio_source = audio_source
+        self._should_continue_recording = should_continue_recording
         self._window_seconds = window_seconds
         self._interval_seconds = interval_seconds
         self._chunk_ms = chunk_ms
@@ -220,11 +226,8 @@ class WakeWordListener:
                     return
 
     def _run_stream(self, model: LiveKitWakeWordModel, threshold: float) -> None:
-        """arecordのrawストリームを読みながら検知する。"""
-        proc = self._open_arecord()
-        self._proc = proc
-        chunk_size = max(1, int(self._capture_sample_rate * self._chunk_ms / 1000))
-        bytes_per_chunk = chunk_size * 2
+        """rawストリームを読みながら検知する。"""
+        stream = self._open_input_stream()
         ring_size = max(1, int(SAMPLE_RATE * self._window_seconds))
         ring = deque([0] * ring_size, maxlen=ring_size)
         actual_samples = 0
@@ -235,12 +238,11 @@ class WakeWordListener:
         best_score_since_log = 0.0
         try:
             while not self._stop.is_set():
-                data = proc.stdout.read(bytes_per_chunk) if proc.stdout else b""
+                data = stream.read()
                 if not data:
-                    raise RuntimeError("arecordの音声ストリームが終了しました")
-                model_data = _resample_pcm16(data, self._capture_sample_rate, SAMPLE_RATE)
-                raw_ring.append(model_data)
-                samples = _pcm16_samples(model_data)
+                    continue
+                raw_ring.append(data)
+                samples = _pcm16_samples(data)
                 ring.extend(samples)
                 actual_samples += len(samples)
                 now = time.monotonic()
@@ -260,14 +262,17 @@ class WakeWordListener:
                     if self._on_detected is not None:
                         if self._on_detected() is False:
                             log.info("ウェイクワード検知をアプリ側で無視しました")
+                            ring.clear()
+                            raw_ring.clear()
+                            actual_samples = 0
                             continue
-                    wav_path = self._record_utterance(proc, bytes_per_chunk, pre_roll_frames=list(raw_ring))
+                    wav_path = self._record_utterance(stream.read, pre_roll_frames=list(raw_ring))
                     ring.clear()
                     raw_ring.clear()
                     if wav_path:
                         self._on_recording_ready(wav_path)
         finally:
-            self._stop_process()
+            stream.close()
 
     def _append_score_log(self, score: float, threshold: float, *, detected: bool) -> None:
         """tmpfs上の調査用ファイルへウェイクワードスコアを追記する。"""
@@ -311,31 +316,46 @@ class WakeWordListener:
                 last_error = str(exc)
         raise RuntimeError(f"ウェイクワード入力デバイスを開けません: {last_error}")
 
-    def _record_utterance(self, proc: subprocess.Popen, bytes_per_chunk: int, pre_roll_frames: list[bytes] | None = None) -> str:
+    def _open_input_stream(self) -> "_WakeWordInputStream":
+        """共有入力または専用arecordから16kHz PCMストリームを開く。"""
+        if self._audio_source is not None:
+            subscription = self._audio_source.subscribe()
+            return _SharedWakeWordInputStream(subscription)
+        proc = self._open_arecord()
+        self._proc = proc
+        chunk_size = max(1, int(self._capture_sample_rate * self._chunk_ms / 1000))
+        bytes_per_chunk = chunk_size * 2
+        return _ArecordWakeWordInputStream(proc, bytes_per_chunk, self._capture_sample_rate)
+
+    def _record_utterance(self, read_chunk: Callable[[], bytes], pre_roll_frames: list[bytes] | None = None) -> str:
         """検知後の発話を無音または最大秒数までWAVへ保存する。"""
         if self._endpoint_mode == "vad":
             vad_model = self._load_vad_model()
             if vad_model is not None:
-                return self._record_utterance_vad(proc, bytes_per_chunk, vad_model, pre_roll_frames)
+                return self._record_utterance_vad(read_chunk, vad_model, pre_roll_frames)
             log.warning("VADモデルを使えないためRMS終了判定へフォールバックします")
-        return self._record_utterance_rms(proc, bytes_per_chunk, pre_roll_frames)
+        return self._record_utterance_rms(read_chunk, pre_roll_frames)
 
-    def _record_utterance_rms(self, proc: subprocess.Popen, bytes_per_chunk: int, pre_roll_frames: list[bytes] | None = None) -> str:
+    def _record_utterance_rms(self, read_chunk: Callable[[], bytes], pre_roll_frames: list[bytes] | None = None) -> str:
         """検知後の発話をRMS無音判定または最大秒数までWAVへ保存する。"""
         frames: list[bytes] = list(pre_roll_frames or [])
         started_at = time.monotonic()
         silent_since: float | None = None
         while not self._stop.is_set():
-            data = proc.stdout.read(bytes_per_chunk) if proc.stdout else b""
-            if not data:
+            try:
+                model_data = read_chunk()
+            except RuntimeError:
                 break
-            model_data = _resample_pcm16(data, self._capture_sample_rate, SAMPLE_RATE)
+            if self._should_extend_recording():
+                silent_since = None
+            if not model_data:
+                continue
             frames.append(model_data)
             elapsed = time.monotonic() - started_at
             rms = _pcm16_rms(model_data)
             if elapsed >= self._record_min_seconds and rms < self._silence_rms_threshold:
                 silent_since = silent_since or time.monotonic()
-                if time.monotonic() - silent_since >= self._record_silence_seconds:
+                if time.monotonic() - silent_since >= self._record_silence_seconds and not self._should_extend_recording():
                     break
             else:
                 silent_since = None
@@ -350,8 +370,7 @@ class WakeWordListener:
 
     def _record_utterance_vad(
         self,
-        proc: subprocess.Popen,
-        bytes_per_chunk: int,
+        read_chunk: Callable[[], bytes],
         vad_model: SileroVadModel,
         pre_roll_frames: list[bytes] | None = None,
     ) -> str:
@@ -366,10 +385,12 @@ class WakeWordListener:
         from argos.services.wakeword.vad import estimate_endpoint_from_vad
 
         while not self._stop.is_set():
-            data = proc.stdout.read(bytes_per_chunk) if proc.stdout else b""
-            if not data:
+            try:
+                model_data = read_chunk()
+            except RuntimeError:
                 break
-            model_data = _resample_pcm16(data, self._capture_sample_rate, SAMPLE_RATE)
+            if not model_data:
+                continue
             frames.append(model_data)
             chunk_samples = _pcm16_frames_to_float([model_data])
             samples = np.concatenate([samples, chunk_samples]) if samples.size else chunk_samples
@@ -384,7 +405,7 @@ class WakeWordListener:
                     min_seconds=self._record_min_seconds,
                     min_silence_seconds=self._vad_min_silence_seconds,
                 )
-                if end_seconds is not None:
+                if end_seconds is not None and not self._should_extend_recording():
                     log.info("VAD発話終了: end=%.2fs elapsed=%.2fs", end_seconds, elapsed)
                     break
             if elapsed >= self._record_max_seconds:
@@ -411,6 +432,16 @@ class WakeWordListener:
             return None
         return self._vad_model
 
+    def _should_extend_recording(self) -> bool:
+        """PTT押下などでウェイクワード後録音を継続すべきか返す。"""
+        if self._should_continue_recording is None:
+            return False
+        try:
+            return bool(self._should_continue_recording())
+        except Exception:
+            log.debug("録音継続判定に失敗しました", exc_info=True)
+            return False
+
     def _stop_process(self) -> None:
         """arecordプロセスを停止する。"""
         proc = self._proc
@@ -423,6 +454,62 @@ class WakeWordListener:
         except (OSError, subprocess.TimeoutExpired):
             proc.kill()
             proc.wait(timeout=1)
+
+
+class _WakeWordInputStream:
+    """ウェイクワード監視が読む16kHz PCMストリームの共通インターフェース。"""
+
+    def read(self) -> bytes:
+        """次のPCM16チャンクを返す。"""
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """入力ストリームを閉じる。"""
+        raise NotImplementedError
+
+
+class _SharedWakeWordInputStream(_WakeWordInputStream):
+    """共有マイク入力の購読をウェイクワード入力として扱う。"""
+
+    def __init__(self, subscription: AudioInputSubscription) -> None:
+        """購読ハンドルを保持する。"""
+        self._subscription = subscription
+
+    def read(self) -> bytes:
+        """共有入力から次の16kHz PCMチャンクを読む。"""
+        return self._subscription.read(timeout=1.0)
+
+    def close(self) -> None:
+        """共有入力の購読を解除する。"""
+        self._subscription.close()
+
+
+class _ArecordWakeWordInputStream(_WakeWordInputStream):
+    """専用arecordプロセスをウェイクワード入力として扱う。"""
+
+    def __init__(self, proc: subprocess.Popen, bytes_per_chunk: int, capture_sample_rate: int) -> None:
+        """プロセスと読み取り条件を保持する。"""
+        self._proc = proc
+        self._bytes_per_chunk = bytes_per_chunk
+        self._capture_sample_rate = capture_sample_rate
+
+    def read(self) -> bytes:
+        """arecordから読み、16kHz PCMへ変換して返す。"""
+        data = self._proc.stdout.read(self._bytes_per_chunk) if self._proc.stdout else b""
+        if not data:
+            raise RuntimeError("arecordの音声ストリームが終了しました")
+        return _resample_pcm16(data, self._capture_sample_rate, SAMPLE_RATE)
+
+    def close(self) -> None:
+        """専用arecordプロセスを停止する。"""
+        if self._proc.poll() is not None:
+            return
+        try:
+            self._proc.send_signal(signal.SIGINT)
+            self._proc.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            self._proc.kill()
+            self._proc.wait(timeout=1)
 
 
 def load_default_threshold(model_dir: str | Path, fallback: float) -> float:
