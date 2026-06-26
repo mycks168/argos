@@ -192,6 +192,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
         assert 'data-code="alert"' in html
+        assert 'body[data-status-code="listening"]::before' in html
+        assert 'body[data-status-code="thinking"]::after' in html
+        assert "status-frame-flow" in html
+        assert 'document.body.dataset.statusCode = state.status.code || "ready";' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert 'id="agent-usage"' in html

@@ -28,6 +28,10 @@ kokoro = [
 whisper = [
     "faster-whisper>=1.2.1",
 ]
+wakeword = [
+    "numpy>=1.26",
+    "onnxruntime>=1.20",
+]
 
 [project.scripts]
 argos = "argos.main:main"

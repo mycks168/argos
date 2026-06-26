@@ -57,6 +57,15 @@ def test_load_agent_usage_commands(monkeypatch):
     assert settings.agent_usage_command_timeout_seconds == 3
 
 
+def test_load_wakeword_score_log_path(monkeypatch):
+    """ウェイクワードスコアログの出力先を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_SCORE_LOG_PATH", "/tmp/argos/wakeword-score.log")
+
+    settings = load_settings()
+
+    assert settings.wakeword_score_log_path == "/tmp/argos/wakeword-score.log"
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
@@ -171,6 +180,47 @@ def test_load_audio_state_path(monkeypatch):
     settings = load_settings()
 
     assert settings.audio_state_path == "/tmp/audio-state.json"
+
+
+def test_load_wakeword_settings(monkeypatch):
+    """ウェイクワード設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_WAKEWORD_MODEL_DIR", "/tmp/wakeword")
+    monkeypatch.setenv("ARGOS_WAKEWORD_THRESHOLD", "0.7")
+    monkeypatch.setenv("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "48000")
+    monkeypatch.setenv("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_CHUNK_MS", "100")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "9")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "0.8")
+    monkeypatch.setenv("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "2.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.3")
+    monkeypatch.setenv("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MODEL", "/tmp/silero.onnx")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.4")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.2")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.2")
+
+    settings = load_settings()
+
+    assert settings.wakeword_enabled is True
+    assert settings.wakeword_model_dir == "/tmp/wakeword"
+    assert settings.wakeword_threshold == 0.7
+    assert settings.wakeword_capture_sample_rate == 48000
+    assert settings.wakeword_window_seconds == 2.5
+    assert settings.wakeword_interval_seconds == 0.5
+    assert settings.wakeword_chunk_ms == 100
+    assert settings.wakeword_record_min_seconds == 1.5
+    assert settings.wakeword_record_max_seconds == 9
+    assert settings.wakeword_record_silence_seconds == 0.8
+    assert settings.wakeword_pre_roll_seconds == 2.5
+    assert settings.wakeword_min_actual_seconds == 0.3
+    assert settings.wakeword_endpoint_mode == "vad"
+    assert settings.wakeword_vad_model_path == "/tmp/silero.onnx"
+    assert settings.wakeword_vad_threshold == 0.4
+    assert settings.wakeword_vad_min_silence_seconds == 1.2
+    assert settings.wakeword_vad_check_seconds == 0.2
 
 
 def test_load_argos_input_devices_from_comma_text(monkeypatch):

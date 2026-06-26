@@ -124,6 +124,7 @@ ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取�
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
+動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は緑系の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。
 中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルにはスロット一覧をARGOSロゴ直下の横並びチップとして表示し、現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。スロット数が増えた場合は、左側パネルの縦方向を圧迫しないよう、スロット一覧だけをタッチ操作で横スクロールできるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。
 左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ行の右端に置き、角丸の小型ボタンとして表示する。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
@@ -280,6 +281,26 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 ```
 
 `arecord -l` が空でも、`/proc/asound/cards` に USB マイクが見えていればカード名指定で録音できる場合がある。
+ウェイクワードはraw音声を16kHz前提で扱うため、`dsnoop` が実機側で48kHzを返す場合は、ALSAの `plug` で16kHzへ変換した共有入力デバイスを `AUDIO_INPUT_DEVICES` の先頭に置く。
+
+## ウェイクワード
+
+ウェイクワードは `ARGOS_WAKEWORD_ENABLED=true` の場合だけ有効になる。既定では無効で、PTT操作には影響しない。
+
+- `ARGOS_WAKEWORD_MODEL_DIR` にLiveKit形式の `argos.onnx`、`melspectrogram.onnx`、`embedding_model.onnx` を置く
+- しきい値は `ARGOS_WAKEWORD_THRESHOLD` を最優先に使う。`argos_eval.json` の `optimal_threshold` や `threshold` は学習時の参考値で、常時監視では自動採用しない
+- 入力デバイスは通常録音と同じ `AUDIO_INPUT_DEVICES` または `AUDIO_DEVICE` を使う
+- `ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE` でraw入力の実サンプルレートを指定できる。`dsnoop` が16kHz指定でも48kHzを返す環境では `48000` を指定し、ARGOS内部で16kHzへ変換してモデルとVADへ渡す
+- 推論窓は無音で前詰めして、起動直後でも `ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS` 秒ぶんの実音声が入った時点から判定する
+- 検知後は同じ音声ストリームから発話をWAV化し、既存のSTT、本人確認、エージェント処理へ渡す
+- 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
+- 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
+- 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う
+- `ARGOS_WAKEWORD_ENDPOINT_MODE=rms` の場合、`ARGOS_WAKEWORD_RECORD_MIN_SECONDS` 以上録音した後、`SILENCE_RMS_THRESHOLD` 未満の状態が `ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS` 続いたら終了する
+- 最大録音秒数は `ARGOS_WAKEWORD_RECORD_MAX_SECONDS` で制限する
+- `ARGOS_WAKEWORD_SCORE_LOG_PATH` を指定すると、調査用に1秒ごとの最大スコアと検知有無を指定ファイルへ追記する。SDカード摩耗を避ける場合は `/tmp/argos/wakeword-score.log` のようにtmpfs配下を指定する
+
+ウェイクワード監視はマイクを常時開くため、デバイスによってはPTT録音と排他になる。実運用では `dsnoop` など同時入力可能なALSAデバイスを指定するか、ウェイクワード運用中はPTTを補助操作として扱う。
 
 ## 読み上げ分割
 
