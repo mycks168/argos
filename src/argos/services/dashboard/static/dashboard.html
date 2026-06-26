@@ -76,6 +76,9 @@
     body[data-status-code="authenticating"] {
       --status-frame-color: #5ed3ff;
     }
+    body[data-status-code="transcribing"] {
+      --status-frame-color: #ff9f43;
+    }
     body[data-status-code="speaking"] {
       --status-frame-color: #6ee7a8;
     }
@@ -97,8 +100,14 @@
       border-color: rgba(94, 211, 255, 0.72);
       box-shadow: 0 0 16px rgba(94, 211, 255, 0.38), inset 0 0 14px rgba(94, 211, 255, 0.12);
     }
+    body[data-status-code="transcribing"]::before {
+      opacity: 1;
+      border-color: rgba(255, 159, 67, 0.78);
+      box-shadow: 0 0 17px rgba(255, 159, 67, 0.42), inset 0 0 14px rgba(255, 159, 67, 0.14);
+    }
     body[data-status-code="thinking"]::after,
-    body[data-status-code="authenticating"]::after {
+    body[data-status-code="authenticating"]::after,
+    body[data-status-code="transcribing"]::after {
       opacity: 1;
       animation: status-frame-flow 1.7s linear infinite;
     }
@@ -329,6 +338,7 @@
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
+    .status[data-code="transcribing"] .status-dot { background: #ff9f43; box-shadow: 0 0 10px #ff9f43; }
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
@@ -915,7 +925,7 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening"]);
+      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);
       if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }

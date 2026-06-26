@@ -629,7 +629,7 @@ class ArgosApp:
         if self._is_auth_locked():
             self._dashboard_state.set_status("authenticating", "本人確認中")
         else:
-            self._dashboard_state.set_status("thinking", "文字起こし中")
+            self._dashboard_state.set_status("transcribing", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
         self._worker.start()
 
@@ -723,7 +723,7 @@ class ArgosApp:
         if self._is_auth_locked():
             self._dashboard_state.set_status("authenticating", "本人確認中")
         else:
-            self._dashboard_state.set_status("thinking", "文字起こし中")
+            self._dashboard_state.set_status("transcribing", "文字起こし中")
         self._worker = threading.Thread(target=self._process_wakeword_recording, args=(wav_path,), daemon=True)
         self._worker.start()
 
@@ -731,9 +731,7 @@ class ArgosApp:
         """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。"""
         try:
             level = check_audio_level(wav_path)
-            if level < self._settings.silence_rms_threshold:
-                log.info("ウェイクワード後の録音を無音として破棄しました: RMS=%.1f", level)
-                return
+            log.info("ウェイクワード後録音音量: RMS=%.1f", level)
             try:
                 transcript = self._transcribe_wav(wav_path)
             except Exception as exc:

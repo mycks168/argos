@@ -26,6 +26,22 @@ class FakeTimer:
         self.cancelled = True
 
 
+class FakeThread:
+    """テスト中に処理スレッドを実行せず開始だけ記録する。"""
+
+    started = []
+
+    def __init__(self, target=None, args=(), daemon=None, **_kwargs):
+        """スレッドの実行対象を保存する。"""
+        self.target = target
+        self.args = args
+        self.daemon = daemon
+
+    def start(self):
+        """実処理は行わず、開始されたことだけ記録する。"""
+        FakeThread.started.append((self.target, self.args))
+
+
 def _settings():
     return Settings(
         agent_provider="codex",
@@ -1041,6 +1057,24 @@ def test_wakeword_recording_reuses_existing_processing(monkeypatch, tmp_path):
     assert not wav_path.exists()
 
 
+def test_wakeword_recording_sends_low_rms_to_stt(monkeypatch, tmp_path):
+    """ウェイクワード後録音もRMSだけでは破棄しない。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 69)
+    app._transcribe_wav = lambda path: "小さい声"
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == ["小さい声"]
+    assert not wav_path.exists()
+
+
 def test_wakeword_recording_strips_leading_wakeword(monkeypatch, tmp_path):
     """ウェイクワード経由のSTT結果だけ先頭の呼びかけを除去する。"""
     _patch_app(monkeypatch)
@@ -1174,6 +1208,22 @@ def test_ptt_still_records_during_wakeword_cooldown(monkeypatch):
     assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
 
 
+def test_ptt_release_sets_transcribing_status(monkeypatch):
+    """通常状態のPTT解放後は文字起こし中の専用ステータスへ切り替える。"""
+    _patch_app(monkeypatch)
+    FakeThread.started = []
+    monkeypatch.setattr("argos.core.app.threading.Thread", FakeThread)
+    app = ArgosApp(_settings())
+
+    app._on_ptt_press()
+    app._on_ptt_release()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "transcribing"
+    assert snapshot["status"]["label"] == "文字起こし中"
+    assert FakeThread.started == [(app._process_recording, ())]
+
+
 def test_ptt_press_extends_wakeword_recording(monkeypatch):
     """ウェイクワード録音中のPTTは別録音を開始せず発話継続扱いにする。"""
     _patch_app(monkeypatch)
@@ -1190,6 +1240,23 @@ def test_ptt_press_extends_wakeword_recording(monkeypatch):
 
     assert not app._wakeword_ptt_hold.is_set()
     assert app._worker is None
+
+
+def test_wakeword_recording_ready_sets_transcribing_status(monkeypatch, tmp_path):
+    """ウェイクワード録音完了後も文字起こし中の専用ステータスへ切り替える。"""
+    _patch_app(monkeypatch)
+    FakeThread.started = []
+    monkeypatch.setattr("argos.core.app.threading.Thread", FakeThread)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+
+    app._on_wakeword_recording_ready(str(wav_path))
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "transcribing"
+    assert snapshot["status"]["label"] == "文字起こし中"
+    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path),))]
 
 
 def test_status_message_is_shown_on_lcd(monkeypatch, capsys):
