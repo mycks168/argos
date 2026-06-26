@@ -65,6 +65,23 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 録音WAVは `/tmp/argos/utterance-*.wav` のユニークな一時ファイルとして作成し、STT処理後に削除します。STTゲートウェイへ送るmultipartファイル名も実際の録音ファイル名に合わせます。これにより、次の録音開始で前の録音ファイルを消してしまう競合を避けます。起動時には古い録音一時ファイルも掃除します。
 短い本人確認キーワードがSTTで空文字になりにくいよう、録音停止後にWAVの前後へ短い無音を追加してから文字起こしへ渡します。
 
+## ウェイクワード
+
+`ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
+
+モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
+
+```text
+models/wakeword/
+  argos.onnx
+  melspectrogram.onnx
+  embedding_model.onnx
+  argos_eval.json
+  silero_vad_v6.onnx
+```
+
+既定は無効です。車内ノイズで誤検知する場合は `ARGOS_WAKEWORD_THRESHOLD` を上げます。VADモデルを別の場所に置く場合は `ARGOS_WAKEWORD_VAD_MODEL` で指定します。必要な依存関係は `uv sync --extra wakeword` で入れます。
+
 ## 読み上げ
 
 Codex の応答は `--json` の JSONL イベントから取得し、句読点や改行で分割して VOICEVOX に順次投入します。キャンセル時は再生中の音声と未再生チャンクを破棄します。

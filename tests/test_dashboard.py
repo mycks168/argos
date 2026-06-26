@@ -192,6 +192,13 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
         assert 'data-code="alert"' in html
+        assert 'body[data-status-code="listening"]::before' in html
+        assert 'body[data-status-code="transcribing"]::before' in html
+        assert 'body[data-status-code="transcribing"]::after' in html
+        assert 'body[data-status-code="thinking"]::after' in html
+        assert ".status[data-code=\"transcribing\"] .status-dot" in html
+        assert "status-frame-flow" in html
+        assert 'document.body.dataset.statusCode = state.status.code || "ready";' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert 'id="agent-usage"' in html
@@ -228,7 +235,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
         assert 'id="screensaver"' in html
         assert "resetScreensaver()" in html
-        assert 'const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening"]);' in html
+        assert 'const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);' in html
         assert '"locked"]);' not in html
         assert "state.display_activity?.sequence" in html
         assert "showScreensaver" in html

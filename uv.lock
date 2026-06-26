@@ -169,6 +169,10 @@ kokoro = [
     { name = "misaki", extra = ["ja"] },
     { name = "soundfile" },
 ]
+wakeword = [
+    { name = "numpy" },
+    { name = "onnxruntime" },
+]
 whisper = [
     { name = "faster-whisper" },
 ]
@@ -181,6 +185,8 @@ requires-dist = [
     { name = "kokoro", marker = "extra == 'kokoro'", specifier = ">=0.9.4" },
     { name = "lgpio" },
     { name = "misaki", extras = ["ja"], marker = "extra == 'kokoro'", specifier = ">=0.9.4" },
+    { name = "numpy", marker = "extra == 'wakeword'", specifier = ">=1.26" },
+    { name = "onnxruntime", marker = "extra == 'wakeword'", specifier = ">=1.20" },
     { name = "opencv-python-headless", marker = "extra == 'face'" },
     { name = "pillow" },
     { name = "pytest", marker = "extra == 'dev'" },
@@ -189,7 +195,7 @@ requires-dist = [
     { name = "requests" },
     { name = "soundfile", marker = "extra == 'kokoro'", specifier = ">=0.13.1" },
 ]
-provides-extras = ["dev", "face", "kokoro", "whisper"]
+provides-extras = ["dev", "face", "kokoro", "whisper", "wakeword"]
 
 [[package]]
 name = "attrs"

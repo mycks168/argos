@@ -44,6 +44,93 @@
     }
     *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
     body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 5px;
+      z-index: 39;
+      border-radius: 14px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 160ms ease, box-shadow 160ms ease;
+    }
+    body::before {
+      border: 6px solid transparent;
+      box-shadow: 0 0 0 transparent;
+    }
+    body::after {
+      padding: 6px;
+      background: linear-gradient(90deg, transparent 0%, var(--status-frame-color, transparent) 18%, transparent 36%, transparent 64%, var(--status-frame-color, transparent) 82%, transparent 100%);
+      background-size: 220% 100%;
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+    }
+    body[data-status-code="listening"],
+    body[data-status-code="auth_listening"] {
+      --status-frame-color: #f4d35e;
+    }
+    body[data-status-code="thinking"],
+    body[data-status-code="authenticating"] {
+      --status-frame-color: #5ed3ff;
+    }
+    body[data-status-code="transcribing"] {
+      --status-frame-color: #ff9f43;
+    }
+    body[data-status-code="speaking"] {
+      --status-frame-color: #6ee7a8;
+    }
+    body[data-status-code="locked"],
+    body[data-status-code="alert"],
+    body[data-status-code="error"] {
+      --status-frame-color: #ff6b4a;
+    }
+    body[data-status-code="listening"]::before,
+    body[data-status-code="auth_listening"]::before {
+      opacity: 1;
+      border-color: rgba(244, 211, 94, 0.9);
+      box-shadow: 0 0 18px rgba(244, 211, 94, 0.58), inset 0 0 16px rgba(244, 211, 94, 0.18);
+      animation: listening-frame-pulse 1.05s ease-in-out infinite alternate;
+    }
+    body[data-status-code="thinking"]::before,
+    body[data-status-code="authenticating"]::before {
+      opacity: 1;
+      border-color: rgba(94, 211, 255, 0.72);
+      box-shadow: 0 0 16px rgba(94, 211, 255, 0.38), inset 0 0 14px rgba(94, 211, 255, 0.12);
+    }
+    body[data-status-code="transcribing"]::before {
+      opacity: 1;
+      border-color: rgba(255, 159, 67, 0.78);
+      box-shadow: 0 0 17px rgba(255, 159, 67, 0.42), inset 0 0 14px rgba(255, 159, 67, 0.14);
+    }
+    body[data-status-code="thinking"]::after,
+    body[data-status-code="authenticating"]::after,
+    body[data-status-code="transcribing"]::after {
+      opacity: 1;
+      animation: status-frame-flow 1.7s linear infinite;
+    }
+    body[data-status-code="speaking"]::before {
+      opacity: 1;
+      border-color: rgba(110, 231, 168, 0.62);
+      box-shadow: 0 0 14px rgba(110, 231, 168, 0.32), inset 0 0 12px rgba(110, 231, 168, 0.1);
+    }
+    body[data-status-code="locked"]::before,
+    body[data-status-code="alert"]::before,
+    body[data-status-code="error"]::before {
+      opacity: 1;
+      border-color: rgba(255, 107, 74, 0.72);
+      box-shadow: 0 0 18px rgba(255, 107, 74, 0.38), inset 0 0 14px rgba(255, 107, 74, 0.12);
+    }
+    @keyframes listening-frame-pulse {
+      from { box-shadow: 0 0 10px rgba(244, 211, 94, 0.34), inset 0 0 10px rgba(244, 211, 94, 0.12); }
+      to { box-shadow: 0 0 24px rgba(244, 211, 94, 0.72), inset 0 0 20px rgba(244, 211, 94, 0.22); }
+    }
+    @keyframes status-frame-flow {
+      from { background-position: 220% 0; }
+      to { background-position: -220% 0; }
+    }
     .splash {
       position: fixed;
       inset: 0;
@@ -251,6 +338,7 @@
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
+    .status[data-code="transcribing"] .status-dot { background: #ff9f43; box-shadow: 0 0 10px #ff9f43; }
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
@@ -814,6 +902,7 @@
     }
     function render(state) {
       status.dataset.code = state.status.code;
+      document.body.dataset.statusCode = state.status.code || "ready";
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
@@ -836,7 +925,7 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      const activeStates = new Set(["listening", "thinking", "speaking", "authenticating", "auth_listening"]);
+      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);
       if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }

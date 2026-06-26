@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import queue
 import random
+import re
 import shutil
 import signal
 import threading
@@ -13,7 +14,7 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from argos.config import Settings
-from argos.hardware.audio import AudioPlayer, Recorder, check_audio_level, cleanup_stale_recordings
+from argos.hardware.audio import AudioInputStream, AudioPlayer, Recorder, StreamRecorder, check_audio_level, cleanup_stale_recordings
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
@@ -35,6 +36,7 @@ from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
+from argos.services.wakeword import WakeWordListener
 
 
 log = logging.getLogger(__name__)
@@ -116,7 +118,12 @@ class ArgosApp:
         """各サービスクライアントと状態機械を初期化する。"""
         self._settings = settings
         cleanup_stale_recordings()
-        self._recorder = Recorder(settings.audio_input_devices or (settings.audio_input_device,), settings.audio_sample_rate)
+        audio_devices = settings.audio_input_devices or (settings.audio_input_device,)
+        self._audio_input_stream = self._create_audio_input_stream(settings, audio_devices)
+        if self._audio_input_stream is not None:
+            self._recorder = StreamRecorder(self._audio_input_stream, settings.audio_sample_rate)
+        else:
+            self._recorder = Recorder(audio_devices, settings.audio_sample_rate)
         self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
@@ -206,8 +213,23 @@ class ArgosApp:
         self._agent_delivery_thread: threading.Thread | None = None
         self._agent_usage_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
+        self._wakeword_listener: WakeWordListener | None = None
+        self._wakeword_recording = threading.Event()
+        self._wakeword_ptt_hold = threading.Event()
+        self._last_tts_finished_at = 0.0
         self._gpio: GpioPttInput | None = None
         self._dashboard_state.set_audio_muted(self._muted)
+
+    def _create_audio_input_stream(self, settings: Settings, audio_devices: Iterable[str]) -> AudioInputStream | None:
+        """ウェイクワード有効時にPTTと共有するマイク入力を作成する。"""
+        if settings.dry_run or not settings.wakeword_enabled:
+            return None
+        return AudioInputStream(
+            audio_devices,
+            settings.wakeword_capture_sample_rate,
+            settings.audio_sample_rate,
+            chunk_ms=settings.wakeword_chunk_ms,
+        )
 
     def _create_lcd_display(self, settings: Settings) -> St7789TextDisplay | None:
         """設定に応じてLCD表示器を初期化する。"""
@@ -248,6 +270,7 @@ class ArgosApp:
         self._set_ready_or_locked()
         if not self._settings.dry_run:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
+        self._start_wakeword_listener()
         self._announce_auth_required()
         self._start_auth_status_monitor()
         self._start_agent_delivery_monitor()
@@ -578,6 +601,15 @@ class ArgosApp:
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         log.info("PTT ON: 録音開始")
+        if self._wakeword_recording.is_set():
+            log.info("ウェイクワード録音中のPTT押下を発話継続として扱います")
+            self._wakeword_ptt_hold.set()
+            if self._is_auth_locked():
+                self._dashboard_state.set_status("auth_listening", "本人確認録音中")
+            else:
+                self._dashboard_state.set_status("listening", "録音中")
+            self._cancel_active_audio()
+            return
         if self._is_auth_locked():
             self._dashboard_state.set_status("auth_listening", "本人確認録音中")
             if self._auth.has_authenticated_once:
@@ -590,10 +622,14 @@ class ArgosApp:
     def _on_ptt_release(self) -> None:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
         log.info("PTT OFF: 録音停止と処理開始")
+        if self._wakeword_ptt_hold.is_set():
+            log.info("ウェイクワード録音のPTT継続を解除します")
+            self._wakeword_ptt_hold.clear()
+            return
         if self._is_auth_locked():
             self._dashboard_state.set_status("authenticating", "本人確認中")
         else:
-            self._dashboard_state.set_status("thinking", "文字起こし中")
+            self._dashboard_state.set_status("transcribing", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
         self._worker.start()
 
@@ -613,6 +649,131 @@ class ArgosApp:
         self._recorder.cancel()
         self._cancel_active_audio()
         self._set_ready_or_locked()
+
+    def _start_wakeword_listener(self) -> None:
+        """設定されていればLiveKitウェイクワード監視を開始する。"""
+        if not self._settings.wakeword_enabled or self._settings.dry_run:
+            return
+        try:
+            self._wakeword_listener = WakeWordListener(
+                devices=self._settings.audio_input_devices or (self._settings.audio_input_device,),
+                model_dir=self._settings.wakeword_model_dir,
+                threshold=self._settings.wakeword_threshold,
+                audio_source=self._audio_input_stream,
+                should_continue_recording=self._should_continue_wakeword_recording,
+                capture_sample_rate=self._settings.wakeword_capture_sample_rate,
+                window_seconds=self._settings.wakeword_window_seconds,
+                interval_seconds=self._settings.wakeword_interval_seconds,
+                chunk_ms=self._settings.wakeword_chunk_ms,
+                record_min_seconds=self._settings.wakeword_record_min_seconds,
+                record_max_seconds=self._settings.wakeword_record_max_seconds,
+                record_silence_seconds=self._settings.wakeword_record_silence_seconds,
+                pre_roll_seconds=self._settings.wakeword_pre_roll_seconds,
+                min_actual_seconds=self._settings.wakeword_min_actual_seconds,
+                silence_rms_threshold=self._settings.silence_rms_threshold,
+                endpoint_mode=self._settings.wakeword_endpoint_mode,
+                vad_model_path=self._settings.wakeword_vad_model_path,
+                vad_threshold=self._settings.wakeword_vad_threshold,
+                vad_min_silence_seconds=self._settings.wakeword_vad_min_silence_seconds,
+                vad_check_seconds=self._settings.wakeword_vad_check_seconds,
+                score_log_path=self._settings.wakeword_score_log_path,
+                on_detected=self._on_wakeword_detected,
+                on_recording_ready=self._on_wakeword_recording_ready,
+            )
+            self._wakeword_listener.start()
+            self._dashboard_state.add_notification("ウェイクワード", "ウェイクワード監視を開始しました。", source="ARGOS")
+        except Exception as exc:
+            log.exception("ウェイクワード監視を開始できません")
+            self._report_error("ウェイクワード", exc)
+
+    def _on_wakeword_detected(self) -> bool:
+        """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。"""
+        if self._shutdown.is_set():
+            return False
+        if self._recorder.is_recording:
+            log.info("PTT録音中のためウェイクワード検知を無視します")
+            return False
+        status_code = self._dashboard_state.snapshot().get("status", {}).get("code")
+        if status_code not in ("ready", "locked"):
+            log.info("受付可能状態ではないためウェイクワード検知を無視します: status=%s", status_code)
+            return False
+        if getattr(self._audio, "is_playing", False) or status_code == "speaking":
+            log.info("読み上げ中のためウェイクワード検知を無視します")
+            return False
+        if self._is_wakeword_tts_cooldown_active():
+            log.info("読み上げ直後のためウェイクワード検知を無視します")
+            return False
+        log.info("ウェイクワード検知を受け取りました")
+        self._wakeword_recording.set()
+        self._wakeword_ptt_hold.clear()
+        if self._is_auth_locked():
+            self._dashboard_state.set_status("auth_listening", "本人確認録音中")
+        else:
+            self._dashboard_state.set_status("listening", "録音中")
+        self._cancel_active_audio()
+        return True
+
+    def _on_wakeword_recording_ready(self, wav_path: str) -> None:
+        """ウェイクワード後に録音されたWAVを処理スレッドへ渡す。"""
+        self._wakeword_recording.clear()
+        self._wakeword_ptt_hold.clear()
+        if self._shutdown.is_set():
+            self._remove_recording_file(wav_path)
+            return
+        if self._is_auth_locked():
+            self._dashboard_state.set_status("authenticating", "本人確認中")
+        else:
+            self._dashboard_state.set_status("transcribing", "文字起こし中")
+        self._worker = threading.Thread(target=self._process_wakeword_recording, args=(wav_path,), daemon=True)
+        self._worker.start()
+
+    def _process_wakeword_recording(self, wav_path: str) -> None:
+        """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。"""
+        try:
+            level = check_audio_level(wav_path)
+            log.info("ウェイクワード後録音音量: RMS=%.1f", level)
+            try:
+                transcript = self._transcribe_wav(wav_path)
+            except Exception as exc:
+                log.exception("ウェイクワード後の文字起こしに失敗しました")
+                self._report_error("文字起こし", exc)
+                return
+            if not transcript:
+                log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                return
+            transcript = _strip_leading_wakeword(transcript)
+            if not transcript:
+                log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
+                return
+            if self._ensure_authenticated(transcript):
+                self._greet_on_interaction()
+                self._handle_text(transcript)
+        except Exception as exc:
+            log.exception("ウェイクワード後の音声処理に失敗しました")
+            self._report_error("録音", exc)
+            self._speak_status(f"処理に失敗しました。{exc}")
+        finally:
+            self._wakeword_recording.clear()
+            self._wakeword_ptt_hold.clear()
+            self._remove_recording_file(wav_path)
+            self._set_ready_or_locked()
+
+    def _should_continue_wakeword_recording(self) -> bool:
+        """PTT押下でウェイクワード後録音を継続するか返す。"""
+        return self._wakeword_ptt_hold.is_set()
+
+    def _is_wakeword_tts_cooldown_active(self) -> bool:
+        """TTS終了直後の自己音声対策クールダウン中か返す。"""
+        cooldown = max(0.0, self._settings.wakeword_tts_cooldown_seconds)
+        if cooldown <= 0:
+            return False
+        return time.monotonic() - self._last_tts_finished_at < cooldown
+
+    def _mark_tts_finished(self) -> None:
+        """ウェイクワード自己検知を避けるためTTS終了時刻を記録する。"""
+        self._last_tts_finished_at = time.monotonic()
 
     def _cancel_active_audio(self) -> int:
         """再生中と未再生の読み上げチャンクを無効化し、キャンセル世代を返す。"""
@@ -697,9 +858,7 @@ class ArgosApp:
         try:
             wav_path = self._recorder.stop()
             level = check_audio_level(wav_path)
-            if level < self._settings.silence_rms_threshold:
-                log.info("無音として破棄しました: RMS=%.1f", level)
-                return
+            log.info("PTT録音音量: RMS=%.1f", level)
             try:
                 transcript = self._transcribe_wav(wav_path)
             except Exception as exc:
@@ -747,6 +906,7 @@ class ArgosApp:
         slot_name = self._agent.current_name
         slot_provider = self._agent.current_provider
         slot_key = _app_slot_key(slot_name, slot_provider)
+        handle_generation = self._current_cancel_generation()
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._dashboard_state.set_status("thinking", "考え中")
@@ -776,7 +936,8 @@ class ArgosApp:
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
-            self._set_ready_or_locked()
+            if self._current_cancel_generation() == handle_generation:
+                self._set_ready_or_locked()
 
     def _speak_response(self, text: str) -> None:
         """エージェント応答を tts-filter と TTS に通して再生する。"""
@@ -803,6 +964,7 @@ class ArgosApp:
         try:
             self._wake_dashboard_display()
             self._audio.play_wav(wav_data)
+            self._mark_tts_finished()
         except Exception as exc:
             log.exception("音声再生に失敗しました")
             self._report_error("音声再生", exc)
@@ -925,6 +1087,7 @@ class ArgosApp:
             try:
                 self._wake_dashboard_display()
                 self._audio.play_wav(wav_data)
+                self._mark_tts_finished()
             except Exception as exc:
                 log.exception("音声再生に失敗しました")
                 self._report_error("音声再生", exc)
@@ -1090,6 +1253,10 @@ class ArgosApp:
         if self._greeting is not None:
             self._greeting.mark_active()
         self._recorder.cancel()
+        if self._wakeword_listener is not None:
+            self._wakeword_listener.stop()
+        if self._audio_input_stream is not None:
+            self._audio_input_stream.stop()
         self._cancel_active_audio()
         self._stop_auth_warning()
         if self._dashboard_server is not None:
@@ -1099,3 +1266,13 @@ class ArgosApp:
 def _app_slot_key(name: str, provider: str) -> str:
     """アプリ内部で使うスロットキーを作る。"""
     return f"{provider}\0{name}"
+
+
+_LEADING_WAKEWORD_PATTERN = re.compile(
+    r"^\s*(?:アルゴス|あるごす|アルコス|あるこす|ARGOS|Argos|argos)[\s、。,.，．:：!！?？-]*"
+)
+
+
+def _strip_leading_wakeword(text: str) -> str:
+    """ウェイクワード経由STTの先頭に混ざった呼びかけだけを除去する。"""
+    return _LEADING_WAKEWORD_PATTERN.sub("", text, count=1).strip()

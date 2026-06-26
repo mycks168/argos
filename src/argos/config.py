@@ -160,6 +160,25 @@ class Settings:
     agent_usage_commands: tuple[AgentUsageCommand, ...] = ()
     agent_usage_refresh_seconds: float = 300.0
     agent_usage_command_timeout_seconds: float = 5.0
+    wakeword_enabled: bool = False
+    wakeword_model_dir: str = "models/wakeword"
+    wakeword_threshold: float = 0.5
+    wakeword_capture_sample_rate: int = 16000
+    wakeword_window_seconds: float = 2.0
+    wakeword_interval_seconds: float = 0.25
+    wakeword_chunk_ms: int = 80
+    wakeword_record_min_seconds: float = 1.0
+    wakeword_record_max_seconds: float = 12.0
+    wakeword_record_silence_seconds: float = 1.0
+    wakeword_pre_roll_seconds: float = 3.0
+    wakeword_min_actual_seconds: float = 0.2
+    wakeword_endpoint_mode: str = "vad"
+    wakeword_vad_model_path: str = ""
+    wakeword_vad_threshold: float = 0.35
+    wakeword_vad_min_silence_seconds: float = 1.5
+    wakeword_vad_check_seconds: float = 0.32
+    wakeword_tts_cooldown_seconds: float = 2.0
+    wakeword_score_log_path: str = ""
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -280,6 +299,25 @@ def load_settings() -> Settings:
                 os.environ.get("ARGOS_AGENT_USAGE_COMMAND_TIMEOUT_SECONDS", "5"),
             )
         ),
+        wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
+        wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
+        wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),
+        wakeword_capture_sample_rate=int(os.environ.get("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "16000")),
+        wakeword_window_seconds=float(os.environ.get("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.0")),
+        wakeword_interval_seconds=float(os.environ.get("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.25")),
+        wakeword_chunk_ms=int(os.environ.get("ARGOS_WAKEWORD_CHUNK_MS", "80")),
+        wakeword_record_min_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.0")),
+        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "12.0")),
+        wakeword_record_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "1.0")),
+        wakeword_pre_roll_seconds=float(os.environ.get("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "3.0")),
+        wakeword_min_actual_seconds=float(os.environ.get("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.2")),
+        wakeword_endpoint_mode=os.environ.get("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad"),
+        wakeword_vad_model_path=os.environ.get("ARGOS_WAKEWORD_VAD_MODEL", ""),
+        wakeword_vad_threshold=float(os.environ.get("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.35")),
+        wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
+        wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
+        wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
+        wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),

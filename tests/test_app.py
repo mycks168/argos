@@ -2,7 +2,7 @@ import json
 import logging
 
 from argos.config import AgentSlot, Settings
-from argos.core.app import ArgosApp, CodexProgressAnnouncer
+from argos.core.app import ArgosApp, CodexProgressAnnouncer, _strip_leading_wakeword
 from argos.services.auth import hash_keyword
 
 
@@ -24,6 +24,22 @@ class FakeTimer:
     def cancel(self):
         """タイマーをキャンセル済みにする。"""
         self.cancelled = True
+
+
+class FakeThread:
+    """テスト中に処理スレッドを実行せず開始だけ記録する。"""
+
+    started = []
+
+    def __init__(self, target=None, args=(), daemon=None, **_kwargs):
+        """スレッドの実行対象を保存する。"""
+        self.target = target
+        self.args = args
+        self.daemon = daemon
+
+    def start(self):
+        """実処理は行わず、開始されたことだけ記録する。"""
+        FakeThread.started.append((self.target, self.args))
 
 
 def _settings():
@@ -108,6 +124,7 @@ class FakeAudio:
         self.cancelled = False
         self.played = []
         self.volume = args[2]
+        self.playing = False
 
     def cancel(self):
         self.cancelled = True
@@ -117,7 +134,7 @@ class FakeAudio:
 
     @property
     def is_playing(self):
-        return False
+        return self.playing
 
     def set_volume(self, volume):
         self.volume = max(0, min(100, int(volume)))
@@ -491,6 +508,17 @@ def test_process_recording_uses_stt_and_returns_idle(monkeypatch, capsys):
     assert app._agent.asked == ["こんにちは"]
     assert app._button.state.value == "idle"
     assert "ARGOS> 応答" in capsys.readouterr().out
+
+
+def test_process_recording_sends_low_rms_ptt_to_stt(monkeypatch):
+    """PTT録音は小さい声でもRMSだけでは破棄しない。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 69)
+    app = ArgosApp(_settings())
+
+    app._process_recording()
+
+    assert app._agent.asked == ["こんにちは"]
 
 
 def test_process_recording_greets_on_first_interaction(monkeypatch, capsys, tmp_path):
@@ -962,6 +990,275 @@ def test_ptt_and_status_methods(monkeypatch, capsys):
     assert "次に切り替えました" in capsys.readouterr().out
 
 
+def test_wakeword_listener_starts_when_enabled(monkeypatch):
+    """ウェイクワード有効時だけ監視サービスを開始する。"""
+    _patch_app(monkeypatch)
+    started = []
+
+    class FakeWakeWordListener:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+        def start(self):
+            started.append(self.kwargs)
+
+    monkeypatch.setattr("argos.core.app.WakeWordListener", FakeWakeWordListener)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "wakeword_enabled": True,
+            "wakeword_model_dir": "/tmp/wakeword",
+            "wakeword_threshold": 0.6,
+            "wakeword_capture_sample_rate": 48000,
+            "wakeword_pre_roll_seconds": 2.5,
+            "wakeword_min_actual_seconds": 0.3,
+            "wakeword_endpoint_mode": "vad",
+            "wakeword_vad_model_path": "/tmp/silero.onnx",
+            "wakeword_vad_threshold": 0.4,
+            "wakeword_vad_min_silence_seconds": 1.2,
+            "wakeword_vad_check_seconds": 0.2,
+            "wakeword_score_log_path": "/tmp/argos/wakeword-score.log",
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._start_wakeword_listener()
+
+    assert started
+    assert started[0]["model_dir"] == "/tmp/wakeword"
+    assert started[0]["threshold"] == 0.6
+    assert started[0]["capture_sample_rate"] == 48000
+    assert started[0]["pre_roll_seconds"] == 2.5
+    assert started[0]["min_actual_seconds"] == 0.3
+    assert started[0]["endpoint_mode"] == "vad"
+    assert started[0]["vad_model_path"] == "/tmp/silero.onnx"
+    assert started[0]["vad_threshold"] == 0.4
+    assert started[0]["vad_min_silence_seconds"] == 1.2
+    assert started[0]["vad_check_seconds"] == 0.2
+    assert started[0]["score_log_path"] == "/tmp/argos/wakeword-score.log"
+
+
+def test_wakeword_recording_reuses_existing_processing(monkeypatch, tmp_path):
+    """ウェイクワード後のWAVを通常の文字起こし処理へ渡す。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 100)
+    app._transcribe_wav = lambda path: "ウェイクワード入力"
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == ["ウェイクワード入力"]
+    assert not wav_path.exists()
+
+
+def test_wakeword_recording_sends_low_rms_to_stt(monkeypatch, tmp_path):
+    """ウェイクワード後録音もRMSだけでは破棄しない。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 69)
+    app._transcribe_wav = lambda path: "小さい声"
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == ["小さい声"]
+    assert not wav_path.exists()
+
+
+def test_wakeword_recording_strips_leading_wakeword(monkeypatch, tmp_path):
+    """ウェイクワード経由のSTT結果だけ先頭の呼びかけを除去する。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 100)
+    app._transcribe_wav = lambda path: "アルゴス、今日の天気は"
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == ["今日の天気は"]
+    assert not wav_path.exists()
+
+
+def test_wakeword_recording_strips_wakeword_before_auth(monkeypatch, tmp_path):
+    """本人確認時も先頭のウェイクワードを除去して照合する。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("唐揚げ"),
+        }
+    )
+    app = ArgosApp(settings)
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 100)
+    app._transcribe_wav = lambda path: "アルゴス、唐揚げ"
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert app._auth.is_authenticated()
+    assert not wav_path.exists()
+
+
+def test_strip_leading_wakeword_keeps_middle_word():
+    """文中のアルゴスは削らず、先頭の呼びかけだけ削る。"""
+    assert _strip_leading_wakeword("アルゴス、唐揚げ") == "唐揚げ"
+    assert _strip_leading_wakeword("アルコス 今日の天気は") == "今日の天気は"
+    assert _strip_leading_wakeword("今日はアルゴスの話") == "今日はアルゴスの話"
+
+
+def test_wakeword_recording_ignores_empty_transcript(monkeypatch, tmp_path):
+    """ウェイクワード後の文字起こしが空ならエージェントへ投げない。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 100)
+    app._transcribe_wav = lambda path: ""
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == []
+    assert not wav_path.exists()
+
+
+def test_wakeword_detected_is_ignored_while_ptt_recording(monkeypatch):
+    """PTT録音中のウェイクワード検知は二重録音を避けるため無視する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._recorder.recording = True
+    app._dashboard_state.set_status("listening", "録音中")
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+
+def test_wakeword_detected_is_ignored_while_speaking(monkeypatch):
+    """読み上げ中のウェイクワード検知は自己音声の誤検知として無視する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._audio.playing = True
+    app._dashboard_state.set_status("speaking", "読み上げ中")
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._dashboard_state.snapshot()["status"]["code"] == "speaking"
+
+
+def test_wakeword_detected_is_ignored_while_thinking(monkeypatch):
+    """考え中のウェイクワード誤検知は処理中のTTSキャンセル世代を進めない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._dashboard_state.set_status("thinking", "考え中")
+    generation = app._current_cancel_generation()
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._current_cancel_generation() == generation
+    assert app._dashboard_state.snapshot()["status"]["code"] == "thinking"
+    assert app._audio.cancelled is False
+
+
+def test_wakeword_detected_is_ignored_after_tts_cooldown(monkeypatch):
+    """読み上げ直後は自己音声対策としてウェイクワードだけ無視する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_tts_cooldown_seconds": 2.0})
+    app = ArgosApp(settings)
+    app._mark_tts_finished()
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._dashboard_state.snapshot()["status"]["code"] == "ready"
+
+
+def test_ptt_still_records_during_wakeword_cooldown(monkeypatch):
+    """ウェイクワードのクールダウン中でもPTT録音は開始できる。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_tts_cooldown_seconds": 2.0})
+    app = ArgosApp(settings)
+    app._mark_tts_finished()
+
+    app._on_ptt_press()
+
+    assert app._recorder.started
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+
+def test_ptt_release_sets_transcribing_status(monkeypatch):
+    """通常状態のPTT解放後は文字起こし中の専用ステータスへ切り替える。"""
+    _patch_app(monkeypatch)
+    FakeThread.started = []
+    monkeypatch.setattr("argos.core.app.threading.Thread", FakeThread)
+    app = ArgosApp(_settings())
+
+    app._on_ptt_press()
+    app._on_ptt_release()
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "transcribing"
+    assert snapshot["status"]["label"] == "文字起こし中"
+    assert FakeThread.started == [(app._process_recording, ())]
+
+
+def test_ptt_press_extends_wakeword_recording(monkeypatch):
+    """ウェイクワード録音中のPTTは別録音を開始せず発話継続扱いにする。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._wakeword_recording.set()
+
+    app._on_ptt_press()
+
+    assert app._wakeword_ptt_hold.is_set()
+    assert not app._recorder.started
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+    app._on_ptt_release()
+
+    assert not app._wakeword_ptt_hold.is_set()
+    assert app._worker is None
+
+
+def test_wakeword_recording_ready_sets_transcribing_status(monkeypatch, tmp_path):
+    """ウェイクワード録音完了後も文字起こし中の専用ステータスへ切り替える。"""
+    _patch_app(monkeypatch)
+    FakeThread.started = []
+    monkeypatch.setattr("argos.core.app.threading.Thread", FakeThread)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    app = ArgosApp(_settings())
+
+    app._on_wakeword_recording_ready(str(wav_path))
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "transcribing"
+    assert snapshot["status"]["label"] == "文字起こし中"
+    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path),))]
+
+
 def test_status_message_is_shown_on_lcd(monkeypatch, capsys):
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
@@ -984,6 +1281,26 @@ def test_busy_button_press_cancels_audio_and_starts_recording(monkeypatch):
     assert app._audio.cancelled
     assert app._recorder.started
     assert app._button.state.value == "listening"
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+
+def test_interrupted_response_does_not_clear_new_recording_status(monkeypatch):
+    """読み上げ中にPTT録音へ入った場合、古い処理終了で録音中表示を消さない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    def speak_response_stream(_deltas, dashboard_message_id="", slot_key=""):
+        app._on_ptt_press()
+        return "応答"
+
+    app._speak_response_stream = speak_response_stream
+
+    app._handle_text("依頼")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "listening"
+    assert snapshot["status"]["label"] == "録音中"
+    assert app._recorder.started
 
 
 def test_stream_response_splits_tts_chunks(monkeypatch):
