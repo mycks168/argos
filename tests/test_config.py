@@ -57,6 +57,21 @@ def test_load_agent_usage_commands(monkeypatch):
     assert settings.agent_usage_command_timeout_seconds == 3
 
 
+def test_load_agent_system_prompt_settings(monkeypatch):
+    """エージェント共通システムプロンプト設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT_FILE", "/tmp/argos-prompt.md")
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH", "/tmp/argos-prompt-state.json")
+    monkeypatch.setenv("ARGOS_AGENT_SKILLS_DIR", "/tmp/skills")
+
+    settings = load_settings()
+
+    assert settings.agent_system_prompt == "追加指示"
+    assert settings.agent_system_prompt_file == "/tmp/argos-prompt.md"
+    assert settings.agent_system_prompt_state_path == "/tmp/argos-prompt-state.json"
+    assert settings.agent_skills_dir == "/tmp/skills"
+
+
 def test_load_wakeword_score_log_path(monkeypatch):
     """ウェイクワードスコアログの出力先を読み込む。"""
     monkeypatch.setenv("ARGOS_WAKEWORD_SCORE_LOG_PATH", "/tmp/argos/wakeword-score.log")
