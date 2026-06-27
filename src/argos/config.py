@@ -160,6 +160,7 @@ class Settings:
     agent_usage_commands: tuple[AgentUsageCommand, ...] = ()
     agent_usage_refresh_seconds: float = 300.0
     agent_usage_command_timeout_seconds: float = 5.0
+    wifi_status_refresh_seconds: float = 10.0
     wakeword_enabled: bool = False
     wakeword_model_dir: str = "models/wakeword"
     wakeword_threshold: float = 0.5
@@ -310,6 +311,7 @@ def load_settings() -> Settings:
                 os.environ.get("ARGOS_AGENT_USAGE_COMMAND_TIMEOUT_SECONDS", "5"),
             )
         ),
+        wifi_status_refresh_seconds=float(os.environ.get("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "10")),
         wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
         wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
         wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),

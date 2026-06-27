@@ -36,6 +36,16 @@ class DashboardState:
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
+        self._network = {
+            "wifi": {
+                "connected": False,
+                "interface": "",
+                "ssid": "",
+                "quality": None,
+                "level_dbm": None,
+                "updated_at": _now_iso(),
+            }
+        }
         self._agent_usage: dict[str, dict[str, Any]] = {}
         self._overlay = {"active": False, "updated_at": _now_iso()}
         self._display_activity = {"sequence": 0, "updated_at": _now_iso()}
@@ -55,6 +65,7 @@ class DashboardState:
                     "providers": deepcopy(self._agent_usage),
                 },
                 "audio": deepcopy(self._audio),
+                "network": deepcopy(self._network),
                 "overlay": deepcopy(self._overlay),
                 "display_activity": deepcopy(self._display_activity),
                 "messages": deepcopy(list(self._current_messages_locked())),
@@ -125,6 +136,22 @@ class DashboardState:
         """音声読み上げの音量表示を更新する。"""
         with self._lock:
             self._audio = {**self._audio, "volume": max(0, min(100, int(volume))), "updated_at": _now_iso()}
+            self._publish_locked()
+
+    def set_wifi_status(self, status: dict[str, Any]) -> None:
+        """Wi-Fi接続状態を更新する。"""
+        with self._lock:
+            self._network = {
+                **self._network,
+                "wifi": {
+                    "connected": bool(status.get("connected", False)),
+                    "interface": str(status.get("interface", "")),
+                    "ssid": str(status.get("ssid", "")),
+                    "quality": status.get("quality"),
+                    "level_dbm": status.get("level_dbm"),
+                    "updated_at": _now_iso(),
+                },
+            }
             self._publish_locked()
 
     def set_agent_usage(self, provider: str, usage: dict[str, Any]) -> None:
