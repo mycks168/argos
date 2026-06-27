@@ -80,7 +80,7 @@ HDMIダッシュボードは、現在の状態、現在のエージェントス�
 
 ### LLM エージェント
 
-ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。`codex`、`antigravity`、`hermes` を指定できる。未対応のプロバイダーが指定された場合は起動時にエラーにする。
+ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。`codex`、`antigravity`、`hermes`、`claude` を指定できる。未対応のプロバイダーが指定された場合は起動時にエラーにする。
 
 Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
@@ -116,6 +116,24 @@ GPIO や SPI などのホストデバイス操作が必要な場合は、`ARGOS_
 
 ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`agent_message` または `task_complete` から応答テキストを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
 
+### Claude CLI
+
+初回発話:
+
+```bash
+/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
+```
+
+同一スロットの継続発話:
+
+```bash
+/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
+```
+
+ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。
+`claude` の実行時は、 `stdin=subprocess.DEVNULL` を指定して完全に非対話（non-interactive）として認識させることで、信頼確認ダイアログなどでブロッキングするのを防ぐ。
+ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSON ストリームの `type == "assistant"` イベントから `content` 内の `text` 差分のみを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
+
 ### HDMI ダッシュボード
 
 `ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。画面幅が狭い場合は通知欄を下へ回り込ませる。
@@ -131,7 +149,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 左側パネルにはフォントサイズ切替ボタンを表示し、ダッシュボードの主要テキストを `小`、`中`、`大` から選べるようにする。選択値はキオスクブラウザのローカルストレージへ保存し、画面再読み込み後も維持する。切替対象は会話欄、通知欄、現在スロット、状態表示、スロットチップなどの可読性に関わるテキストとする。
 左側パネルの `CURRENT SLOT` にはセッションリセットボタンを表示する。誤操作防止のため、1回目のタップで確認表示に切り替え、5秒以内にもう一度タップした場合だけ `POST /api/control` に `{"action":"reset_agent_session"}` を送る。この操作は現在スロットのエージェントセッションIDだけを削除し、ダッシュボードに残っている会話履歴や通知は削除しない。リセット後の次回エージェント呼び出しは新規セッションとして開始し、完了時に通常どおり新しいセッションIDを保存する。
 左側パネルの左端には読み上げ音量の縦スライダーを表示する。スライダーは `POST /api/control` に `{"action":"set_volume","volume":0..100}` を送信し、ARGOS本体の `AudioPlayer` が16bit PCM WAVを小分けに再生しながらソフトウェア音量を反映する。これにより `plughw` 直指定でALSAミキサーを通らない出力でも、再生中の次の小さい再生ブロックから読み上げ音量を変更できる。ALSAミキサー操作は `AUDIO_OUTPUT_CARD` が設定されている場合はそのカード、未設定の場合はデフォルトミキサーへベストエフォートで送る。起動時は `ARGOS_AUDIO_STATE_PATH` の保存済み音量を優先し、保存済み音量がない場合だけ `AUDIO_OUTPUT_VOLUME` を初期値として使う。保存値が壊れている場合は無視する。
-左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX` や `ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
+左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX`、`ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY`、`ARGOS_AGENT_USAGE_COMMAND_CLAUDE` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
 
 左側パネルのARGOSロゴ直下にはWi-Fi状態をバーアイコンで表示する。ARGOS本体は `/proc/net/wireless` から電波品質を読み、`iwgetid` でSSIDを取得する。更新間隔は `ARGOS_WIFI_STATUS_REFRESH_SECONDS` で指定し、未接続または取得不能の場合は薄い未接続表示にする。
 

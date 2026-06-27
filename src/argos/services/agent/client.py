@@ -12,6 +12,7 @@ from typing import Protocol
 from argos.config import AgentSlot
 from argos.config import Settings
 from argos.services.antigravity import AntigravityCliClient
+from argos.services.claude.cli import ClaudeCliClient
 from argos.services.codex.cli import CodexCliClient
 from argos.services.hermes import HermesCliClient
 
@@ -228,6 +229,8 @@ def create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
         return AntigravityCliClient(slot_settings)
     if provider == "hermes":
         return HermesCliClient(slot_settings)
+    if provider in {"claude", "claudecode"}:
+        return ClaudeCliClient(slot_settings)
     raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")
 
 
