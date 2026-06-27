@@ -29,6 +29,15 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state.set_agent("アンチグラビティ", "antigravity")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
+    state.set_wifi_status(
+        {
+            "connected": True,
+            "interface": "wlan0",
+            "ssid": "車内WiFi",
+            "quality": 71,
+            "level_dbm": -45,
+        }
+    )
     state.set_agent_usage(
         "antigravity",
         {
@@ -54,6 +63,9 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
+    assert snapshot["network"]["wifi"]["connected"] is True
+    assert snapshot["network"]["wifi"]["ssid"] == "車内WiFi"
+    assert snapshot["network"]["wifi"]["quality"] == 71
     assert snapshot["agent_usage"]["current"]["weekly"]["remain_percentage"] == 34.0
     assert snapshot["display_activity"]["sequence"] == 0
     assert snapshot["messages"][0]["text"] == "返答"

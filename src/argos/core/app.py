@@ -27,6 +27,7 @@ from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
+from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_auth_warning_tone, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
@@ -212,6 +213,7 @@ class ArgosApp:
         self._pending_speech_thread: threading.Thread | None = None
         self._agent_delivery_thread: threading.Thread | None = None
         self._agent_usage_thread: threading.Thread | None = None
+        self._wifi_status_thread: threading.Thread | None = None
         self._worker: threading.Thread | None = None
         self._wakeword_listener: WakeWordListener | None = None
         self._wakeword_recording = threading.Event()
@@ -275,6 +277,7 @@ class ArgosApp:
         self._start_auth_status_monitor()
         self._start_agent_delivery_monitor()
         self._start_agent_usage_monitor()
+        self._start_wifi_status_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -434,6 +437,28 @@ class ArgosApp:
             return
         snapshot = self._agent_usage.fetch(provider)
         self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
+
+    def _start_wifi_status_monitor(self) -> None:
+        """Wi-Fi接続状態を定期的にダッシュボードへ反映する。"""
+        if self._dashboard_server is None:
+            return
+        self._wifi_status_thread = threading.Thread(target=self._run_wifi_status_monitor, daemon=True)
+        self._wifi_status_thread.start()
+
+    def _run_wifi_status_monitor(self) -> None:
+        """Wi-Fi接続状態を一定間隔で取得する。"""
+        while not self._shutdown.is_set():
+            self._refresh_wifi_status()
+            interval = max(2.0, self._settings.wifi_status_refresh_seconds)
+            if self._shutdown.wait(interval):
+                return
+
+    def _refresh_wifi_status(self) -> None:
+        """現在のWi-Fi状態をダッシュボード状態へ反映する。"""
+        try:
+            self._dashboard_state.set_wifi_status(read_wifi_status().to_dict())
+        except Exception:
+            log.exception("Wi-Fi状態の取得に失敗しました")
 
     def _announce_auth_required(self) -> None:
         """起動後に未認証なら本人確認を促す。"""

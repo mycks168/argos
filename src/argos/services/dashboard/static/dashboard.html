@@ -230,6 +230,54 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
+    .network-status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 8px;
+      color: #8ca0ad;
+      font-size: var(--date-font-size);
+      font-weight: 800;
+      min-height: 22px;
+    }
+    .wifi-icon {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 16px;
+      width: 23px;
+    }
+    .wifi-icon span {
+      display: block;
+      width: 4px;
+      border-radius: 2px 2px 0 0;
+      background: #354855;
+    }
+    .wifi-icon span:nth-child(1) { height: 5px; }
+    .wifi-icon span:nth-child(2) { height: 8px; }
+    .wifi-icon span:nth-child(3) { height: 11px; }
+    .wifi-icon span:nth-child(4) { height: 14px; }
+    .network-status[data-level="1"] .wifi-icon span:nth-child(-n+1),
+    .network-status[data-level="2"] .wifi-icon span:nth-child(-n+2),
+    .network-status[data-level="3"] .wifi-icon span:nth-child(-n+3),
+    .network-status[data-level="4"] .wifi-icon span:nth-child(-n+4) {
+      background: #69b7e4;
+      box-shadow: 0 0 8px rgba(105, 183, 228, 0.45);
+    }
+    .network-status[data-connected="false"] {
+      color: #526775;
+    }
+    .network-status[data-connected="false"] .wifi-icon span {
+      background: #26323b;
+      box-shadow: none;
+    }
+    .network-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 150px;
+    }
     .clock { margin-top: 0; color: #f4d35e; font-size: var(--clock-font-size); font-variant-numeric: tabular-nums; }
     .date { margin-top: 0; color: #aebdc6; font-size: 18px; }
     .agent {
@@ -633,6 +681,10 @@
           <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
         </div>
       </div>
+      <div id="network-status" class="network-status" data-connected="false" data-level="0" title="Wi-Fi未接続">
+        <span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+        <span id="network-label" class="network-label">Wi-Fi未接続</span>
+      </div>
       
       <div class="clock-date-row">
         <div id="clock" class="clock">--:--</div>
@@ -707,6 +759,8 @@
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
     const agentUsage = document.getElementById("agent-usage");
+    const networkStatus = document.getElementById("network-status");
+    const networkLabel = document.getElementById("network-label");
     const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
     const sessionResetButton = document.getElementById("session-reset-button");
@@ -906,6 +960,7 @@
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
+      renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `
         <button class="slot-button" type="button" disabled
@@ -971,6 +1026,27 @@
       if (!str) return null;
       const m = str.match(/(\d+(?:\.\d+)?)\s*%/);
       return m ? parseFloat(m[1]) : null;
+    }
+    function wifiLevel(quality) {
+      const value = Number(quality);
+      if (!Number.isFinite(value) || value <= 0) return 0;
+      if (value >= 75) return 4;
+      if (value >= 50) return 3;
+      if (value >= 25) return 2;
+      return 1;
+    }
+    function renderNetworkStatus(wifi) {
+      const connected = Boolean(wifi?.connected);
+      const quality = Number(wifi?.quality);
+      const level = connected ? wifiLevel(quality) : 0;
+      const ssid = String(wifi?.ssid || "");
+      const label = connected
+        ? `${ssid || "Wi-Fi"}${Number.isFinite(quality) ? ` ${Math.round(quality)}%` : ""}`
+        : "Wi-Fi未接続";
+      networkStatus.dataset.connected = connected ? "true" : "false";
+      networkStatus.dataset.level = String(level);
+      networkStatus.title = label;
+      networkLabel.textContent = label;
     }
     function renderAgentUsage(usage) {
       if (!usage || !usage.provider) {

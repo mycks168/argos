@@ -57,6 +57,15 @@ def test_load_agent_usage_commands(monkeypatch):
     assert settings.agent_usage_command_timeout_seconds == 3
 
 
+def test_load_wifi_status_refresh_seconds(monkeypatch):
+    """Wi-Fi状態の更新間隔を読み込む。"""
+    monkeypatch.setenv("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "15")
+
+    settings = load_settings()
+
+    assert settings.wifi_status_refresh_seconds == 15
+
+
 def test_load_agent_system_prompt_settings(monkeypatch):
     """エージェント共通システムプロンプト設定を読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")
