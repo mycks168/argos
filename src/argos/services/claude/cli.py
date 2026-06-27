@@ -246,6 +246,8 @@ class ClaudeCliClient:
         assert proc.stdout is not None
         
         # 累積テキストから差分を抽出してストリーミング出力する
+        is_generating = False
+        current_msg_id = None
         emitted_len = 0
         for line in proc.stdout:
             try:
@@ -254,10 +256,25 @@ class ClaudeCliClient:
                 continue
 
             event_type = event.get("type")
+            subtype = event.get("subtype")
             
-            # 今回のプロンプトに対する新規の回答テキストのみを抽出する
-            if event_type == "assistant":
+            # 今回のプロンプトに対する思考が開始されたら、新規生成フェーズに入る
+            if event_type == "system" and subtype == "thinking_tokens":
+                is_generating = True
+                continue
+            
+            # 新規生成フェーズ中のアシスタント発話のみをパースする
+            if event_type == "assistant" and is_generating:
                 message = event.get("message", {})
+                msg_id = message.get("id")
+                if not msg_id:
+                    continue
+                
+                # 新しいメッセージIDが出現したら、累積カウントをリセット
+                if msg_id != current_msg_id:
+                    current_msg_id = msg_id
+                    emitted_len = 0
+                
                 content_list = message.get("content", [])
                 text_parts = []
                 for content in content_list:

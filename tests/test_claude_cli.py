@@ -71,11 +71,11 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
 
         @property
         def stdout(self):
-            # NDJSONストリームのイベントをシミュレート
             lines = [
                 '{"type":"start"}',
                 '{"type":"progress","text":"Thinking..."}',
-                '{"type":"assistant","message":{"content":[{"type":"text","text":"こんにちは"}]}}',
+                '{"type":"system","subtype":"thinking_tokens"}',
+                '{"type":"assistant","message":{"id":"msg_new","content":[{"type":"text","text":"こんにちは"}]}}',
                 '{"type":"result","cost":0.001,"usage":{"inputTokens":10,"outputTokens":5}}',
             ]
             return lines
@@ -127,7 +127,10 @@ def test_claude_uses_saved_session(monkeypatch, tmp_path):
 
         @property
         def stdout(self):
-            return ['{"type":"assistant","message":{"content":[{"type":"text","text":"続きです"}]}}']
+            return [
+                '{"type":"system","subtype":"thinking_tokens"}',
+                '{"type":"assistant","message":{"id":"msg_new","content":[{"type":"text","text":"続きです"}]}}',
+            ]
 
         @property
         def stderr(self):
