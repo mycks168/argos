@@ -264,7 +264,7 @@ def _default_system_prompt(settings: Settings) -> str:
     skill_lines = ""
     if skills_dir:
         skill_lines = (
-            f"\n- 利用可能なスキルは `{skills_dir}` にある。"
+            f"\n- 最初に利用可能なスキル一覧として `{skills_dir}` に目を通す。"
             "依頼がスキルに該当する場合は、該当する `SKILL.md` を読んで従う。"
         )
     return (
