@@ -134,6 +134,8 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX` や `ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
 
 左側パネルのARGOSロゴ直下にはWi-Fi状態をバーアイコンで表示する。ARGOS本体は `/proc/net/wireless` から電波品質を読み、`iwgetid` でSSIDを取得する。更新間隔は `ARGOS_WIFI_STATUS_REFRESH_SECONDS` で指定し、未接続または取得不能の場合は薄い未接続表示にする。
+
+左側パネルの日付行には現在地に基づく天気と気温を表示する。天気アイコンは端末フォントに依存する絵文字を使わず、CSSで描画する簡易アイコンを使う。
 文字起こし、LLMエージェント、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、通知欄へ優先度 `high` の通知を追加する。直前と同一のエラーは重複追加しない。また、LLMエージェントからの応答取得でエラーが発生した際は、リミット制限エラー（`rate limit`、`quota`、`limit`など）であれば「リミット制限に達しました。」、その他の一般エラーであれば「エージェントの応答取得に失敗しました。」と音声で読み上げて報告する。
 
 キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシー `TranslateEnabled=false` で翻訳UIを無効化し、ダッシュボード上のマウスカーソルを非表示にする。
