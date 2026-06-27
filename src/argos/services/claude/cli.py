@@ -214,7 +214,7 @@ class ClaudeCliClient:
             "--output-format", "stream-json",
             "--verbose",
             # 確認ダイアログを出さずに自動で進めるためのオプション
-            "--permission-mode", "dontAsk"
+            "--permission-mode", "bypassPermissions"
         ]
 
         if is_new_session:
