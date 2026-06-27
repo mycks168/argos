@@ -568,11 +568,93 @@
       white-space: nowrap;
     }
     .clock-date-row .weather {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       margin-left: auto;
       font-size: 18px;
       font-weight: 800;
       color: #69b7e4;
       white-space: nowrap;
+    }
+    .weather-symbol {
+      position: relative;
+      display: inline-block;
+      width: 24px;
+      height: 20px;
+      flex: 0 0 auto;
+    }
+    .weather-symbol[data-kind="sun"]::before {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #facc15;
+      box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.24), 0 0 10px rgba(250, 204, 21, 0.55);
+    }
+    .weather-symbol[data-kind="cloud"]::before,
+    .weather-symbol[data-kind="rain"]::before,
+    .weather-symbol[data-kind="snow"]::before,
+    .weather-symbol[data-kind="thunder"]::before,
+    .weather-symbol[data-kind="fog"]::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 8px;
+      width: 20px;
+      height: 9px;
+      border-radius: 999px;
+      background: #cbd5e1;
+      box-shadow: 5px -5px 0 -1px #cbd5e1, 10px -2px 0 -2px #cbd5e1;
+    }
+    .weather-symbol[data-kind="rain"]::after {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 16px;
+      width: 3px;
+      height: 6px;
+      border-radius: 2px;
+      background: #60a5fa;
+      box-shadow: 6px 0 0 #60a5fa, 12px 0 0 #60a5fa;
+      transform: skewX(-18deg);
+    }
+    .weather-symbol[data-kind="snow"]::after {
+      content: "*";
+      position: absolute;
+      left: 5px;
+      top: 12px;
+      color: #bfdbfe;
+      font-size: 18px;
+      line-height: 1;
+      letter-spacing: 3px;
+    }
+    .weather-symbol[data-kind="thunder"]::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 13px;
+      width: 7px;
+      height: 10px;
+      background: #facc15;
+      clip-path: polygon(42% 0, 100% 0, 62% 42%, 100% 42%, 28% 100%, 48% 56%, 0 56%);
+    }
+    .weather-symbol[data-kind="fog"]::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 16px;
+      width: 18px;
+      height: 2px;
+      border-radius: 2px;
+      background: #94a3b8;
+      box-shadow: 0 4px 0 #94a3b8;
+    }
+    .weather-label {
+      color: #69b7e4;
     }
     .slots-container {
       margin-top: auto;
@@ -1212,8 +1294,10 @@
           if (weatherData && weatherData.current) {
             const temp = weatherData.current.temperature_2m;
             const code = weatherData.current.weather_code;
-            const emoji = getWeatherEmoji(code);
-            document.getElementById("weather").textContent = `${emoji} ${temp}℃`;
+            const weather = getWeatherDisplay(code);
+            document.getElementById("weather").innerHTML = `
+              <span class="weather-symbol" data-kind="${weather.kind}" aria-hidden="true"></span>
+              <span class="weather-label">${weather.label} ${Math.round(temp)}℃</span>`;
             lastWeatherFetchTime = now;
             lastWeatherLat = loc.lat;
             lastWeatherLng = loc.lng;
@@ -1224,18 +1308,18 @@
       }
     }
 
-    function getWeatherEmoji(code) {
-      if (code === 0) return "☀️ 晴れ";
-      if (code === 1) return "🌤️ 晴れ";
-      if (code === 2) return "⛅ 曇り";
-      if (code === 3) return "☁️ 曇り";
-      if (code === 45 || code === 48) return "🌫️ 霧";
-      if (code >= 51 && code <= 55) return "🌧️ 霧雨";
-      if (code >= 61 && code <= 65) return "☔ 雨";
-      if (code >= 71 && code <= 75) return "❄️ 雪";
-      if (code >= 80 && code <= 82) return "🌧️ 俄か雨";
-      if (code >= 95 && code <= 99) return "⚡ 雷雨";
-      return "☀️";
+    function getWeatherDisplay(code) {
+      if (code === 0) return {kind: "sun", label: "晴れ"};
+      if (code === 1) return {kind: "sun", label: "晴れ"};
+      if (code === 2) return {kind: "cloud", label: "曇り"};
+      if (code === 3) return {kind: "cloud", label: "曇り"};
+      if (code === 45 || code === 48) return {kind: "fog", label: "霧"};
+      if (code >= 51 && code <= 55) return {kind: "rain", label: "霧雨"};
+      if (code >= 61 && code <= 65) return {kind: "rain", label: "雨"};
+      if (code >= 71 && code <= 75) return {kind: "snow", label: "雪"};
+      if (code >= 80 && code <= 82) return {kind: "rain", label: "にわか雨"};
+      if (code >= 95 && code <= 99) return {kind: "thunder", label: "雷雨"};
+      return {kind: "sun", label: "晴れ"};
     }
 
     applyFontSize(localStorage.getItem(fontSizeStorageKey));
