@@ -167,6 +167,178 @@ def test_runner_agent_client_polls_until_completed(monkeypatch, tmp_path):
     assert calls[-1][1].endswith("/api/jobs/job-1/deliver")
 
 
+def test_runner_agent_client_handles_failed_job(monkeypatch, tmp_path):
+    """Runnerジョブ失敗時は配信済みにして例外を返す。"""
+    calls: list[tuple[str, str]] = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """失敗ジョブの偽レスポンスを返す。"""
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"job_id": "job-1", "status": "queued"})
+        if method == "GET" and url.endswith("/api/jobs/job-1"):
+            return Response({"job_id": "job-1", "status": "failed", "error": "失敗しました"})
+        if method == "POST" and url.endswith("/api/jobs/job-1/deliver"):
+            return Response({"job_id": "job-1", "status": "failed_delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    try:
+        list(client.ask_stream("やって"))
+    except RuntimeError as exc:
+        assert "失敗しました" in str(exc)
+    else:
+        raise AssertionError("RuntimeError が発生しませんでした")
+    assert calls[-1][1].endswith("/api/jobs/job-1/deliver")
+
+
+def test_runner_agent_client_lists_and_marks_undelivered(monkeypatch, tmp_path):
+    """未配信ジョブ一覧の取得と配信済み更新ができる。"""
+    calls: list[tuple[str, str]] = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """未配信ジョブAPIの偽レスポンスを返す。"""
+        calls.append((method, url))
+        if method == "GET" and url.endswith("/api/jobs"):
+            return Response({"jobs": [{"job_id": "job-2", "status": "completed"}]})
+        if method == "POST" and url.endswith("/api/jobs/job-2/deliver"):
+            return Response({"job_id": "job-2", "status": "delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    assert client.list_undelivered() == [{"job_id": "job-2", "status": "completed"}]
+    client.mark_delivered("job-2")
+
+    assert calls[-1][1].endswith("/api/jobs/job-2/deliver")
+
+
+def test_runner_agent_client_switches_and_resets_current_slot(monkeypatch, tmp_path):
+    """Runnerクライアントがスロット切替と現在スロットのリセットを行える。"""
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = 200
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **kwargs: object) -> Response:
+        """スロットリセットAPIの偽レスポンスを返す。"""
+        calls.append((method, url, kwargs))
+        return Response({"ok": True})
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    settings = Settings(
+        **{
+            **_settings(tmp_path).__dict__,
+            "agent_slots": (
+                AgentSlot("作業", "codex", "/tmp/a"),
+                AgentSlot("調査", "hermes", "/tmp/b"),
+            ),
+        }
+    )
+    client = RunnerAgentClient(settings)
+
+    assert client.current_name == "作業"
+    assert client.current_provider == "codex"
+    assert client.next_slot() == "調査"
+    assert client.current_provider == "hermes"
+    client.reset_current()
+
+    assert calls[-1][1].endswith("/api/slots/reset")
+    assert calls[-1][2]["json"] == {"slot_name": "調査", "provider": "hermes"}
+
+
+def test_runner_agent_client_validates_settings(tmp_path):
+    """Runner接続設定の不足を起動時に検出する。"""
+    missing_url = Settings(**{**_settings(tmp_path).__dict__, "agent_runner_url": ""})
+    try:
+        RunnerAgentClient(missing_url)
+    except ValueError as exc:
+        assert "URL" in str(exc)
+    else:
+        raise AssertionError("ValueError が発生しませんでした")
+
+    missing_slots = Settings(**{**_settings(tmp_path).__dict__, "agent_slots": ()})
+    try:
+        RunnerAgentClient(missing_slots)
+    except ValueError as exc:
+        assert "スロット" in str(exc)
+    else:
+        raise AssertionError("ValueError が発生しませんでした")
+
+
+def test_runner_agent_client_rejects_bad_api_response(monkeypatch, tmp_path):
+    """Runner APIのHTTPエラーとJSON形式不正を検出する。"""
+
+    class Response:
+        def __init__(self, payload: object, status_code: int = 200) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self) -> object:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def http_error_request(*_args: object, **_kwargs: object) -> Response:
+        """HTTPエラーを返す。"""
+        return Response({"error": "bad"}, status_code=500)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", http_error_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+    try:
+        client.list_undelivered()
+    except RuntimeError as exc:
+        assert "500" in str(exc)
+    else:
+        raise AssertionError("RuntimeError が発生しませんでした")
+
+    def list_response_request(*_args: object, **_kwargs: object) -> Response:
+        """dictではないJSONを返す。"""
+        return Response(["bad"])
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", list_response_request)
+    try:
+        client.list_undelivered()
+    except RuntimeError as exc:
+        assert "レスポンス形式" in str(exc)
+    else:
+        raise AssertionError("RuntimeError が発生しませんでした")
+
+
 def test_agent_runner_server_handles_job_lifecycle(tmp_path):
     """Runner HTTP APIでジョブ作成、取得、配信済み更新ができる。"""
     store = AgentJobStore(tmp_path / "runner")

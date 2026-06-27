@@ -179,6 +179,10 @@ class Settings:
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
     wakeword_score_log_path: str = ""
+    agent_system_prompt: str = ""
+    agent_system_prompt_file: str = ""
+    agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
+    agent_skills_dir: str = "/home/yuki/skills"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -291,6 +295,13 @@ def load_settings() -> Settings:
         agent_provider=agent_provider,
         agent_state_path=os.environ.get("ARGOS_AGENT_STATE_PATH", "~/.argos/agent-sessions.json"),
         agent_slots=_load_agent_slots(agent_provider),
+        agent_system_prompt=os.environ.get("ARGOS_AGENT_SYSTEM_PROMPT", ""),
+        agent_system_prompt_file=os.environ.get("ARGOS_AGENT_SYSTEM_PROMPT_FILE", ""),
+        agent_system_prompt_state_path=os.environ.get(
+            "ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH",
+            "~/.argos/agent-system-prompts.json",
+        ),
+        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/home/yuki/skills"),
         agent_usage_commands=_load_agent_usage_commands(),
         agent_usage_refresh_seconds=float(os.environ.get("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "300")),
         agent_usage_command_timeout_seconds=float(
