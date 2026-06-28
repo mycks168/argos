@@ -4,6 +4,7 @@ from pathlib import Path
 from argos.config import AgentSlot, Settings
 from argos.services.antigravity.cli import (
     AntigravityCliClient,
+    _count_lines,
     _extract_latest_done_planner_response,
     _slot_key,
 )
@@ -263,3 +264,15 @@ def test_extract_latest_done_planner_response_ignores_tool_rows(tmp_path):
 
     assert _extract_latest_done_planner_response(path, 1) == "今回の応答"
 
+
+def test_transcript_reader_tolerates_invalid_utf8_bytes(tmp_path):
+    """transcriptに不正なバイトが混ざっていても回答抽出を継続する。"""
+    path = tmp_path / "transcript_full.jsonl"
+    path.write_bytes(
+        b'{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"old"}\n'
+        + b'{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"bad \\x95 row"}\n'
+        + '{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"今回の応答"}\n'.encode("utf-8")
+    )
+
+    assert _count_lines(path) == 3
+    assert _extract_latest_done_planner_response(path, 1) == "今回の応答"
