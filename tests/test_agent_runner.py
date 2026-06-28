@@ -167,6 +167,46 @@ def test_runner_agent_client_polls_until_completed(monkeypatch, tmp_path):
     assert calls[-1][1].endswith("/api/jobs/job-1/deliver")
 
 
+def test_runner_agent_client_streams_partial_output(monkeypatch, tmp_path):
+    """実行中でも逐次flushされたoutputの差分をチャンクとして返す。"""
+    calls: list[tuple[str, str]] = []
+    states = iter(
+        [
+            {"job_id": "job-1", "status": "running", "output": "こん"},
+            {"job_id": "job-1", "status": "running", "output": "こんにち"},
+            {"job_id": "job-1", "status": "completed", "output": "こんにちは", "result": "こんにちは"},
+        ]
+    )
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = 200
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """段階的に出力が増えるジョブ状態の偽レスポンスを返す。"""
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"job_id": "job-1", "status": "queued"})
+        if method == "GET" and url.endswith("/api/jobs/job-1"):
+            return Response(next(states))
+        if method == "POST" and url.endswith("/api/jobs/job-1/deliver"):
+            return Response({"job_id": "job-1", "status": "delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    monkeypatch.setattr("argos.services.agent.runner_client.time.sleep", lambda _seconds: None)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    assert list(client.ask_stream("やって")) == ["こん", "にち", "は"]
+
+
 def test_runner_agent_client_handles_failed_job(monkeypatch, tmp_path):
     """Runnerジョブ失敗時は配信済みにして例外を返す。"""
     calls: list[tuple[str, str]] = []
