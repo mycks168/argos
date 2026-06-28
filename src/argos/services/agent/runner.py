@@ -332,6 +332,9 @@ def _is_authorized(header: str, token: str) -> bool:
 def _job_payload(job: AgentJob) -> dict[str, object]:
     """HTTPレスポンス用にジョブ状態と結果を辞書へ変換する。"""
     payload = asdict(job)
+    if Path(job.output_path).exists():
+        # 実行中も逐次flushされる出力。ポーリング側がここから差分を取り出す。
+        payload["output"] = Path(job.output_path).read_text(encoding="utf-8")
     if Path(job.result_path).exists():
         payload["result"] = Path(job.result_path).read_text(encoding="utf-8")
     if Path(job.error_path).exists():

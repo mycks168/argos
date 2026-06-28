@@ -51,7 +51,7 @@ class RunnerAgentClient:
         return "".join(self.ask_stream(prompt))
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
-        """Runnerにジョブを作成し、完了結果を返す。"""
+        """Runnerにジョブを作成し、出力の差分をポーリングしながら返す。"""
         slot = self._slots[self._index]
         job = self._request(
             "POST",
@@ -64,22 +64,31 @@ class RunnerAgentClient:
         )
         job_id = str(job["job_id"])
         self._active_job_ids.add(job_id)
-        while True:
-            state = self._request("GET", f"/api/jobs/{job_id}")
-            status = str(state.get("status", ""))
-            if status in {"completed", "delivered"}:
-                result = str(state.get("result", ""))
-                if result:
-                    yield result
-                self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
-                self._active_job_ids.discard(job_id)
-                return
-            if status in {"failed", "failed_delivered"}:
-                error = str(state.get("error", "")).strip() or "Agent Runnerジョブに失敗しました"
-                self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
-                self._active_job_ids.discard(job_id)
-                raise RuntimeError(error)
-            time.sleep(0.5)
+        emitted = ""
+        try:
+            while True:
+                state = self._request("GET", f"/api/jobs/{job_id}")
+                status = str(state.get("status", ""))
+                # Runner側で逐次flushされているoutputを読み、増えた分だけ返す。
+                output = str(state.get("output", ""))
+                if len(output) > len(emitted):
+                    delta = output[len(emitted):]
+                    emitted = output
+                    if delta:
+                        yield delta
+                if status in {"completed", "delivered"}:
+                    result = str(state.get("result", ""))
+                    if len(result) > len(emitted):
+                        yield result[len(emitted):]
+                    self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
+                    return
+                if status in {"failed", "failed_delivered"}:
+                    error = str(state.get("error", "")).strip() or "Agent Runnerジョブに失敗しました"
+                    self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
+                    raise RuntimeError(error)
+                time.sleep(0.2)
+        finally:
+            self._active_job_ids.discard(job_id)
 
     def list_undelivered(self) -> list[dict[str, object]]:
         """現在のARGOS処理外で完了した未配信ジョブを返す。"""

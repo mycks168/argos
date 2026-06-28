@@ -213,6 +213,8 @@ class ClaudeCliClient:
             "-p",
             "--output-format", "stream-json",
             "--verbose",
+            # assistantのテキストをトークン単位の差分(stream_event/content_block_delta)で受け取るために必須
+            "--include-partial-messages",
             # 確認ダイアログを出さずに自動で進めるためのオプション
             "--permission-mode", "bypassPermissions"
         ]
@@ -244,11 +246,9 @@ class ClaudeCliClient:
         )
 
         assert proc.stdout is not None
-        
-        # 累積テキストから差分を抽出してストリーミング出力する
-        is_generating = False
-        current_msg_id = None
-        emitted_len = 0
+
+        # --include-partial-messages により届く stream_event/content_block_delta の
+        # text_delta をそのまま中継する。これがトークン単位の本物のストリーミング差分。
         for line in proc.stdout:
             try:
                 event = json.loads(line.strip())
@@ -256,42 +256,22 @@ class ClaudeCliClient:
                 continue
 
             event_type = event.get("type")
-            subtype = event.get("subtype")
-            
-            # 今回のプロンプトに対する思考が開始されたら、新規生成フェーズに入る
-            if event_type == "system" and subtype == "thinking_tokens":
-                is_generating = True
-                continue
-            
-            # 新規生成フェーズ中のアシスタント発話のみをパースする
-            if event_type == "assistant" and is_generating:
-                message = event.get("message", {})
-                msg_id = message.get("id")
-                if not msg_id:
+
+            if event_type == "stream_event":
+                inner = event.get("event", {})
+                if inner.get("type") != "content_block_delta":
                     continue
-                
-                # 新しいメッセージIDが出現したら、累積カウントをリセット
-                if msg_id != current_msg_id:
-                    current_msg_id = msg_id
-                    emitted_len = 0
-                
-                content_list = message.get("content", [])
-                text_parts = []
-                for content in content_list:
-                    if content.get("type") == "text":
-                        text_parts.append(content.get("text", ""))
-                full_text = "".join(text_parts)
-                
-                # 新しい差分テキストがあれば差分のみをyield
-                if len(full_text) > emitted_len:
-                    delta = full_text[emitted_len:]
-                    emitted_len = len(full_text)
-                    yield delta
-                    
+                delta = inner.get("delta", {})
+                if delta.get("type") != "text_delta":
+                    continue
+                text = delta.get("text", "")
+                if text:
+                    yield text
+
             elif event_type == "result":
                 log.info(
                     "Claudeジョブが正常に完了しました。Cost: %s, Usage: %s",
-                    event.get("cost"),
+                    event.get("total_cost_usd"),
                     event.get("usage"),
                 )
 

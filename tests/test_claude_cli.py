@@ -72,11 +72,14 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
         @property
         def stdout(self):
             lines = [
-                '{"type":"start"}',
-                '{"type":"progress","text":"Thinking..."}',
-                '{"type":"system","subtype":"thinking_tokens"}',
-                '{"type":"assistant","message":{"id":"msg_new","content":[{"type":"text","text":"こんにちは"}]}}',
-                '{"type":"result","cost":0.001,"usage":{"inputTokens":10,"outputTokens":5}}',
+                '{"type":"system","subtype":"init"}',
+                '{"type":"stream_event","event":{"type":"message_start"}}',
+                '{"type":"stream_event","event":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}}',
+                '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"こんに"}}}',
+                '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ちは"}}}',
+                '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}',
+                '{"type":"stream_event","event":{"type":"message_stop"}}',
+                '{"type":"result","total_cost_usd":0.001,"usage":{"inputTokens":10,"outputTokens":5}}',
             ]
             return lines
 
@@ -128,8 +131,7 @@ def test_claude_uses_saved_session(monkeypatch, tmp_path):
         @property
         def stdout(self):
             return [
-                '{"type":"system","subtype":"thinking_tokens"}',
-                '{"type":"assistant","message":{"id":"msg_new","content":[{"type":"text","text":"続きです"}]}}',
+                '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"続きです"}}}',
             ]
 
         @property

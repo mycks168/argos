@@ -81,15 +81,15 @@ def test_ask_starts_and_resumes(monkeypatch, tmp_path):
                 [
                     json.dumps(
                         {
-                            "type": "session_meta",
-                            "payload": {"id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846"},
+                            "type": "thread.started",
+                            "thread_id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846",
                         }
                     )
                     + "\n",
                     json.dumps(
                         {
-                            "type": "event_msg",
-                            "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "応答です"},
                         }
                     )
                     + "\n"
@@ -154,15 +154,15 @@ def test_ask_resumes_persisted_session_after_restart(monkeypatch, tmp_path):
                 [
                     json.dumps(
                         {
-                            "type": "session_meta",
-                            "payload": {"id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846"},
+                            "type": "thread.started",
+                            "thread_id": "019e71e4-27fb-74d1-82a2-9b0ab58f0846",
                         }
                     )
                     + "\n",
                     json.dumps(
                         {
-                            "type": "event_msg",
-                            "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "応答です"},
                         }
                     )
                     + "\n",
@@ -219,8 +219,8 @@ def test_ask_saves_session_id_from_session_file(monkeypatch, tmp_path):
                 [
                     json.dumps(
                         {
-                            "type": "event_msg",
-                            "payload": {"type": "agent_message", "phase": "final_answer", "message": "応答です"},
+                            "type": "item.completed",
+                            "item": {"type": "agent_message", "text": "応答です"},
                         }
                     )
                     + "\n",
