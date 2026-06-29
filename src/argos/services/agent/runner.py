@@ -126,6 +126,53 @@ class AgentJobStore:
                 jobs.append(job)
         return sorted(jobs, key=lambda item: item.created_at)
 
+    def find_active(self, slot_name: str, provider: str, active_job_ids: set[str] | None = None) -> AgentJob | None:
+        """指定スロットで現在プロセスが実行中のジョブを返す。"""
+        if not self._jobs_dir.exists():
+            return None
+        candidates: list[AgentJob] = []
+        for path in self._jobs_dir.glob("*/job.json"):
+            job = self.load(path.parent.name)
+            if (
+                job
+                and job.slot_name == slot_name
+                and job.provider == provider
+                and job.status in {"queued", "running"}
+                and (active_job_ids is None or job.job_id in active_job_ids)
+            ):
+                candidates.append(job)
+        if not candidates:
+            return None
+        return sorted(candidates, key=lambda item: item.created_at)[-1]
+
+    def mark_interrupted_active_jobs_failed(self) -> list[AgentJob]:
+        """Runner再起動で実行スレッドを失ったジョブを失敗扱いにする。"""
+        if not self._jobs_dir.exists():
+            return []
+        failed: list[AgentJob] = []
+        for path in self._jobs_dir.glob("*/job.json"):
+            job = self.load(path.parent.name)
+            if job is None or job.status not in {"queued", "running"}:
+                continue
+            message = "Agent Runnerが再起動したため、未完了ジョブを失敗扱いにしました。"
+            try:
+                Path(job.error_path).write_text(message, encoding="utf-8")
+            except OSError:
+                log.exception("中断ジョブのエラー保存に失敗しました: %s", job.job_id)
+            job.status = "failed"
+            self.save(job)
+            failed.append(job)
+        return failed
+
+
+class AgentSlotBusyError(RuntimeError):
+    """同一スロットで別ジョブが実行中の場合のエラー。"""
+
+    def __init__(self, job: AgentJob) -> None:
+        """実行中ジョブを保持してエラーメッセージを作る。"""
+        self.job = job
+        super().__init__(f"スロット {job.slot_name} は既に応答処理中です: job_id={job.job_id}")
+
 
 class AgentRunner:
     """ジョブを受け付けて別スレッドでエージェントを実行する。"""
@@ -141,13 +188,30 @@ class AgentRunner:
         self._store = store
         self._client_factory = client_factory
         self._slots = {_slot_key(slot): slot for slot in settings.agent_slots}
+        self._active_job_ids: set[str] = set()
+        recovered = self._store.mark_interrupted_active_jobs_failed()
+        if recovered:
+            log.warning("Runner再起動で中断されたジョブを失敗扱いにしました: count=%s", len(recovered))
 
     def start_job(self, slot_name: str, provider: str, prompt: str) -> AgentJob:
-        """指定スロットのジョブを開始する。"""
+        """指定スロットのジョブを開始する。
+
+        同一スロットでこのRunnerプロセスが実行中のジョブがある場合は409相当の
+        エラーにする。新しい発話を既存ジョブへ吸収すると、ユーザー入力を失うため。
+        """
         slot = self._slots.get(_slot_key_values(slot_name, provider))
         if slot is None:
             raise ValueError(f"未定義のスロットです: {slot_name}/{provider}")
+        existing = self._store.find_active(slot.name, slot.provider, self._active_job_ids)
+        if existing is not None:
+            log.warning(
+                "スロット %s は既にジョブ実行中のため新規ジョブを拒否します: job_id=%s",
+                slot.name,
+                existing.job_id,
+            )
+            raise AgentSlotBusyError(existing)
         job = self._store.create(slot, prompt)
+        self._active_job_ids.add(job.job_id)
         thread = threading.Thread(target=self._run_job, args=(job, slot), daemon=True)
         thread.start()
         return job
@@ -192,7 +256,9 @@ class AgentRunner:
             log.exception("Agent Runnerジョブに失敗しました: %s", job.job_id)
             Path(job.error_path).write_text(str(exc), encoding="utf-8")
             job.status = "failed"
-        self._store.save(job)
+        finally:
+            self._active_job_ids.discard(job.job_id)
+            self._store.save(job)
 
 
 class AgentRunnerServer:
@@ -259,6 +325,15 @@ class AgentRunnerServer:
                         )
                     except ValueError as exc:
                         self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                        return
+                    except AgentSlotBusyError as exc:
+                        self._send_json(
+                            HTTPStatus.CONFLICT,
+                            {
+                                "error": str(exc),
+                                "active_job_id": exc.job.job_id,
+                            },
+                        )
                         return
                     self._send_json(HTTPStatus.ACCEPTED, _job_payload(job))
                     return

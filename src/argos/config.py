@@ -107,6 +107,7 @@ class Settings:
     codex_progress_voice: bool = True
     codex_progress_first_delay_seconds: float = 8.0
     codex_progress_interval_seconds: float = 20.0
+    codex_stream_mode: str = "stream"
     greeting_enabled: bool = True
     greeting_state_path: str = "~/.local/state/argos/greeting-state.json"
     startup_splash_enabled: bool = True
@@ -415,6 +416,7 @@ def load_settings() -> Settings:
         codex_progress_interval_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "20")
         ),
+        codex_stream_mode=os.environ.get("ARGOS_CODEX_STREAM_MODE", "stream").strip().lower(),
         greeting_enabled=_bool_env("ARGOS_GREETING_ENABLED", True),
         greeting_state_path=os.environ.get(
             "ARGOS_GREETING_STATE_PATH",

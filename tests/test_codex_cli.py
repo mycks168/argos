@@ -5,7 +5,7 @@ from argos.config import AgentSlot, Settings
 from argos.services.codex.cli import CodexCliClient
 
 
-def _settings(tmp_path):
+def _settings(tmp_path, stream_mode="stream"):
     return Settings(
         agent_provider="codex",
         agent_state_path=str(tmp_path / "argos-state" / "agent-sessions.json"),
@@ -52,6 +52,7 @@ def _settings(tmp_path):
         antigravity_command="agy",
         antigravity_home="~/.gemini/antigravity-cli",
         antigravity_extra_args=(),
+        codex_stream_mode=stream_mode,
     )
 
 
@@ -266,6 +267,85 @@ def test_ask_saves_session_id_from_session_file(monkeypatch, tmp_path):
     assert "resume" not in calls[0][0]
     assert calls[1][0][:3] == ["codex", "exec", "resume"]
     assert session_id in calls[1][0]
+
+
+def test_stream_mode_does_not_repeat_final_summary(monkeypatch, tmp_path):
+    """streamモードでは、完了後のまとめが途中経過と異なっても二重に読み上げない。"""
+
+    class FakeStdin:
+        def write(self, text):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self, command):
+            self.command = command
+            self.stdin = FakeStdin()
+            self.stderr = FakeStderr()
+            self.stdout = iter(
+                [
+                    json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "こんにちは"}}) + "\n",
+                ]
+            )
+
+        def wait(self, timeout=None):
+            output_file = self.command[self.command.index("-o") + 1]
+            # Codexの最終出力が途中経過の単純な続きではなく、まとめ直しになっているケース
+            Path(output_file).write_text("まとめ: こんにちはと挨拶しました", encoding="utf-8")
+            return 0
+
+    def fake_popen(command, stdin, stdout, stderr, text, cwd, env):
+        return FakeProc(command)
+
+    monkeypatch.setattr("argos.services.codex.cli.subprocess.Popen", fake_popen)
+    client = CodexCliClient(_settings(tmp_path, stream_mode="stream"))
+
+    assert client.ask("やって") == "こんにちは"
+
+
+def test_final_mode_skips_partial_and_yields_summary_once(monkeypatch, tmp_path):
+    """finalモードでは途中経過を読み上げず、完了後のまとめだけを1回返す。"""
+
+    class FakeStdin:
+        def write(self, text):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeStderr:
+        def read(self):
+            return ""
+
+    class FakeProc:
+        def __init__(self, command):
+            self.command = command
+            self.stdin = FakeStdin()
+            self.stderr = FakeStderr()
+            self.stdout = iter(
+                [
+                    json.dumps({"type": "item.completed", "item": {"type": "agent_message", "text": "こんにちは"}}) + "\n",
+                ]
+            )
+
+        def wait(self, timeout=None):
+            output_file = self.command[self.command.index("-o") + 1]
+            Path(output_file).write_text("まとめ: こんにちはと挨拶しました", encoding="utf-8")
+            return 0
+
+    def fake_popen(command, stdin, stdout, stderr, text, cwd, env):
+        return FakeProc(command)
+
+    monkeypatch.setattr("argos.services.codex.cli.subprocess.Popen", fake_popen)
+    client = CodexCliClient(_settings(tmp_path, stream_mode="final"))
+
+    assert client.ask("やって") == "まとめ: こんにちはと挨拶しました"
 
 
 def test_ask_raises_on_codex_error(monkeypatch, tmp_path):

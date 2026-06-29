@@ -176,6 +176,10 @@ class CodexCliClient:
         output_path = tempfile.NamedTemporaryFile(prefix="argos-codex-", suffix=".txt", delete=False)
         output_path.close()
         started_at = time.time()
+        # "stream"(既定)は途中経過を逐次読み上げる。"final"は途中経過を読み上げず、
+        # 完了後のまとめだけを1回読み上げる。Codexの完了後の出力は途中経過の続きではなく
+        # 全体を再構成したまとめのことがあり、両方読み上げると同じ内容を2回話してしまうため。
+        stream_mode = self._settings.codex_stream_mode != "final"
         try:
             command = self._build_command(conversation, output_path.name)
             env = self._build_env(conversation.slot)
@@ -219,7 +223,8 @@ class CodexCliClient:
                 if not delta:
                     continue
                 emitted += delta
-                yield delta
+                if stream_mode:
+                    yield delta
 
             stderr = proc.stderr.read() if proc.stderr else ""
             return_code = proc.wait(timeout=10)
@@ -238,15 +243,13 @@ class CodexCliClient:
                     self._store.save(_slot_key(conversation.slot), session_id)
             conversation.started = True
             text = Path(output_path.name).read_text(encoding="utf-8").strip()
-            if text and not text.startswith(emitted):
-                if emitted:
-                    yield "\n" + text
-                else:
+            if not stream_mode:
+                # finalモード: 途中経過は読み上げず、完了後のまとめだけを1回返す。
+                if text:
                     yield text
-            elif text:
-                rest = text[len(emitted):]
-                if rest:
-                    yield rest
+            elif not emitted and text:
+                # streamモードで途中経過が一切取れなかった場合のフォールバック。
+                yield text
         finally:
             try:
                 os.remove(output_path.name)

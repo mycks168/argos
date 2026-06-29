@@ -20,6 +20,7 @@ from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
+from argos.services.agent.runner_client import RunnerSlotBusyError
 from argos.services.agent_usage import AgentUsageProvider
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
@@ -948,6 +949,9 @@ class ArgosApp:
                 self._pending_slot_speech[slot_key] = response
                 self._dashboard_state.set_slot_unread(slot_name, slot_provider, True)
                 self._dashboard_state.add_notification(f"{slot_name} 応答完了", "スロットを切り替えると読み上げます。", source="ARGOS")
+        except RunnerSlotBusyError as exc:
+            log.info("エージェントスロットが処理中です: %s", exc)
+            self._speak_status("前の応答がまだ処理中だよ。少し待ってね。")
         except Exception as exc:
             log.exception("エージェント応答の取得に失敗しました")
             self._report_error("エージェント", exc)

@@ -88,6 +88,12 @@ Codex、Antigravity、Hermes、将来の別エージェントはこの層の実�
 
 Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。
 
+`output.txt` は実行中も逐次flushされ、`GET /api/jobs/<job_id>` のレスポンスに `output` フィールドとして含まれる。ARGOS本体側の `RunnerAgentClient.ask_stream` は0.2秒ごとにポーリングし、前回までに受け取った `output` との差分だけを読み上げ用チャンクとして返す。これにより、Runner経由でもCLI側のトークン単位ストリーミングをほぼそのまま中継できる。
+
+同一スロット（同じ会話セッション）で現在のRunnerプロセスが `running`/`queued` 状態のジョブを実行中の場合、`AgentRunner.start_job` は新規ジョブを作らず `409 Conflict` を返す。既存ジョブを返してしまうと、新しいユーザー発話が古いジョブに吸収されて失われるため、競合として明示的に失敗させる。ARGOS本体からのHTTPリクエストが一時的なタイムアウトで失敗しても、Runner側のジョブ自体はバックグラウンドスレッドで動き続けているため、同じ会話セッションへ`claude --resume`等のCLIプロセスを複数同時に走らせない。
+
+Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
+
 初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、未読表示と通知を出してから配信済みにする。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
 
 ### Codex CLI
@@ -104,7 +110,7 @@ codex exec --skip-git-repo-check -C <cwd> -s <sandbox> -o <output> -
 codex exec resume --all --skip-git-repo-check -o <output> <session_id> -
 ```
 
-ARGOS は Codex CLI の `session_meta.payload.id` を読み取り、`CODEX_HOME` 直下の `argos-sessions.json` にスロットごとに保存する。Codex CLI の標準出力に `session_meta` が出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルから同じ `cwd` のセッションIDを補完して保存する。サービス再起動後は保存済みのセッションIDを指定して `codex exec resume` を実行する。保存済みIDがない実行中プロセス内の継続発話では、従来どおり `--last --all` を使う。
+ARGOS は Codex CLI の `thread.started` イベントの `thread_id` をセッションIDとして読み取り、`CODEX_HOME` 直下の `argos-sessions.json` にスロットごとに保存する（旧バージョンの `session_meta.payload.id` 形式にも互換対応する）。Codex CLI の標準出力からセッションIDを取得できない場合は、`CODEX_HOME/sessions` の直近セッションファイルから同じ `cwd` のセッションIDを補完して保存する。サービス再起動後は保存済みのセッションIDを指定して `codex exec resume` を実行する。保存済みIDがない実行中プロセス内の継続発話では、従来どおり `--last --all` を使う。
 
 起動時と Codex CLI 実行時には、スロット名、セッション保存先、`CODEX_HOME`、実行コマンド、保存済みセッションIDの有無をログに出す。Codex CLI から新しいセッションIDを受け取った場合、またはセッションファイルから補完した場合も、保存先と合わせてログに出す。
 
@@ -114,7 +120,14 @@ Codex が質問を返した場合は、その応答を読み上げる。次回�
 
 GPIO や SPI などのホストデバイス操作が必要な場合は、`ARGOS_CODEX_BYPASS_SANDBOX=true` で Codex CLI に `--dangerously-bypass-approvals-and-sandbox` を渡す。この設定では `-s` を渡さず、Codex CLI 側のサンドボックスと承認確認を使わない。
 
-ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`agent_message` または `task_complete` から応答テキストを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
+ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`item.completed`（`item.type == "agent_message"`）から応答テキストを抽出する（旧バージョンの `event_msg`/`response_item` 形式にも互換対応する）。
+
+`ARGOS_CODEX_STREAM_MODE` で読み上げ方式を切り替えられる。
+
+- `stream`（既定）: 上記の差分を逐次読み上げる。完了後に `-o` で受け取った最終出力は、途中経過を一切取得できなかった場合のフォールバックとしてのみ使う。
+- `final`: 途中経過は読み上げず、完了後に `-o` で受け取った最終出力をまとめて1回だけ読み上げる。
+
+Codex の最終出力は途中経過の単純な続きではなく、応答全体を再構成したまとめになることがある。`stream` モードで両方読み上げると同じ内容を2回話すことになるため、用途に応じて `final` へ切り替えられるようにしている。この設定は Codex 専用で、Claude CLI には影響しない（Claude CLI は `--include-partial-messages` によるトークン単位の差分のみを使い、完了後の二重読み上げは発生しない）。
 
 ### Claude CLI
 
@@ -209,7 +222,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 ダッシュボード各スロットの「閉じる」ボタンをクリックすると、フロントエンド側から自動的に `clear_overlay` イベントが送信され、そのスロットがクリアされる。
 
-Codex CLI が最終回答前に途中イベントを出す場合、ARGOS はその差分を順次処理する。CLI 側が最終回答まで応答テキストを出さない場合、完全なトークンストリーミングにはならないが、最終回答の読み上げは句読点単位で分割される。
+Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
 Codex 呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 

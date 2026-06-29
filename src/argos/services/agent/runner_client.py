@@ -10,6 +10,10 @@ import requests
 from argos.config import AgentSlot, Settings
 
 
+class RunnerSlotBusyError(RuntimeError):
+    """Runner側で現在スロットが処理中だった場合のエラー。"""
+
+
 class RunnerAgentClient:
     """ARGOS本体からAgent Runnerへジョブを依頼するクライアント。"""
 
@@ -65,9 +69,20 @@ class RunnerAgentClient:
         job_id = str(job["job_id"])
         self._active_job_ids.add(job_id)
         emitted = ""
+        consecutive_errors = 0
         try:
             while True:
-                state = self._request("GET", f"/api/jobs/{job_id}")
+                try:
+                    state = self._request("GET", f"/api/jobs/{job_id}")
+                except requests.exceptions.RequestException:
+                    # Raspberry Pi側の一時的な負荷などでポーリングが1回失敗しても、
+                    # ジョブ自体はサーバー側のスレッドで動き続けているので即座には諦めない。
+                    consecutive_errors += 1
+                    if consecutive_errors > 10:
+                        raise
+                    time.sleep(0.5)
+                    continue
+                consecutive_errors = 0
                 status = str(state.get("status", ""))
                 # Runner側で逐次flushされているoutputを読み、増えた分だけ返す。
                 output = str(state.get("output", ""))
@@ -113,6 +128,13 @@ class RunnerAgentClient:
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         response = requests.request(method, f"{self._base_url}{path}", headers=headers, timeout=5, **kwargs)
+        if response.status_code == 409:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            message = str(data.get("error", "") if isinstance(data, dict) else "").strip()
+            raise RunnerSlotBusyError(message or "現在のスロットは応答処理中です")
         if response.status_code >= 400:
             raise RuntimeError(f"Agent Runner APIエラー {response.status_code}: {response.text[:500]}")
         data = response.json()

@@ -3,13 +3,13 @@ from __future__ import annotations
 import time
 from pathlib import Path
 from http.server import ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 
 import requests
 
 from argos.config import AgentSlot, Settings
-from argos.services.agent.runner import AgentJobStore, AgentRunner, AgentRunnerServer
-from argos.services.agent.runner_client import RunnerAgentClient
+from argos.services.agent.runner import AgentJobStore, AgentRunner, AgentRunnerServer, AgentSlotBusyError
+from argos.services.agent.runner_client import RunnerAgentClient, RunnerSlotBusyError
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -122,6 +122,57 @@ def test_agent_runner_persists_completed_job(tmp_path):
     assert runner.list_undelivered() == []
 
 
+def test_agent_runner_rejects_new_job_while_same_slot_is_busy(tmp_path, monkeypatch):
+    """同一スロットで実行中のジョブがある間は新規ジョブを競合として拒否する。"""
+    store = AgentJobStore(tmp_path / "runner")
+    started = Event()
+    release = Event()
+
+    class SlowAgentClient:
+        def ask_stream(self, prompt: str):
+            started.set()
+            release.wait(timeout=5)
+            yield "応答"
+
+        def reset_current(self) -> None:
+            pass
+
+    runner = AgentRunner(_settings(tmp_path), store, client_factory=lambda _settings, _slot: SlowAgentClient())
+
+    first = runner.start_job("作業", "codex", "1回目")
+    started.wait(timeout=5)
+    try:
+        runner.start_job("作業", "codex", "2回目")
+    except AgentSlotBusyError as exc:
+        assert exc.job.job_id == first.job_id
+    else:
+        raise AssertionError("AgentSlotBusyError が発生しませんでした")
+
+    release.set()
+    for _ in range(20):
+        current = runner.get_job(first.job_id)
+        if current and current.status == "completed":
+            break
+        time.sleep(0.05)
+    assert runner.get_job(first.job_id).status == "completed"
+
+
+def test_agent_runner_marks_interrupted_jobs_failed_on_startup(tmp_path):
+    """Runner再起動後は実行スレッドを失った未完了ジョブを失敗扱いにする。"""
+    store = AgentJobStore(tmp_path / "runner")
+    settings = _settings(tmp_path)
+    job = store.create(settings.agent_slots[0], "古い発話")
+    job.status = "running"
+    store.save(job)
+
+    runner = AgentRunner(settings, store, client_factory=lambda _settings, _slot: FakeAgentClient())
+
+    recovered = runner.get_job(job.job_id)
+    assert recovered is not None
+    assert recovered.status == "failed"
+    assert "再起動" in Path(recovered.error_path).read_text(encoding="utf-8")
+
+
 def test_agent_runner_resets_slot(tmp_path):
     """Runner経由でスロットのセッションリセットを呼べる。"""
     FakeAgentClient.reset_count = 0
@@ -205,6 +256,75 @@ def test_runner_agent_client_streams_partial_output(monkeypatch, tmp_path):
     client = RunnerAgentClient(_settings(tmp_path))
 
     assert list(client.ask_stream("やって")) == ["こん", "にち", "は"]
+
+
+def test_runner_agent_client_retries_transient_polling_error(monkeypatch, tmp_path):
+    """ポーリングが一時的に失敗しても、ジョブが生きていれば諦めずに継続する。"""
+    calls: list[tuple[str, str]] = []
+    get_attempts = {"count": 0}
+
+    class Response:
+        def __init__(self, payload: dict[str, object]) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = 200
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """GETの最初の2回だけ接続エラーを起こす偽レスポンスを返す。"""
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"job_id": "job-1", "status": "queued"})
+        if method == "GET" and url.endswith("/api/jobs/job-1"):
+            get_attempts["count"] += 1
+            if get_attempts["count"] <= 2:
+                raise requests.exceptions.ReadTimeout("read timed out")
+            return Response({"job_id": "job-1", "status": "completed", "result": "完了"})
+        if method == "POST" and url.endswith("/api/jobs/job-1/deliver"):
+            return Response({"job_id": "job-1", "status": "delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    monkeypatch.setattr("argos.services.agent.runner_client.time.sleep", lambda _seconds: None)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    assert list(client.ask_stream("やって")) == ["完了"]
+    assert get_attempts["count"] == 3
+
+
+def test_runner_agent_client_reports_busy_slot(monkeypatch, tmp_path):
+    """Runnerが409を返した場合は現在処理中であることを例外へ含める。"""
+
+    class Response:
+        def __init__(self, payload: dict[str, object], status_code: int = 200) -> None:
+            """偽HTTPレスポンスを作る。"""
+            self._payload = payload
+            self.status_code = status_code
+            self.text = str(payload)
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """ジョブ作成で競合を返す。"""
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"error": "スロット 作業 は既に応答処理中です"}, status_code=409)
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    try:
+        list(client.ask_stream("やって"))
+    except RunnerSlotBusyError as exc:
+        assert "応答処理中" in str(exc)
+    else:
+        raise AssertionError("RunnerSlotBusyError が発生しませんでした")
 
 
 def test_runner_agent_client_handles_failed_job(monkeypatch, tmp_path):
