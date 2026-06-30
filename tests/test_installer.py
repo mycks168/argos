@@ -4,6 +4,7 @@ from argos.installer import (
     DEFAULT_MANIFEST,
     apply_plan,
     build_install_plan,
+    configure_env,
     load_manifest,
     main,
     plan_to_dict,
@@ -275,3 +276,68 @@ def test_resolve_os_packages_selects_available_chromium_package():
         "alsa-utils",
         "chromium",
     ]
+
+
+def test_configure_env_updates_urls_and_audio_devices(tmp_path):
+    """対話式設定でURLと音声デバイスを.envへ反映できる。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "STT_GATEWAY_URL=",
+                "VOICEVOX_URL=http://localhost:50021",
+                "OSRM_URL=",
+                "ARGOS_REMOTE_LOCATION_URL=",
+                "ARGOS_WAKEWORD_ENABLED=false",
+                "ARGOS_AGENT_RUNNER_URL=",
+                "AUDIO_INPUT_DEVICES=default",
+                "AUDIO_OUTPUT_DEVICE=default",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    answers = iter(
+        [
+            "http://stt.local:23000",
+            "",
+            "http://router.local:5000",
+            "http://gps.local:8080/gps",
+            "y",
+            "y",
+            "2",
+            "hw:CARD=Speaker,DEV=0",
+        ]
+    )
+
+    class Result:
+        """外部コマンドの結果を表す簡易オブジェクト。"""
+
+        returncode = 0
+
+        def __init__(self, stdout):
+            """標準出力を保持する。"""
+            self.stdout = stdout
+
+    def fake_runner(command, **kwargs):
+        """arecord/aplayの候補を返す。"""
+        if command[0] == "arecord":
+            return Result("default\nplughw:CARD=Mic,DEV=0\n  説明行\n")
+        return Result("default\nplughw:CARD=Speaker,DEV=0\n")
+
+    configure_env(
+        env_path,
+        runner=fake_runner,
+        input_func=lambda _prompt: next(answers),
+        output_func=lambda _message: None,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "STT_GATEWAY_URL=http://stt.local:23000" in text
+    assert "VOICEVOX_URL=http://localhost:50021" in text
+    assert "OSRM_URL=http://router.local:5000" in text
+    assert "ARGOS_REMOTE_LOCATION_URL=http://gps.local:8080/gps" in text
+    assert "ARGOS_WAKEWORD_ENABLED=true" in text
+    assert "ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765" in text
+    assert "AUDIO_INPUT_DEVICES=plughw:CARD=Mic,DEV=0" in text
+    assert "AUDIO_OUTPUT_DEVICE=hw:CARD=Speaker,DEV=0" in text

@@ -65,10 +65,10 @@ uv run argos-install --apply
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
 cd /opt/argos
-sudo env "PATH=$PATH" uv run argos-install --bootstrap --apply
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も `argos:argos` に揃えます。インストール後に `/opt/argos/.env` を編集し、STTゲートウェイ、VOICEVOX、マイク、PTT GPIOなど実機依存の値を設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も `argos:argos` に揃えます。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
 
 ```bash
 sudo -iu argos
@@ -82,7 +82,7 @@ agy
 複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 
 ```text
-AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
+AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 ```
 
 ## PTT 操作

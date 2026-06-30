@@ -27,9 +27,9 @@ ARGOS本体だけでなく、周辺サービスとスキルを含めて、1つ�
 
 | サービス | URL | 扱い |
 | --- | --- | --- |
-| `stt-gateway` | `http://clove:23000` | 外部サービスとしてURL設定だけ行う |
+| `stt-gateway` | 環境ごとに設定 | 外部サービスとしてURL設定だけ行う |
 | `VOICEVOX Engine` | `http://localhost:50021` | 利用者環境に別途用意する |
-| `OSRM` | `http://clove:5001` | 地図や経路系スキルの外部依存 |
+| `OSRM` | 環境ごとに設定 | 地図や経路系スキルの外部依存 |
 
 ## 取り込み方針
 
@@ -90,10 +90,12 @@ OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumの�
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
 cd /opt/argos
-sudo env "PATH=$PATH" uv run argos-install --bootstrap --apply
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
 `--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
+
+`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、OSRM、GPS API、ウェイクワード、Agent Runner、入力マイク、出力デバイスを対話式に設定する。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
 OAuth認証はインストーラーで自動化しない。ブラウザ連携や対話操作が必要なため、インストール後に次のように `argos` ユーザーで実行して認証する。
 

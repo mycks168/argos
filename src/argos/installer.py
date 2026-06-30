@@ -11,7 +11,7 @@ import subprocess
 import tempfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
@@ -218,7 +218,15 @@ def format_plan(plan: InstallPlan) -> str:
     return "\n".join(lines)
 
 
-def apply_plan(plan: InstallPlan, *, enable: bool = True, runner=subprocess.run) -> None:
+def apply_plan(
+    plan: InstallPlan,
+    *,
+    enable: bool = True,
+    configure: bool = False,
+    runner=subprocess.run,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> None:
     """インストール計画を実行する。"""
     project_dir = Path(plan.project_dir)
     if plan.bootstrap:
@@ -226,6 +234,8 @@ def apply_plan(plan: InstallPlan, *, enable: bool = True, runner=subprocess.run)
         plan = _refresh_plan_uid(plan)
     _ensure_project(project_dir)
     _copy_env_example(project_dir, runner=runner)
+    if configure:
+        configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
     _uv_sync(project_dir, runner=runner)
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
@@ -262,6 +272,149 @@ def _copy_env_example(
         runner(["sudo", "-u", user, "cp", str(example_path), str(env_path)], check=True, env=env)
         return
     shutil.copyfile(example_path, env_path)
+
+
+def configure_env(
+    env_path: Path,
+    *,
+    runner=subprocess.run,
+    input_func: Callable[[str], str] = input,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """対話式に実機依存の.env設定を更新する。"""
+    values = _read_env_values(env_path)
+    output_func("ARGOS実機設定を行います。空入力なら現在値を維持します。")
+
+    _ask_url(values, "STT_GATEWAY_URL", "STTゲートウェイURL", input_func=input_func)
+    _ask_url(values, "VOICEVOX_URL", "VOICEVOX URL", input_func=input_func)
+    _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
+    _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
+    _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
+    _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
+    _ask_audio_device(values, "AUDIO_INPUT_DEVICES", "入力マイク", ["arecord", "-L"], runner=runner, input_func=input_func, output_func=output_func)
+    _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
+
+    _write_env_values(env_path, values)
+
+
+def _read_env_values(path: Path) -> dict[str, str]:
+    """envファイルからKEY=VALUE形式の値を読む。"""
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        if key and key[0].isalpha():
+            values[key] = value
+    return values
+
+
+def _write_env_values(path: Path, values: dict[str, str]) -> None:
+    """既存のコメントを残しつつenvファイルへ値を書き戻す。"""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    written: set[str] = set()
+    output: list[str] = []
+    for line in lines:
+        if not line or line.lstrip().startswith("#") or "=" not in line:
+            output.append(line)
+            continue
+        key, _value = line.split("=", 1)
+        if key in values and key and key[0].isalpha():
+            output.append(f"{key}={values[key]}")
+            written.add(key)
+        else:
+            output.append(line)
+    for key in sorted(set(values) - written):
+        output.append(f"{key}={values[key]}")
+    path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+def _ask_url(values: dict[str, str], key: str, label: str, *, input_func: Callable[[str], str]) -> None:
+    """URL文字列を対話入力で更新する。"""
+    current = values.get(key, "")
+    answer = input_func(f"{label} [{current or '未設定'}]: ").strip()
+    if answer:
+        values[key] = answer
+
+
+def _ask_bool(
+    values: dict[str, str],
+    key: str,
+    label: str,
+    *,
+    true_value: str = "true",
+    false_value: str = "false",
+    input_func: Callable[[str], str],
+) -> None:
+    """yes/no入力で設定値を更新する。"""
+    current = values.get(key, "")
+    answer = input_func(f"{label}? y/n [{current or '未設定'}]: ").strip().lower()
+    if answer in {"y", "yes", "1", "true"}:
+        values[key] = true_value
+    elif answer in {"n", "no", "0", "false"}:
+        values[key] = false_value
+
+
+def _ask_audio_device(
+    values: dict[str, str],
+    key: str,
+    label: str,
+    command: list[str],
+    *,
+    runner=subprocess.run,
+    input_func: Callable[[str], str],
+    output_func: Callable[[str], None],
+) -> None:
+    """ALSAデバイス候補を表示して選択入力を受け付ける。"""
+    current = values.get(key, "")
+    candidates = _list_alsa_devices(command, runner=runner)
+    output_func(f"{label}候補:")
+    if candidates:
+        for index, candidate in enumerate(candidates, 1):
+            output_func(f"  {index}. {candidate}")
+    else:
+        output_func("  候補を取得できませんでした。直接入力できます。")
+    answer = input_func(f"{label}番号または直接入力 [{current or '未設定'}]: ").strip()
+    if not answer:
+        return
+    if answer.isdigit():
+        index = int(answer)
+        if 1 <= index <= len(candidates):
+            values[key] = candidates[index - 1]
+            return
+    values[key] = answer
+
+
+def _list_alsa_devices(command: list[str], *, runner=subprocess.run) -> list[str]:
+    """arecord/aplayの出力からALSAデバイス名候補を抽出する。"""
+    try:
+        result = runner(command, check=False, capture_output=True, text=True)
+    except OSError:
+        return []
+    if getattr(result, "returncode", 1) != 0:
+        return []
+    candidates: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped or line.startswith(" ") or stripped.startswith("#"):
+            continue
+        if stripped in {"null", "pipewire", "pulse"}:
+            continue
+        candidates.append(stripped)
+    return _unique(candidates)
+
+
+def _unique(values: list[str]) -> list[str]:
+    """順序を保って重複を除く。"""
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
 
 
 def _lookup_uid(user: str) -> str:
@@ -507,6 +660,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="計画をJSONで出力する")
     parser.add_argument("--apply", action="store_true", help="計画を実行する")
+    parser.add_argument("--configure", action="store_true", help=".envを対話式に設定する")
     parser.add_argument("--no-enable", action="store_true", help="unit生成だけ行い、enable/startは行わない")
     args = parser.parse_args(argv)
 
@@ -529,7 +683,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print(format_plan(plan))
     if args.apply:
-        apply_plan(plan, enable=not args.no_enable)
+        apply_plan(plan, enable=not args.no_enable, configure=args.configure)
     return 0
 
 
