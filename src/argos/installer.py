@@ -17,7 +17,7 @@ from typing import Any
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
-    "chromium-browser",
+    "chromium-browser|chromium",
     "curl",
     "git",
     "tmux",
@@ -325,7 +325,32 @@ def _install_os_packages(packages: list[str], *, runner=subprocess.run) -> None:
     if not packages:
         return
     runner(["sudo", "apt-get", "update"], check=True)
-    runner(["sudo", "apt-get", "install", "-y", *packages], check=True)
+    resolved = _resolve_os_packages(packages, runner=runner)
+    if resolved:
+        runner(["sudo", "apt-get", "install", "-y", *resolved], check=True)
+
+
+def _resolve_os_packages(packages: list[str], *, runner=subprocess.run) -> list[str]:
+    """ディストリ差があるパッケージ候補から導入可能な名前を選ぶ。"""
+    resolved: list[str] = []
+    for package in packages:
+        choices = [choice.strip() for choice in package.split("|") if choice.strip()]
+        if len(choices) <= 1:
+            resolved.extend(choices)
+            continue
+        selected = _select_available_package(choices, runner=runner)
+        if selected:
+            resolved.append(selected)
+    return resolved
+
+
+def _select_available_package(choices: list[str], *, runner=subprocess.run) -> str:
+    """apt-cacheで見つかった最初のパッケージ名を返す。"""
+    for choice in choices:
+        result = runner(["apt-cache", "show", choice], check=False, capture_output=True, text=True)
+        if getattr(result, "returncode", 1) == 0:
+            return choice
+    return choices[0]
 
 
 def _add_service_groups(user: str, *, runner=subprocess.run) -> None:

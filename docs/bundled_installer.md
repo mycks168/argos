@@ -85,6 +85,7 @@ uv run argos-install --apply
 ```
 
 別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils` などのOSパッケージ導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
+OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。
 
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos

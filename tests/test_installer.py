@@ -8,6 +8,7 @@ from argos.installer import (
     main,
     plan_to_dict,
     render_unit_template,
+    _resolve_os_packages,
     _reload_systemd,
 )
 
@@ -253,3 +254,24 @@ def test_reload_systemd_uses_service_user_bus(tmp_path, monkeypatch):
         "--user",
         "daemon-reload",
     ] in commands
+
+
+def test_resolve_os_packages_selects_available_chromium_package():
+    """Ubuntu/Raspberry Pi OSで異なるChromiumパッケージ名を吸収する。"""
+
+    class Result:
+        """apt-cacheの結果を表す簡易オブジェクト。"""
+
+        def __init__(self, returncode):
+            """戻り値コードを保持する。"""
+            self.returncode = returncode
+
+    def fake_runner(command, **kwargs):
+        """chromium-browserは無く、chromiumだけある環境を再現する。"""
+        package = command[-1]
+        return Result(0 if package == "chromium" else 100)
+
+    assert _resolve_os_packages(["alsa-utils", "chromium-browser|chromium"], runner=fake_runner) == [
+        "alsa-utils",
+        "chromium",
+    ]
