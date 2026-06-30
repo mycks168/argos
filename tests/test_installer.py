@@ -8,6 +8,7 @@ from argos.installer import (
     main,
     plan_to_dict,
     render_unit_template,
+    _reload_systemd,
 )
 
 
@@ -219,3 +220,36 @@ def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
     assert ["sudo", "apt-get", "install", "-y", "alsa-utils"] in commands
     assert ["sudo", "loginctl", "enable-linger", "argos-test"] in commands
     assert ["sudo", "chown", "-R", "argos-test:argos-test", str(project)] in commands
+
+
+def test_reload_systemd_uses_service_user_bus(tmp_path, monkeypatch):
+    """user daemon-reloadは実行ユーザーではなくARGOS専用ユーザーのbusへ向ける。"""
+    monkeypatch.setattr("argos.installer._lookup_uid", lambda user: "1234")
+    plan = build_install_plan(
+        [],
+        project_dir=tmp_path / "argos",
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append(command)
+
+    _reload_systemd(plan, runner=fake_runner)
+
+    assert ["systemctl", "daemon-reload"] in commands
+    assert [
+        "sudo",
+        "-u",
+        "argos",
+        "env",
+        "XDG_RUNTIME_DIR=/run/user/1234",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1234/bus",
+        "systemctl",
+        "--user",
+        "daemon-reload",
+    ] in commands

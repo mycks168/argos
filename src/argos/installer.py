@@ -349,6 +349,9 @@ def _group_exists(group: str) -> bool:
 def _enable_linger(user: str, *, runner=subprocess.run) -> None:
     """ログイン前からuser serviceを動かすためlingerを有効化する。"""
     runner(["sudo", "loginctl", "enable-linger", user], check=True)
+    uid = _lookup_uid(user)
+    if uid:
+        runner(["sudo", "systemctl", "start", f"user@{uid}.service"], check=True)
 
 
 def _ensure_project_owner(project_dir: Path, user: str, group: str, *, runner=subprocess.run) -> None:
@@ -416,11 +419,17 @@ def render_unit_template(template_path: Path, plan: InstallPlan) -> str:
 def _run_user_systemctl(plan: InstallPlan, args: list[str], *, runner=subprocess.run) -> None:
     """ARGOS専用ユーザーのuser systemdを操作する。"""
     uid = plan.service_uid or _lookup_uid(plan.service_user)
-    env = os.environ.copy()
+    command = ["sudo", "-u", plan.service_user]
     if uid:
-        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
-        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
-    runner(["sudo", "-u", plan.service_user, "systemctl", "--user", *args], check=True, env=env)
+        command.extend(
+            [
+                "env",
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            ]
+        )
+    command.extend(["systemctl", "--user", *args])
+    runner(command, check=True)
 
 
 def _write_unit(path: Path, content: str, *, runner=subprocess.run) -> None:
@@ -446,7 +455,7 @@ def _ensure_user_unit_owner(path: Path, plan: InstallPlan, *, runner=subprocess.
 def _reload_systemd(plan: InstallPlan, *, runner=subprocess.run) -> None:
     """systemd daemon-reloadを実行する。"""
     runner(["systemctl", "daemon-reload"], check=True)
-    runner(["systemctl", "--user", "daemon-reload"], check=True)
+    _run_user_systemctl(plan, ["daemon-reload"], runner=runner)
 
 
 def main(argv: list[str] | None = None) -> int:
