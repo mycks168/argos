@@ -64,12 +64,11 @@ uv run argos-install --apply
 
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
-sudo chown -R "$USER:$USER" /opt/argos
 cd /opt/argos
-uv run argos-install --bootstrap --apply
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --apply
 ```
 
-インストール後に `/opt/argos/.env` を編集し、STTゲートウェイ、VOICEVOX、マイク、PTT GPIOなど実機依存の値を設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も `argos:argos` に揃えます。インストール後に `/opt/argos/.env` を編集し、STTゲートウェイ、VOICEVOX、マイク、PTT GPIOなど実機依存の値を設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
 
 ```bash
 sudo -iu argos

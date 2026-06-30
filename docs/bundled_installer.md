@@ -88,12 +88,11 @@ uv run argos-install --apply
 
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
-sudo chown -R "$USER:$USER" /opt/argos
 cd /opt/argos
-uv run argos-install --bootstrap --apply
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --apply
 ```
 
-ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
 OAuth認証はインストーラーで自動化しない。ブラウザ連携や対話操作が必要なため、インストール後に次のように `argos` ユーザーで実行して認証する。
 
