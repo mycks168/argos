@@ -12,16 +12,16 @@ ARGOS本体だけでなく、周辺サービスとスキルを含めて、1つ�
 
 | サービス | 現在の場所 | 起動形態 | 用途 |
 | --- | --- | --- | --- |
-| `argos` | `/home/yuki/argos` | systemd system | 音声エージェント本体 |
-| `argos-agent-runner` | `/home/yuki/argos` | systemd system | Codex/Antigravityなどの実行分離 |
-| `argos-dashboard-kiosk` | `/home/yuki/argos` | systemd user | HDMIダッシュボード表示 |
-| `tts-filter` | `/home/yuki/tts-filter` | systemd system | 読み上げ前の辞書変換 |
-| `argos-acknowledgement-api` | `/home/yuki/argos-acknowledgement-api` | systemd system | 相槌、状態通知文言の選択 |
-| `argos-reminder` | `/home/yuki/argos-reminder` | systemd user | 時刻、位置条件の通知 |
-| `gps-server` | `/home/yuki/car-logger/raspberry` | systemd system | GPS位置情報API |
-| `screen-recorder` | `/home/yuki/screen-recorder` | systemd user | ダッシュボード録画API |
-| `agent-limit` | `/home/yuki/agent-limit` | ファイル参照 | LLM利用枠JSON生成 |
-| `skills` | `/home/yuki/skills` | Codex skill | Slack通知、地図表示、タスク記録など |
+| `argos` | `/opt/argos` | systemd system | 音声エージェント本体 |
+| `argos-agent-runner` | `/opt/argos` | systemd system | Codex/Antigravityなどの実行分離 |
+| `argos-dashboard-kiosk` | `/opt/argos` | systemd user | HDMIダッシュボード表示 |
+| `tts-filter` | `/opt/argos/services/tts-filter` | systemd system | 読み上げ前の辞書変換 |
+| `argos-acknowledgement-api` | `/opt/argos/services/argos-acknowledgement-api` | systemd system | 相槌、状態通知文言の選択 |
+| `argos-reminder` | `/opt/argos/services/argos-reminder` | systemd user | 時刻、位置条件の通知 |
+| `gps-server` | `/opt/argos/services/gps-server` | systemd system | GPS位置情報API |
+| `screen-recorder` | `/opt/argos/services/screen-recorder` | systemd user | ダッシュボード録画API |
+| `agent-limit` | `/opt/argos/services/agent-limit` | ファイル参照 | LLM利用枠JSON生成 |
+| `skills` | `/opt/argos/skills` | Codex skill | Slack通知、地図表示、タスク記録など |
 
 外部依存として、現環境では次のサービスも参照している。
 
@@ -83,6 +83,29 @@ uv run argos-install --json
 ```bash
 uv run argos-install --apply
 ```
+
+別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils` などのOSパッケージ導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
+
+```bash
+sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
+sudo chown -R "$USER:$USER" /opt/argos
+cd /opt/argos
+uv run argos-install --bootstrap --apply
+```
+
+ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
+
+OAuth認証はインストーラーで自動化しない。ブラウザ連携や対話操作が必要なため、インストール後に次のように `argos` ユーザーで実行して認証する。
+
+```bash
+sudo -iu argos
+codex
+agy
+claude
+hermes
+```
+
+外部依存として残すSTTゲートウェイ、VOICEVOX、OSRM、Slack Webhookなどは `/opt/argos/.env` で指定する。
 
 ウェイクワードを標準機能として扱うため、ARGOS本体の通常依存に `onnxruntime` と `numpy` を含める。これにより、`--extra wakeword` を指定しなくてもONNXモデルの実行に必要なランタイムが入る。
 

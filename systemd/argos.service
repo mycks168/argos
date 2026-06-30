@@ -10,8 +10,9 @@ User=@ARGOS_USER@
 Group=@ARGOS_GROUP@
 WorkingDirectory=@PROJECT_DIR@
 EnvironmentFile=@PROJECT_DIR@/.env
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+Environment=HOME=@USER_HOME@
+Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@ARGOS_UID@/bus
 Environment=PATH=@USER_HOME@/.local/bin:@USER_HOME@/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=@PROJECT_DIR@/.venv/bin/argos
 Restart=on-failure

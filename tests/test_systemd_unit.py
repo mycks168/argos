@@ -10,7 +10,8 @@ def _render_unit(name: str, project_dir: Path | str = "/opt/argos") -> str:
         text.replace("@PROJECT_DIR@", str(project_dir))
         .replace("@ARGOS_USER@", "argos")
         .replace("@ARGOS_GROUP@", "argos")
-        .replace("@USER_HOME@", "/var/lib/argos")
+        .replace("@USER_HOME@", "/home/argos")
+        .replace("@ARGOS_UID@", "1001")
     )
 
 
@@ -48,7 +49,7 @@ def test_argos_service_uses_project_runtime():
     expected_exec = str(wd / ".venv" / "bin" / "argos")
     assert exec_start == expected_exec
     assert unit["Service"]["Environment"] == (
-        "PATH=/var/lib/argos/.local/bin:/var/lib/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+        "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
     )
 
 

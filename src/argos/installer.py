@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,13 @@ from typing import Any
 
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
+DEFAULT_OS_PACKAGES = (
+    "alsa-utils",
+    "chromium-browser",
+    "curl",
+    "git",
+    "tmux",
+)
 
 
 @dataclass(frozen=True)
@@ -50,6 +58,10 @@ class InstallPlan:
     user_unit_dir: str
     service_user: str
     service_group: str
+    service_home: str
+    service_uid: str
+    bootstrap: bool
+    os_packages: list[str]
     steps: list[InstallStep]
     services: list[BundledService]
 
@@ -91,13 +103,27 @@ def build_install_plan(
     user_unit_dir: Path,
     service_user: str,
     service_group: str,
+    service_home: Path | None = None,
+    bootstrap: bool = False,
+    os_packages: list[str] | None = None,
 ) -> InstallPlan:
     """サービス定義からインストール計画を作る。"""
+    home = service_home or Path("/home") / service_user
+    packages = list(os_packages or DEFAULT_OS_PACKAGES)
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
         InstallStep("sync", str(project_dir), "uv syncでARGOS本体の仮想環境を作成する"),
         InstallStep("env", str(project_dir / ".env"), ".envがなければ.env.exampleから作成する"),
     ]
+    if bootstrap:
+        steps = [
+            InstallStep("user", service_user, "ARGOS専用ユーザーを作成する"),
+            InstallStep("group", service_user, "audio/video/input/render/gpio/i2c/spiグループへ追加する"),
+            InstallStep("apt", " ".join(packages), "ARGOS実行に必要なOSパッケージを導入する"),
+            InstallStep("linger", service_user, "user systemdを起動時から使えるようにする"),
+            InstallStep("chown", str(project_dir), "ARGOSプロジェクトを専用ユーザー所有にする"),
+            *steps,
+        ]
     for service in services:
         steps.extend(_service_steps(service, project_dir=project_dir, system_unit_dir=system_unit_dir, user_unit_dir=user_unit_dir))
     return InstallPlan(
@@ -106,6 +132,10 @@ def build_install_plan(
         user_unit_dir=str(user_unit_dir),
         service_user=service_user,
         service_group=service_group,
+        service_home=str(home),
+        service_uid=_lookup_uid(service_user),
+        bootstrap=bootstrap,
+        os_packages=packages,
         steps=steps,
         services=services,
     )
@@ -151,6 +181,10 @@ def plan_to_dict(plan: InstallPlan) -> dict[str, Any]:
         "user_unit_dir": plan.user_unit_dir,
         "service_user": plan.service_user,
         "service_group": plan.service_group,
+        "service_home": plan.service_home,
+        "service_uid": plan.service_uid,
+        "bootstrap": plan.bootstrap,
+        "os_packages": plan.os_packages,
         "services": [asdict(service) for service in plan.services],
         "steps": [asdict(step) for step in plan.steps],
     }
@@ -165,6 +199,9 @@ def format_plan(plan: InstallPlan) -> str:
         f"- user_unit_dir: {plan.user_unit_dir}",
         f"- service_user: {plan.service_user}",
         f"- service_group: {plan.service_group}",
+        f"- service_home: {plan.service_home}",
+        f"- service_uid: {plan.service_uid or '(未作成)'}",
+        f"- bootstrap: {'有効' if plan.bootstrap else '無効'}",
         "",
         "対象サービス:",
     ]
@@ -184,13 +221,20 @@ def format_plan(plan: InstallPlan) -> str:
 def apply_plan(plan: InstallPlan, *, enable: bool = True, runner=subprocess.run) -> None:
     """インストール計画を実行する。"""
     project_dir = Path(plan.project_dir)
+    if plan.bootstrap:
+        _bootstrap_host(plan, runner=runner)
+        plan = _refresh_plan_uid(plan)
     _ensure_project(project_dir)
-    _copy_env_example(project_dir)
+    _copy_env_example(project_dir, runner=runner)
     _uv_sync(project_dir, runner=runner)
     for service in plan.services:
-        _apply_service(service, plan, enable=enable, runner=runner)
+        _apply_service(service, plan, runner=runner)
+    if plan.bootstrap:
+        _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
         _reload_systemd(plan, runner=runner)
+        for service in plan.services:
+            _enable_service(service, plan, runner=runner)
 
 
 def _ensure_project(project_dir: Path) -> None:
@@ -199,25 +243,134 @@ def _ensure_project(project_dir: Path) -> None:
         raise FileNotFoundError(f"pyproject.toml が見つかりません: {project_dir}")
 
 
-def _copy_env_example(directory: Path) -> None:
+def _copy_env_example(
+    directory: Path,
+    *,
+    runner=subprocess.run,
+    user: str | None = None,
+    home: str | None = None,
+) -> None:
     """`.env` がなければ `.env.example` から作成する。"""
     env_path = directory / ".env"
     example_path = directory / ".env.example"
     if env_path.exists() or not example_path.exists():
         return
+    if user:
+        env = os.environ.copy()
+        if home:
+            env["HOME"] = home
+        runner(["sudo", "-u", user, "cp", str(example_path), str(env_path)], check=True, env=env)
+        return
     shutil.copyfile(example_path, env_path)
 
 
-def _uv_sync(directory: Path, *, runner=subprocess.run) -> None:
+def _lookup_uid(user: str) -> str:
+    """ユーザーが存在する場合はuidを返し、未作成なら空文字を返す。"""
+    try:
+        return str(pwd.getpwnam(user).pw_uid)
+    except KeyError:
+        return ""
+
+
+def _refresh_plan_uid(plan: InstallPlan) -> InstallPlan:
+    """bootstrap後にservice_uidを再解決した計画へ更新する。"""
+    return InstallPlan(
+        project_dir=plan.project_dir,
+        system_unit_dir=plan.system_unit_dir,
+        user_unit_dir=plan.user_unit_dir,
+        service_user=plan.service_user,
+        service_group=plan.service_group,
+        service_home=plan.service_home,
+        service_uid=_lookup_uid(plan.service_user),
+        bootstrap=plan.bootstrap,
+        os_packages=plan.os_packages,
+        steps=plan.steps,
+        services=plan.services,
+    )
+
+
+def _bootstrap_host(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """ARGOS専用機として使うためのOS側初期設定を行う。"""
+    _ensure_service_user(plan, runner=runner)
+    _install_os_packages(plan.os_packages, runner=runner)
+    _add_service_groups(plan.service_user, runner=runner)
+    _enable_linger(plan.service_user, runner=runner)
+
+
+def _ensure_service_user(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """ARGOS専用ユーザーがなければ作成する。"""
+    try:
+        pwd.getpwnam(plan.service_user)
+        return
+    except KeyError:
+        pass
+    runner(
+        [
+            "sudo",
+            "useradd",
+            "--create-home",
+            "--home-dir",
+            plan.service_home,
+            "--shell",
+            "/bin/bash",
+            "--user-group",
+            plan.service_user,
+        ],
+        check=True,
+    )
+
+
+def _install_os_packages(packages: list[str], *, runner=subprocess.run) -> None:
+    """aptで必要なOSパッケージを導入する。"""
+    if not packages:
+        return
+    runner(["sudo", "apt-get", "update"], check=True)
+    runner(["sudo", "apt-get", "install", "-y", *packages], check=True)
+
+
+def _add_service_groups(user: str, *, runner=subprocess.run) -> None:
+    """音声、画面、GPIO系デバイスへアクセスするためのグループを付与する。"""
+    groups = [group for group in ("audio", "video", "input", "render", "gpio", "i2c", "spi") if _group_exists(group)]
+    if groups:
+        runner(["sudo", "usermod", "-aG", ",".join(groups), user], check=True)
+
+
+def _group_exists(group: str) -> bool:
+    """OSグループが存在するか確認する。"""
+    try:
+        import grp
+
+        grp.getgrnam(group)
+        return True
+    except KeyError:
+        return False
+
+
+def _enable_linger(user: str, *, runner=subprocess.run) -> None:
+    """ログイン前からuser serviceを動かすためlingerを有効化する。"""
+    runner(["sudo", "loginctl", "enable-linger", user], check=True)
+
+
+def _ensure_project_owner(project_dir: Path, user: str, group: str, *, runner=subprocess.run) -> None:
+    """systemd実行ユーザーが状態ファイルや仮想環境を書けるよう所有者を揃える。"""
+    runner(["sudo", "chown", "-R", f"{user}:{group}", str(project_dir)], check=True)
+
+
+def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None, home: str | None = None) -> None:
     """指定ディレクトリでuv syncを実行する。"""
     if not (directory / "pyproject.toml").exists():
         return
     env = os.environ.copy()
     env.pop("VIRTUAL_ENV", None)
-    runner(["uv", "sync"], cwd=directory, check=True, env=env)
+    if home:
+        env["HOME"] = home
+    command = ["uv", "sync"]
+    if user:
+        command = ["sudo", "-u", user, *command]
+    runner(command, cwd=directory, check=True, env=env)
 
 
-def _apply_service(service: BundledService, plan: InstallPlan, *, enable: bool, runner=subprocess.run) -> None:
+def _apply_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:
     """サービス定義ごとのインストール処理を行う。"""
     project_dir = Path(plan.project_dir)
     if service.source and service.source != ".":
@@ -226,7 +379,7 @@ def _apply_service(service: BundledService, plan: InstallPlan, *, enable: bool, 
             if service.bundle == "optional":
                 return
             raise FileNotFoundError(f"サービスソースが見つかりません: {source_path}")
-        _copy_env_example(source_path)
+        _copy_env_example(source_path, runner=runner)
         if service.kind not in ("data", "external"):
             _uv_sync(source_path, runner=runner)
     if service.unit:
@@ -234,11 +387,18 @@ def _apply_service(service: BundledService, plan: InstallPlan, *, enable: bool, 
         target_path = target_dir / Path(service.unit).name
         content = render_unit_template(Path(plan.project_dir) / service.unit, plan)
         _write_unit(target_path, content, runner=runner)
-    if enable and service.unit and service.enabled_by_default:
         if service.kind == "user":
-            runner(["systemctl", "--user", "enable", "--now", Path(service.unit).name], check=True)
-        else:
-            runner(["systemctl", "enable", "--now", Path(service.unit).name], check=True)
+            _ensure_user_unit_owner(target_dir, plan, runner=runner)
+
+
+def _enable_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """既定有効のsystemdサービスをenable/startする。"""
+    if not service.unit or not service.enabled_by_default:
+        return
+    if service.kind == "user":
+        _run_user_systemctl(plan, ["enable", "--now", Path(service.unit).name], runner=runner)
+    else:
+        runner(["systemctl", "enable", "--now", Path(service.unit).name], check=True)
 
 
 def render_unit_template(template_path: Path, plan: InstallPlan) -> str:
@@ -248,8 +408,19 @@ def render_unit_template(template_path: Path, plan: InstallPlan) -> str:
         text.replace("@PROJECT_DIR@", plan.project_dir)
         .replace("@ARGOS_USER@", plan.service_user)
         .replace("@ARGOS_GROUP@", plan.service_group)
-        .replace("@USER_HOME@", str(Path.home()))
+        .replace("@USER_HOME@", plan.service_home)
+        .replace("@ARGOS_UID@", plan.service_uid or _lookup_uid(plan.service_user) or "1000")
     )
+
+
+def _run_user_systemctl(plan: InstallPlan, args: list[str], *, runner=subprocess.run) -> None:
+    """ARGOS専用ユーザーのuser systemdを操作する。"""
+    uid = plan.service_uid or _lookup_uid(plan.service_user)
+    env = os.environ.copy()
+    if uid:
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+    runner(["sudo", "-u", plan.service_user, "systemctl", "--user", *args], check=True, env=env)
 
 
 def _write_unit(path: Path, content: str, *, runner=subprocess.run) -> None:
@@ -267,6 +438,11 @@ def _write_unit(path: Path, content: str, *, runner=subprocess.run) -> None:
             Path(temp_path).unlink(missing_ok=True)
 
 
+def _ensure_user_unit_owner(path: Path, plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """user unit配置先をARGOS専用ユーザーの所有にする。"""
+    runner(["sudo", "chown", "-R", f"{plan.service_user}:{plan.service_group}", str(path)], check=True)
+
+
 def _reload_systemd(plan: InstallPlan, *, runner=subprocess.run) -> None:
     """systemd daemon-reloadを実行する。"""
     runner(["systemctl", "daemon-reload"], check=True)
@@ -282,24 +458,37 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--user-unit-dir",
         type=Path,
-        default=Path.home() / ".config/systemd/user",
-        help="user unit出力先",
+        default=None,
+        help="user unit出力先。未指定ならARGOS専用ユーザーの ~/.config/systemd/user",
     )
-    parser.add_argument("--user", default=os.environ.get("USER", "argos"), help="systemdサービス実行ユーザー")
+    parser.add_argument("--user", default="argos", help="systemdサービス実行ユーザー")
     parser.add_argument("--group", default="", help="systemdサービス実行グループ。未指定なら--userと同じ")
+    parser.add_argument("--home", type=Path, default=None, help="ARGOS専用ユーザーのホームディレクトリ")
+    parser.add_argument("--bootstrap", action="store_true", help="ARGOS専用ユーザー作成、OSパッケージ導入、linger設定も行う")
+    parser.add_argument(
+        "--os-package",
+        action="append",
+        default=None,
+        help="bootstrap時にaptで入れるOSパッケージ。複数指定可。未指定なら標準セットを使う",
+    )
     parser.add_argument("--json", action="store_true", help="計画をJSONで出力する")
     parser.add_argument("--apply", action="store_true", help="計画を実行する")
     parser.add_argument("--no-enable", action="store_true", help="unit生成だけ行い、enable/startは行わない")
     args = parser.parse_args(argv)
 
     services = load_manifest(args.manifest)
+    service_home = args.home or Path("/home") / args.user
+    user_unit_dir = args.user_unit_dir or service_home / ".config/systemd/user"
     plan = build_install_plan(
         services,
         project_dir=args.project_dir.resolve(),
         system_unit_dir=args.system_unit_dir,
-        user_unit_dir=args.user_unit_dir.expanduser(),
+        user_unit_dir=user_unit_dir.expanduser(),
         service_user=args.user,
         service_group=args.group or args.user,
+        service_home=service_home,
+        bootstrap=args.bootstrap,
+        os_packages=args.os_package,
     )
     if args.json:
         print(json.dumps(plan_to_dict(plan), ensure_ascii=False, indent=2))

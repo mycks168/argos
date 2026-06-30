@@ -184,7 +184,7 @@ class Settings:
     agent_system_prompt: str = ""
     agent_system_prompt_file: str = ""
     agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
-    agent_skills_dir: str = "/home/yuki/skills"
+    agent_skills_dir: str = "/opt/argos/skills"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -303,7 +303,7 @@ def load_settings() -> Settings:
             "ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH",
             "~/.argos/agent-system-prompts.json",
         ),
-        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/home/yuki/skills"),
+        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/opt/argos/skills"),
         agent_usage_commands=_load_agent_usage_commands(),
         agent_usage_refresh_seconds=float(os.environ.get("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "300")),
         agent_usage_command_timeout_seconds=float(

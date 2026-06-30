@@ -71,6 +71,7 @@ def test_plan_to_dict_is_json_serializable(tmp_path):
     assert "argos-reminder" in encoded
     assert payload["service_user"] == "yuki"
     assert payload["service_group"] == "staff"
+    assert payload["service_home"] == "/home/yuki"
 
 
 def test_main_prints_human_readable_plan(capsys, tmp_path):
@@ -92,6 +93,28 @@ def test_main_prints_human_readable_plan(capsys, tmp_path):
     output = capsys.readouterr().out
     assert "ARGOSインストール計画" in output
     assert "tts-filter" in output
+    assert "service_user: yuki" in output
+
+
+def test_build_install_plan_bootstrap_includes_dedicated_user_steps(tmp_path):
+    """bootstrap有効時は専用ユーザーとOS初期設定の手順を含める。"""
+    plan = build_install_plan(
+        load_manifest(),
+        project_dir=tmp_path / "argos",
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+        bootstrap=True,
+    )
+    actions = [step.action for step in plan.steps]
+
+    assert plan.bootstrap is True
+    assert plan.service_home == "/home/argos"
+    assert "user" in actions
+    assert "apt" in actions
+    assert "linger" in actions
+    assert "chown" in actions
 
 
 def test_main_prints_json_plan(capsys, tmp_path):
@@ -164,3 +187,35 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
     assert (tmp_path / "system-units" / "argos.service").exists()
     assert any(command[0] == ["uv", "sync"] for command in commands)
     assert not any("enable" in command[0] for command in commands)
+
+
+def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
+    """bootstrap有効時はユーザー作成、apt、linger、所有者設定を実行する。"""
+    project = tmp_path / "argos"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
+    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    monkeypatch.setattr("argos.installer._group_exists", lambda group: group in {"audio", "video"})
+    services = []
+    plan = build_install_plan(
+        services,
+        project_dir=project,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos-test",
+        service_group="argos-test",
+        bootstrap=True,
+        os_packages=["alsa-utils"],
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append(command)
+
+    apply_plan(plan, enable=False, runner=fake_runner)
+
+    assert ["sudo", "useradd", "--create-home", "--home-dir", "/home/argos-test", "--shell", "/bin/bash", "--user-group", "argos-test"] in commands
+    assert ["sudo", "apt-get", "install", "-y", "alsa-utils"] in commands
+    assert ["sudo", "loginctl", "enable-linger", "argos-test"] in commands
+    assert ["sudo", "chown", "-R", "argos-test:argos-test", str(project)] in commands

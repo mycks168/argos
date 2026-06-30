@@ -134,13 +134,13 @@ Codex の最終出力は途中経過の単純な続きではなく、応答全�
 初回発話:
 
 ```bash
-/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
 ```
 
 同一スロットの継続発話:
 
 ```bash
-/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
 ```
 
 ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。

@@ -10,6 +10,7 @@ import os
 import json
 import hashlib
 import logging
+import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
@@ -208,8 +209,9 @@ class ClaudeCliClient:
             self._store.save(slot_key, conversation.session_id)
 
         # コマンドの構築
+        claude_command = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
         command = [
-            "/home/yuki/.local/bin/claude",
+            claude_command,
             "-p",
             "--output-format", "stream-json",
             "--verbose",

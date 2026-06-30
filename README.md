@@ -60,6 +60,23 @@ uv run argos-install --json
 uv run argos-install --apply
 ```
 
+別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
+
+```bash
+sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
+sudo chown -R "$USER:$USER" /opt/argos
+cd /opt/argos
+uv run argos-install --bootstrap --apply
+```
+
+インストール後に `/opt/argos/.env` を編集し、STTゲートウェイ、VOICEVOX、マイク、PTT GPIOなど実機依存の値を設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+
+```bash
+sudo -iu argos
+codex
+agy
+```
+
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
 ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
 
