@@ -1,6 +1,14 @@
 import json
 
-from argos.installer import apply_plan, build_install_plan, load_manifest, main, plan_to_dict, render_unit_template
+from argos.installer import (
+    DEFAULT_MANIFEST,
+    apply_plan,
+    build_install_plan,
+    load_manifest,
+    main,
+    plan_to_dict,
+    render_unit_template,
+)
 
 
 def test_load_manifest_lists_core_and_planned_services():
@@ -13,6 +21,7 @@ def test_load_manifest_lists_core_and_planned_services():
     assert "tts-filter" in names
     assert "argos-acknowledgement-api" in names
     assert "stt-gateway" in names
+    assert "wakeword-models" in names
 
 
 def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
@@ -31,8 +40,19 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert ("argos", "render-unit") in actions
     assert ("tts-filter", "sync") in actions
     assert ("tts-filter", "render-unit") in actions
+    assert ("wakeword-models", "check") in actions
     assert ("stt-gateway", "configure") in actions
     assert plan.service_user == "argos"
+
+
+def test_bundled_wakeword_models_exist():
+    """同梱ウェイクワードモデルが既定パスに揃っている。"""
+    model_dir = DEFAULT_MANIFEST.parents[1] / "models" / "wakeword"
+
+    assert (model_dir / "argos.onnx").exists()
+    assert (model_dir / "melspectrogram.onnx").exists()
+    assert (model_dir / "embedding_model.onnx").exists()
+    assert (model_dir / "silero_vad_v6.onnx").exists()
 
 
 def test_plan_to_dict_is_json_serializable(tmp_path):

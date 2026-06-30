@@ -61,6 +61,7 @@ uv run argos-install --apply
 ```
 
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
+ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
 
 複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 

@@ -86,6 +86,15 @@ uv run argos-install --apply
 
 ウェイクワードを標準機能として扱うため、ARGOS本体の通常依存に `onnxruntime` と `numpy` を含める。これにより、`--extra wakeword` を指定しなくてもONNXモデルの実行に必要なランタイムが入る。
 
+ウェイクワードの実行に必要なONNXモデルは `models/wakeword/` に同梱する。
+
+- `argos.onnx`: 「アルゴス」検知用の分類器
+- `melspectrogram.onnx`: 音声からメル特徴量を作る前処理モデル
+- `embedding_model.onnx`: 音声埋め込みモデル
+- `silero_vad_v6.onnx`: ウェイクワード後の発話終了判定に使うVADモデル
+
+`ARGOS_WAKEWORD_MODEL_DIR` は既定で `models/wakeword` を参照するため、リポジトリを `/opt/argos` に配置して `uv run argos-install --apply` した場合は追加コピーなしで利用できる。別パスへモデルを置く場合だけ `.env` で `ARGOS_WAKEWORD_MODEL_DIR` または `ARGOS_WAKEWORD_VAD_MODEL` を上書きする。
+
 unit生成だけ確認したい場合は、出力先を一時ディレクトリへ向けて `--no-enable` を付ける。
 
 ```bash

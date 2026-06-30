@@ -79,6 +79,14 @@
       "enabled_by_default": true
     },
     {
+      "name": "wakeword-models",
+      "description": "ARGOSウェイクワード検知とVAD終了判定に使うONNXモデル群",
+      "kind": "data",
+      "bundle": "core",
+      "source": "models/wakeword",
+      "enabled_by_default": true
+    },
+    {
       "name": "gps-server",
       "description": "車載GPS情報をHTTPで返すcar-logger側GPS API",
       "kind": "system",
