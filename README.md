@@ -76,6 +76,13 @@ codex
 agy
 ```
 
+更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
+
+```bash
+cd /opt/argos
+sudo env "PATH=$PATH" uv run argos-install --update
+```
+
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
 ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
 

@@ -9,6 +9,7 @@ from argos.installer import (
     main,
     plan_to_dict,
     render_unit_template,
+    update_project,
     _resolve_os_packages,
     _reload_systemd,
 )
@@ -192,6 +193,45 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
     assert not any("enable" in command[0] for command in commands)
 
 
+def test_update_project_pulls_as_service_user(tmp_path, monkeypatch):
+    """updateはARGOS専用ユーザーでgit pullする。"""
+    project = tmp_path / "argos"
+    (project / ".git").mkdir(parents=True)
+    monkeypatch.setattr("argos.installer._lookup_uid", lambda user: "1234")
+    plan = build_install_plan(
+        [],
+        project_dir=project,
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append(command)
+
+    update_project(plan, runner=fake_runner)
+
+    assert commands == [
+        [
+            "sudo",
+            "-u",
+            "argos",
+            "env",
+            "HOME=/home/argos",
+            "XDG_RUNTIME_DIR=/run/user/1234",
+            "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1234/bus",
+            "git",
+            "-C",
+            str(project),
+            "pull",
+            "--ff-only",
+        ]
+    ]
+
+
 def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
     """bootstrap有効時はユーザー作成、apt、linger、所有者設定を実行する。"""
     project = tmp_path / "argos"
@@ -222,6 +262,49 @@ def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
     assert ["sudo", "apt-get", "install", "-y", "alsa-utils"] in commands
     assert ["sudo", "loginctl", "enable-linger", "argos-test"] in commands
     assert ["sudo", "chown", "-R", "argos-test:argos-test", str(project)] in commands
+
+
+def test_apply_plan_update_restarts_enabled_services(tmp_path, monkeypatch):
+    """update時はunit更新後に既定有効サービスを再起動する。"""
+    project = tmp_path / "argos"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
+    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    systemd_dir = project / "systemd"
+    systemd_dir.mkdir()
+    (systemd_dir / "argos.service").write_text("User=@ARGOS_USER@\n", encoding="utf-8")
+    (systemd_dir / "argos-dashboard-kiosk.service").write_text("ExecStart=@PROJECT_DIR@/run\n", encoding="utf-8")
+    monkeypatch.setattr("argos.installer._lookup_uid", lambda user: "1234")
+    services = [service for service in load_manifest() if service.name in {"argos", "argos-dashboard-kiosk"}]
+    plan = build_install_plan(
+        services,
+        project_dir=project,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append(command)
+
+    apply_plan(plan, enable=True, restart_services=True, runner=fake_runner)
+
+    assert ["systemctl", "restart", "argos.service"] in commands
+    assert [
+        "sudo",
+        "-u",
+        "argos",
+        "env",
+        "XDG_RUNTIME_DIR=/run/user/1234",
+        "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1234/bus",
+        "systemctl",
+        "--user",
+        "restart",
+        "argos-dashboard-kiosk.service",
+    ] in commands
 
 
 def test_reload_systemd_uses_service_user_bus(tmp_path, monkeypatch):

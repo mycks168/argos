@@ -223,6 +223,7 @@ def apply_plan(
     *,
     enable: bool = True,
     configure: bool = False,
+    restart_services: bool = False,
     runner=subprocess.run,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
@@ -245,6 +246,28 @@ def apply_plan(
         _reload_systemd(plan, runner=runner)
         for service in plan.services:
             _enable_service(service, plan, runner=runner)
+        if restart_services:
+            for service in plan.services:
+                _restart_service(service, plan, runner=runner)
+
+
+def update_project(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """ARGOSプロジェクトをGitで更新する。"""
+    project_dir = Path(plan.project_dir)
+    if not (project_dir / ".git").exists():
+        raise FileNotFoundError(f"Gitリポジトリではありません: {project_dir}")
+    uid = plan.service_uid or _lookup_uid(plan.service_user)
+    command = ["sudo", "-u", plan.service_user]
+    env_args = [f"HOME={plan.service_home}"]
+    if uid:
+        env_args.extend(
+            [
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+            ]
+        )
+    command.extend(["env", *env_args, "git", "-C", str(project_dir), "pull", "--ff-only"])
+    runner(command, check=True)
 
 
 def _ensure_project(project_dir: Path) -> None:
@@ -582,6 +605,17 @@ def _enable_service(service: BundledService, plan: InstallPlan, *, runner=subpro
         runner(["systemctl", "enable", "--now", Path(service.unit).name], check=True)
 
 
+def _restart_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """既定有効サービスを再起動する。"""
+    if not service.unit or not service.enabled_by_default:
+        return
+    unit_name = Path(service.unit).name
+    if service.kind == "user":
+        _run_user_systemctl(plan, ["restart", unit_name], runner=runner)
+    else:
+        runner(["systemctl", "restart", unit_name], check=True)
+
+
 def render_unit_template(template_path: Path, plan: InstallPlan) -> str:
     """systemd unitテンプレートのプレースホルダを置換する。"""
     text = template_path.read_text(encoding="utf-8")
@@ -660,6 +694,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", action="store_true", help="計画をJSONで出力する")
     parser.add_argument("--apply", action="store_true", help="計画を実行する")
+    parser.add_argument("--update", action="store_true", help="Git pull後に再インストールし、既定サービスを再起動する")
     parser.add_argument("--configure", action="store_true", help=".envを対話式に設定する")
     parser.add_argument("--no-enable", action="store_true", help="unit生成だけ行い、enable/startは行わない")
     args = parser.parse_args(argv)
@@ -682,8 +717,15 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(plan_to_dict(plan), ensure_ascii=False, indent=2))
     else:
         print(format_plan(plan))
-    if args.apply:
-        apply_plan(plan, enable=not args.no_enable, configure=args.configure)
+    if args.update:
+        update_project(plan)
+    if args.apply or args.update:
+        apply_plan(
+            plan,
+            enable=not args.no_enable,
+            configure=args.configure,
+            restart_services=args.update and not args.no_enable,
+        )
     return 0
 
 

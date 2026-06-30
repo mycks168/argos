@@ -97,6 +97,13 @@ sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 
 `.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、OSRM、GPS API、ウェイクワード、Agent Runner、入力マイク、出力デバイスを対話式に設定する。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
+インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `.env` は保持したまま `uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。
+
+```bash
+cd /opt/argos
+sudo env "PATH=$PATH" uv run argos-install --update
+```
+
 OAuth認証はインストーラーで自動化しない。ブラウザ連携や対話操作が必要なため、インストール後に次のように `argos` ユーザーで実行して認証する。
 
 ```bash
