@@ -10,7 +10,9 @@ from argos.installer import (
     plan_to_dict,
     render_unit_template,
     update_project,
+    AGENT_LIMIT_CRON_MARKER,
     _resolve_os_packages,
+    _ensure_agent_limit_cron,
     _reload_systemd,
 )
 
@@ -44,6 +46,7 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert ("argos", "render-unit") in actions
     assert ("tts-filter", "sync") in actions
     assert ("tts-filter", "render-unit") in actions
+    assert ("agent-limit", "cron") in actions
     assert ("wakeword-models", "check") in actions
     assert ("stt-gateway", "configure") in actions
     assert plan.service_user == "argos"
@@ -338,6 +341,76 @@ def test_reload_systemd_uses_service_user_bus(tmp_path, monkeypatch):
         "--user",
         "daemon-reload",
     ] in commands
+
+
+def test_ensure_agent_limit_cron_adds_missing_entry(tmp_path):
+    """agent-limitの更新cronを未登録時だけ追加する。"""
+    project = tmp_path / "argos"
+    updater = project / "services" / "agent-limit" / "update_limits.py"
+    updater.parent.mkdir(parents=True)
+    updater.write_text("print('ok')\n", encoding="utf-8")
+    plan = build_install_plan(
+        [],
+        project_dir=project,
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+    installed_cron = {}
+
+    class Result:
+        """crontab -lの結果を表す。"""
+
+        stdout = "SHELL=/bin/bash\n"
+
+    def fake_runner(command, **kwargs):
+        """crontab操作を記録する。"""
+        commands.append((command, kwargs))
+        if command == ["sudo", "-u", "argos", "crontab", "-l"]:
+            return Result()
+        if command[:4] == ["sudo", "-u", "argos", "crontab"]:
+            installed_cron["content"] = open(command[4], encoding="utf-8").read()
+        return Result()
+
+    _ensure_agent_limit_cron(plan, runner=fake_runner)
+
+    assert AGENT_LIMIT_CRON_MARKER in installed_cron["content"]
+    assert "uv run python update_limits.py" in installed_cron["content"]
+    assert "*/5 * * * *" in installed_cron["content"]
+    assert commands[0][1]["capture_output"] is True
+
+
+def test_ensure_agent_limit_cron_skips_existing_entry(tmp_path):
+    """cron登録済みなら二重登録しない。"""
+    project = tmp_path / "argos"
+    updater = project / "services" / "agent-limit" / "update_limits.py"
+    updater.parent.mkdir(parents=True)
+    updater.write_text("print('ok')\n", encoding="utf-8")
+    plan = build_install_plan(
+        [],
+        project_dir=project,
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+
+    class Result:
+        """crontab -lの結果を表す。"""
+
+        stdout = f"{AGENT_LIMIT_CRON_MARKER}\n"
+
+    def fake_runner(command, **kwargs):
+        """crontab操作を記録する。"""
+        commands.append(command)
+        return Result()
+
+    _ensure_agent_limit_cron(plan, runner=fake_runner)
+
+    assert commands == [["sudo", "-u", "argos", "crontab", "-l"]]
 
 
 def test_resolve_os_packages_selects_available_chromium_package():

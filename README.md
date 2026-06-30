@@ -129,6 +129,8 @@ models/wakeword/
 
 Codex の応答は `--json` の JSONL イベントから取得し、句読点や改行で分割して VOICEVOX に順次投入します。キャンセル時は再生中の音声と未再生チャンクを破棄します。
 
+エージェント利用枠表示は `services/agent-limit/update_limits.py` が生成するJSONを読みます。インストーラーはこの更新スクリプトを5分おきに動かすcronをARGOS実行ユーザーへ登録します。
+
 `ARGOS_LCD_ENABLED=true` の場合、読み上げる文を ST7789 LCD にも表示します。日本語表示には IPA 系フォントを使います。夜間でも明るくなりすぎないよう、LCDは黒背景に白文字で表示します。
 
 既定の区切り文字:

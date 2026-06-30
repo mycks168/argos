@@ -116,6 +116,8 @@ hermes
 
 外部依存として残すSTTゲートウェイ、VOICEVOX、OSRM、Slack Webhookなどは `/opt/argos/.env` で指定する。
 
+`agent-limit` は systemd 常駐サービスではなく補助ツールとして同梱する。インストーラーは `/opt/argos/services/agent-limit/update_limits.py` が存在する場合、ARGOS実行ユーザーのcrontabへ5分おきの更新ジョブを重複なしで登録する。登録済み判定には `# ARGOS agent-limit updater` のマーカーを使う。
+
 ウェイクワードを標準機能として扱うため、ARGOS本体の通常依存に `onnxruntime` と `numpy` を含める。これにより、`--extra wakeword` を指定しなくてもONNXモデルの実行に必要なランタイムが入る。
 
 ウェイクワードの実行に必要なONNXモデルは `models/wakeword/` に同梱する。

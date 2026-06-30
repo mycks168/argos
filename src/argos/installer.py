@@ -18,10 +18,13 @@ DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
     "chromium-browser|chromium",
+    "cron",
     "curl",
     "git",
     "tmux",
 )
+
+AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
 
 
 @dataclass(frozen=True)
@@ -170,6 +173,8 @@ def _service_steps(
         steps.append(InstallStep("render-unit", str(unit_target), "systemd unitをテンプレートから生成する", service=service.name))
         if service.enabled_by_default:
             steps.append(InstallStep("enable", service.name, "systemd enableを行う", service=service.name))
+    if service.name == "agent-limit":
+        steps.append(InstallStep("cron", service.name, "update_limits.pyをcronへ重複なしで登録する", service=service.name))
     return steps
 
 
@@ -243,6 +248,8 @@ def apply_plan(
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
+        if any(service.name == "agent-limit" for service in plan.services):
+            _ensure_agent_limit_cron(plan, runner=runner)
         _reload_systemd(plan, runner=runner)
         for service in plan.services:
             _enable_service(service, plan, runner=runner)
@@ -682,6 +689,39 @@ def _reload_systemd(plan: InstallPlan, *, runner=subprocess.run) -> None:
     """systemd daemon-reloadを実行する。"""
     runner(["systemctl", "daemon-reload"], check=True)
     _run_user_systemctl(plan, ["daemon-reload"], runner=runner)
+
+
+def _ensure_agent_limit_cron(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """agent-limit更新ジョブをARGOS専用ユーザーのcrontabへ登録する。"""
+    project_dir = Path(plan.project_dir)
+    updater = project_dir / "services" / "agent-limit" / "update_limits.py"
+    if not updater.exists():
+        return
+    current = runner(
+        ["sudo", "-u", plan.service_user, "crontab", "-l"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    existing = getattr(current, "stdout", "") or ""
+    if AGENT_LIMIT_CRON_MARKER in existing:
+        return
+    command = (
+        f"*/5 * * * * cd {project_dir / 'services' / 'agent-limit'} "
+        "&& /usr/bin/env uv run python update_limits.py "
+        ">/tmp/argos-agent-limit-update.log 2>&1"
+    )
+    content = existing.rstrip()
+    if content:
+        content += "\n"
+    content += f"{AGENT_LIMIT_CRON_MARKER}\n{command}\n"
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as fp:
+        fp.write(content)
+        temp_path = fp.name
+    try:
+        runner(["sudo", "-u", plan.service_user, "crontab", temp_path], check=True)
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
 
 
 def main(argv: list[str] | None = None) -> int:
