@@ -1,0 +1,34 @@
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.139.0)                   │
+│                                              │
+│ model:     gpt-5.5 medium   /model to change │
+│ directory: ~/proj/ttyexec                    │
+╰──────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference with increased plan usage.
+
+/status
+
+╭────────────────────────────────────────────────────────────────────────────────╮
+│  >_ OpenAI Codex (v0.139.0)                                                    │
+│                                                                                │
+│ Visit https://chatgpt.com/codex/settings/usage for up-to-date                  │
+│ information on rate limits and credits                                         │
+│                                                                                │
+│  Model:                gpt-5.5 (reasoning medium, summaries auto)              │
+│  Directory:            ~/proj/ttyexec                                          │
+│  Permissions:          Workspace (Ask for approval)                            │
+│  Agents.md:            <none>                                                  │
+│  Account:              user@gmail.com (Plus)                             │
+│  Collaboration mode:   Default                                                 │
+│  Session:              01999999-8888-7777-6666-555555555555                    │
+│                                                                                │
+│  5h limit:             [████████████████████] 99% left (resets 19:26)          │
+│  Weekly limit:         [░░░░░░░░░░░░░░░░░░░░] 0% left (resets 20:24 on 18 Jun) │
+│  Credits:              882 credits                                             │
+╰────────────────────────────────────────────────────────────────────────────────╯
+
+
+› Implement {feature}
+
+  gpt-5.5 medium · ~/proj/ttyexec

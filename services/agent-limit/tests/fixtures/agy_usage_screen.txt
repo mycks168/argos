@@ -1,0 +1,46 @@
+      ▄▀▀▄        Antigravity CLI 1.0.8
+     ▀▀▀▀▀▀       user@gmail.com (Google AI Pro)
+    ▀▀▀▀▀▀▀▀      Gemini 3.5 Flash (Medium)
+   ▄▀▀    ▀▀▄     ~/proj/ttyexec
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+└ Models & Quota
+
+  Account: user@gmail.com
+
+GEMINI MODELS
+  Models within this group: Gemini Flash, Gemini Pro
+
+  Weekly Limit
+    [███████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 38.41%
+    38% remaining · Refreshes in 85h 14m
+
+  Five Hour Limit
+    [██████████████████████████████████████████████████] 99.85%
+    100% remaining · Refreshes in 4h 45m
+
+
+CLAUDE AND GPT MODELS
+  Models within this group: Claude Opus, Claude Sonnet, GPT-OSS
+
+  Weekly Limit
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+
+  Five Hour Limit
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+
+
+  │Within each group, models share a weekly limit and a 5-hour limit. Quota is
+  │consumed proportionally to the cost of the tokens. Thus, limits will last
+  │longer with shorter tasks or using more cost-effective models. The 5-hour
+  │limit smooths out aggregate demand to fairly distribute global capacity
+  │across all users, while your weekly limit is tied directly to your individual
+  │tier.
+
+  ↑/↓ Scroll · pgup/pgdown Page · ctrl+end Bottom · ctrl+home Top · esc Close
+esc to cancel                                                                                                                                                                                      Gemini 3.5 Flash (Medium)

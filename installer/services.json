@@ -1,0 +1,118 @@
+{
+  "version": 1,
+  "services": [
+    {
+      "name": "argos",
+      "description": "ARGOS voice agent本体",
+      "kind": "system",
+      "bundle": "core",
+      "source": ".",
+      "unit": "systemd/argos.service",
+      "enabled_by_default": true
+    },
+    {
+      "name": "argos-agent-runner",
+      "description": "LLMエージェント実行をARGOS本体から分離するRunner",
+      "kind": "system",
+      "bundle": "core",
+      "source": ".",
+      "unit": "systemd/argos-agent-runner.service",
+      "enabled_by_default": true
+    },
+    {
+      "name": "argos-dashboard-kiosk",
+      "description": "HDMI画面にARGOSダッシュボードを表示するChromium kiosk",
+      "kind": "user",
+      "bundle": "core",
+      "source": ".",
+      "unit": "systemd/argos-dashboard-kiosk.service",
+      "enabled_by_default": true
+    },
+    {
+      "name": "tts-filter",
+      "description": "読み上げ前の辞書変換と読み間違い補正API",
+      "kind": "system",
+      "bundle": "bundled",
+      "source": "services/tts-filter",
+      "unit": "systemd/tts-filter.service",
+      "current_path": "/home/yuki/tts-filter",
+      "endpoint": "http://127.0.0.1:9191",
+      "enabled_by_default": true
+    },
+    {
+      "name": "argos-acknowledgement-api",
+      "description": "状態通知や相槌文言を選ぶAPI",
+      "kind": "system",
+      "bundle": "bundled",
+      "source": "services/argos-acknowledgement-api",
+      "unit": "systemd/argos-acknowledgement-api.service",
+      "current_path": "/home/yuki/argos-acknowledgement-api",
+      "endpoint": "http://127.0.0.1:23032",
+      "enabled_by_default": true
+    },
+    {
+      "name": "argos-reminder",
+      "description": "日時や位置条件でARGOSダッシュボードへ通知するリマインダー",
+      "kind": "user",
+      "bundle": "bundled",
+      "source": "services/argos-reminder",
+      "unit": "systemd/argos-reminder.service",
+      "current_path": "/home/yuki/argos-reminder",
+      "enabled_by_default": true
+    },
+    {
+      "name": "agent-limit",
+      "description": "Codex、Antigravity、Hermesなどの利用枠を取得してJSON化する補助ツール",
+      "kind": "tool",
+      "bundle": "bundled",
+      "source": "services/agent-limit",
+      "current_path": "/home/yuki/agent-limit",
+      "enabled_by_default": false
+    },
+    {
+      "name": "argos-skills",
+      "description": "Slack通知、ダッシュボード表示、場所検索などのCodex/ARGOS向けスキル群",
+      "kind": "data",
+      "bundle": "bundled",
+      "source": "skills",
+      "current_path": "/home/yuki/skills",
+      "enabled_by_default": true
+    },
+    {
+      "name": "gps-server",
+      "description": "車載GPS情報をHTTPで返すcar-logger側GPS API",
+      "kind": "system",
+      "bundle": "optional",
+      "source": "services/gps-server",
+      "current_path": "/home/yuki/car-logger/raspberry",
+      "endpoint": "http://127.0.0.1:8080/gps",
+      "enabled_by_default": false
+    },
+    {
+      "name": "screen-recorder",
+      "description": "ダッシュボード画面録画API",
+      "kind": "user",
+      "bundle": "optional",
+      "source": "services/screen-recorder",
+      "current_path": "/home/yuki/screen-recorder",
+      "endpoint": "http://127.0.0.1:8082",
+      "enabled_by_default": false
+    },
+    {
+      "name": "stt-gateway",
+      "description": "音声文字起こしAPI。現環境ではclove側の外部サービスを参照している",
+      "kind": "external",
+      "bundle": "external",
+      "endpoint": "http://clove:23000",
+      "enabled_by_default": false
+    },
+    {
+      "name": "voicevox",
+      "description": "VOICEVOX Engine。現環境ではURL指定だけをARGOSから参照する",
+      "kind": "external",
+      "bundle": "external",
+      "endpoint": "http://127.0.0.1:50021",
+      "enabled_by_default": false
+    }
+  ]
+}

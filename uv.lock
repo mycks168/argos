@@ -151,6 +151,8 @@ dependencies = [
     { name = "adafruit-circuitpython-rgb-display" },
     { name = "gpiozero" },
     { name = "lgpio" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
     { name = "pillow" },
     { name = "python-dotenv" },
     { name = "requests" },
@@ -169,10 +171,6 @@ kokoro = [
     { name = "misaki", extra = ["ja"] },
     { name = "soundfile" },
 ]
-wakeword = [
-    { name = "numpy" },
-    { name = "onnxruntime" },
-]
 whisper = [
     { name = "faster-whisper" },
 ]
@@ -185,8 +183,8 @@ requires-dist = [
     { name = "kokoro", marker = "extra == 'kokoro'", specifier = ">=0.9.4" },
     { name = "lgpio" },
     { name = "misaki", extras = ["ja"], marker = "extra == 'kokoro'", specifier = ">=0.9.4" },
-    { name = "numpy", marker = "extra == 'wakeword'", specifier = ">=1.26" },
-    { name = "onnxruntime", marker = "extra == 'wakeword'", specifier = ">=1.20" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "onnxruntime", specifier = ">=1.20" },
     { name = "opencv-python-headless", marker = "extra == 'face'" },
     { name = "pillow" },
     { name = "pytest", marker = "extra == 'dev'" },

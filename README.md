@@ -45,6 +45,23 @@ journalctl -u argos.service -f
 sudo systemctl restart argos.service
 ```
 
+## ARGOS一式インストーラ
+
+ARGOS本体、TTSフィルター、相槌API、リマインダー、スキルなどをまとめて導入するためのインストーラがあります。まずdry-runで計画を確認します。
+
+```bash
+uv run argos-install
+uv run argos-install --json
+```
+
+実際に `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
+
+```bash
+uv run argos-install --apply
+```
+
+対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
+
 複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 
 ```text
@@ -80,7 +97,7 @@ models/wakeword/
   silero_vad_v6.onnx
 ```
 
-既定は無効です。車内ノイズで誤検知する場合は `ARGOS_WAKEWORD_THRESHOLD` を上げます。VADモデルを別の場所に置く場合は `ARGOS_WAKEWORD_VAD_MODEL` で指定します。必要な依存関係は `uv sync --extra wakeword` で入れます。
+既定は無効です。車内ノイズで誤検知する場合は `ARGOS_WAKEWORD_THRESHOLD` を上げます。VADモデルを別の場所に置く場合は `ARGOS_WAKEWORD_VAD_MODEL` で指定します。ONNX Runtime は標準依存として入ります。
 
 ## 読み上げ
 

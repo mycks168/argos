@@ -1,0 +1,16 @@
+[Unit]
+Description=ARGOS TTS Filter API
+After=network.target
+
+[Service]
+Type=simple
+User=@ARGOS_USER@
+Group=@ARGOS_GROUP@
+WorkingDirectory=@PROJECT_DIR@/services/tts-filter
+EnvironmentFile=-@PROJECT_DIR@/services/tts-filter/.env
+ExecStart=@PROJECT_DIR@/services/tts-filter/.venv/bin/uvicorn tts_filter_api.app:app --host 0.0.0.0 --port 9191
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
