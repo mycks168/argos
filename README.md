@@ -94,6 +94,8 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 
 ## PTT 操作
 
+`ARGOS_PTT_GPIO` にBCM番号を指定するとGPIOのPTTスイッチを使います。UbuntuなどGPIOがない環境では空欄にするとGPIO入力を初期化しません。
+
 - PTT ON: 録音開始
 - PTT OFF: 録音停止、文字起こし、Codex 実行、読み上げ
 - 短押し1回: 録音を破棄

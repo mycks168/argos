@@ -310,10 +310,12 @@ def configure_env(
 
     _ask_url(values, "STT_GATEWAY_URL", "STTゲートウェイURL", input_func=input_func)
     _ask_url(values, "VOICEVOX_URL", "VOICEVOX URL", input_func=input_func)
+    _ask_text(values, "VOICEVOX_BEARER_TOKEN", "VOICEVOX Bearerトークン", input_func=input_func)
     _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
+    _ask_text(values, "ARGOS_PTT_GPIO", "PTT GPIO BCM番号。GPIOなしなら空欄", input_func=input_func)
     _ask_audio_device(values, "AUDIO_INPUT_DEVICES", "入力マイク", ["arecord", "-L"], runner=runner, input_func=input_func, output_func=output_func)
     _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
 
@@ -358,6 +360,18 @@ def _ask_url(values: dict[str, str], key: str, label: str, *, input_func: Callab
     """URL文字列を対話入力で更新する。"""
     current = values.get(key, "")
     answer = input_func(f"{label} [{current or '未設定'}]: ").strip()
+    if answer:
+        values[key] = answer
+
+
+def _ask_text(values: dict[str, str], key: str, label: str, *, input_func: Callable[[str], str]) -> None:
+    """任意の文字列を対話入力で更新する。"""
+    current = values.get(key, "")
+    display = "設定済み" if current else "未設定"
+    answer = input_func(f"{label} [{display}]: ").strip()
+    if answer.lower() in {"-", "none", "null", "なし", "無効"}:
+        values[key] = ""
+        return
     if answer:
         values[key] = answer
 

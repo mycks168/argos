@@ -66,6 +66,24 @@ def test_load_wifi_status_refresh_seconds(monkeypatch):
     assert settings.wifi_status_refresh_seconds == 15
 
 
+def test_load_empty_ptt_gpio_disables_gpio(monkeypatch):
+    """PTT GPIOが空ならGPIO入力を無効化する。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio is None
+
+
+def test_load_ptt_gpio_number(monkeypatch):
+    """PTT GPIOにBCM番号があれば整数として読み込む。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "17")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio == 17
+
+
 def test_load_agent_system_prompt_settings(monkeypatch):
     """エージェント共通システムプロンプト設定を読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")
@@ -168,6 +186,15 @@ def test_load_stt_gateway_token(monkeypatch):
     settings = load_settings()
 
     assert settings.stt_gateway_token == "stt-token"
+
+
+def test_load_voicevox_bearer_token(monkeypatch):
+    """VOICEVOXのBearerトークンを読み込む。"""
+    monkeypatch.setenv("VOICEVOX_BEARER_TOKEN", "voice-token")
+
+    settings = load_settings()
+
+    assert settings.voicevox_bearer_token == "voice-token"
 
 
 def test_load_voicevox_speed_scale(monkeypatch):

@@ -62,6 +62,8 @@ VOICEVOX Engine は次の順で呼び出す。
 
 `audio_query` の JSON に `outputSamplingRate` と `VOICEVOX_SPEED_SCALE` で指定した `speedScale` を設定してから `synthesis` に渡す。
 
+`VOICEVOX_BEARER_TOKEN` が設定されている場合は、`audio_query` と `synthesis` の両方へ `Authorization: Bearer <token>` を付ける。未設定の場合は認証ヘッダーを送らない。
+
 `VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
 
 Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_ID`、`ARGOS_KOKORO_SAMPLE_RATE` で調整する。Kokoro を使う環境では `uv sync --extra kokoro` を実行し、必要に応じて `uv run python -m unidic download` で日本語辞書を用意する。
@@ -270,7 +272,7 @@ PTT録音中は本人確認の繰り返し案内と警告音を再生しない�
 録音WAVは `/tmp/argos/utterance-*.wav` のユニークな一時ファイル名で作成する。固定名を使わないことで、前回録音のSTT処理中に次の録音が始まっても、次の録音開始処理が前回録音ファイルを削除しないようにする。STTゲートウェイへ送るmultipartファイル名も実際の録音ファイル名に合わせる。録音をキャンセルした場合はその録音ファイルを削除し、STT処理に渡した録音ファイルも処理終了時に削除する。異常終了などで残った古い録音一時ファイルはARGOS起動時に削除する。
 短い本人確認キーワードはSTT側で空文字になりやすいため、録音停止後にWAVヘッダーを修復し、前後へ短い無音を追加してから文字起こしへ渡す。
 
-GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
+`ARGOS_PTT_GPIO` が空欄の場合、GPIO PTT入力は初期化しない。UbuntuなどGPIOがない環境ではこの設定にして起動できるようにする。値がある場合、GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
 
 GPIO入力は起動直後の本人確認案内を読み上げる前に初期化する。これにより「本人確認してください」の読み上げ中にPTTを押した場合も、読み上げを止めて録音を開始できる。
 

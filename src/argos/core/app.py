@@ -146,6 +146,7 @@ class ArgosApp:
             settings.voicevox_sample_rate,
             settings.voicevox_speed_scale,
             settings.voicevox_volume_scale,
+            settings.voicevox_bearer_token,
         )
         self._voicevox_speakers_by_slot_key = {
             _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker
@@ -271,8 +272,10 @@ class ArgosApp:
         self._run_startup_sequence()
         self._try_face_auth("起動時")
         self._set_ready_or_locked()
-        if not self._settings.dry_run:
+        if not self._settings.dry_run and self._settings.ptt_gpio is not None:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
+        elif not self._settings.dry_run:
+            log.info("ARGOS_PTT_GPIO が未設定のためGPIO PTT入力を無効化します")
         self._start_wakeword_listener()
         self._announce_auth_required()
         self._start_auth_status_monitor()

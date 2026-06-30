@@ -369,10 +369,12 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
             [
                 "STT_GATEWAY_URL=",
                 "VOICEVOX_URL=http://localhost:50021",
+                "VOICEVOX_BEARER_TOKEN=",
                 "OSRM_URL=",
                 "ARGOS_REMOTE_LOCATION_URL=",
                 "ARGOS_WAKEWORD_ENABLED=false",
                 "ARGOS_AGENT_RUNNER_URL=",
+                "ARGOS_PTT_GPIO=17",
                 "AUDIO_INPUT_DEVICES=default",
                 "AUDIO_OUTPUT_DEVICE=default",
             ]
@@ -384,10 +386,12 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
         [
             "http://stt.local:23000",
             "",
+            "voice-token",
             "http://router.local:5000",
             "http://gps.local:8080/gps",
             "y",
             "y",
+            "-",
             "2",
             "hw:CARD=Speaker,DEV=0",
         ]
@@ -418,9 +422,11 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
     text = env_path.read_text(encoding="utf-8")
     assert "STT_GATEWAY_URL=http://stt.local:23000" in text
     assert "VOICEVOX_URL=http://localhost:50021" in text
+    assert "VOICEVOX_BEARER_TOKEN=voice-token" in text
     assert "OSRM_URL=http://router.local:5000" in text
     assert "ARGOS_REMOTE_LOCATION_URL=http://gps.local:8080/gps" in text
     assert "ARGOS_WAKEWORD_ENABLED=true" in text
     assert "ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765" in text
+    assert "ARGOS_PTT_GPIO=" in text
     assert "AUDIO_INPUT_DEVICES=plughw:CARD=Mic,DEV=0" in text
     assert "AUDIO_OUTPUT_DEVICE=hw:CARD=Speaker,DEV=0" in text

@@ -657,6 +657,37 @@ def test_run_initializes_gpio_before_auth_prompt(monkeypatch):
     assert events[:2] == ["gpio", "speak"]
 
 
+def test_run_skips_gpio_when_ptt_gpio_is_empty(monkeypatch):
+    """PTT GPIO未設定ならGPIO入力を初期化しない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "ptt_gpio": None,
+            "dry_run": False,
+            "startup_sound_enabled": False,
+            "startup_splash_seconds": 0,
+            "auth_enabled": False,
+        }
+    )
+    called = []
+
+    def fake_gpio(*_args):
+        called.append("gpio")
+        return object()
+
+    def sleep_once(_seconds):
+        app._shutdown.set()
+
+    monkeypatch.setattr("argos.core.app.GpioPttInput", fake_gpio)
+    monkeypatch.setattr("argos.core.app.time.sleep", sleep_once)
+    app = ArgosApp(settings)
+
+    app.run()
+
+    assert called == []
+
+
 def test_auth_warning_repeats_until_authenticated(monkeypatch):
     """未認証が続いたら案内を繰り返し、認証後に止める。"""
     _patch_app(monkeypatch)

@@ -8,13 +8,29 @@ import requests
 class VoicevoxClient:
     """VOICEVOX Engine でテキストから WAV を生成する。"""
 
-    def __init__(self, base_url: str, speaker: int, sample_rate: int, speed_scale: float, volume_scale: float = 1.0) -> None:
-        """API のベース URL、話者、出力サンプリングレート、話速、音量を保持する。"""
+    def __init__(
+        self,
+        base_url: str,
+        speaker: int,
+        sample_rate: int,
+        speed_scale: float,
+        volume_scale: float = 1.0,
+        bearer_token: str = "",
+    ) -> None:
+        """API のベース URL、話者、出力設定、Bearerトークンを保持する。"""
         self._base_url = base_url.rstrip("/")
         self._speaker = speaker
         self._sample_rate = sample_rate
         self._speed_scale = speed_scale
         self._volume_scale = volume_scale
+        self._bearer_token = bearer_token
+
+    def _headers(self, *, json_content: bool = False) -> dict[str, str]:
+        """VOICEVOXへ送るHTTPヘッダーを組み立てる。"""
+        headers = {"Content-Type": "application/json"} if json_content else {}
+        if self._bearer_token:
+            headers["Authorization"] = f"Bearer {self._bearer_token}"
+        return headers
 
     def synthesize(self, text: str, speaker: int | None = None) -> bytes:
         """VOICEVOX の audio_query と synthesis を呼び出して WAV を返す。"""
@@ -22,6 +38,7 @@ class VoicevoxClient:
         query_response = requests.post(
             f"{self._base_url}/audio_query",
             params={"text": text, "speaker": speaker_id},
+            headers=self._headers(),
             timeout=10,
         )
         if query_response.status_code != 200:
@@ -34,7 +51,7 @@ class VoicevoxClient:
             f"{self._base_url}/synthesis",
             params={"speaker": speaker_id},
             json=query,
-            headers={"Content-Type": "application/json"},
+            headers=self._headers(json_content=True),
             timeout=60,
         )
         if synth_response.status_code != 200:

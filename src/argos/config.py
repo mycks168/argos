@@ -75,7 +75,7 @@ class Settings:
     dashboard_host: str
     dashboard_port: int
     dashboard_token: str
-    ptt_gpio: int
+    ptt_gpio: int | None
     silence_rms_threshold: float
     dry_run: bool
     codex_home: str
@@ -154,6 +154,7 @@ class Settings:
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
     voicevox_volume_scale: float = 1.0
+    voicevox_bearer_token: str = ""
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -373,7 +374,7 @@ def load_settings() -> Settings:
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
-        ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
+        ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),
@@ -464,6 +465,7 @@ def load_settings() -> Settings:
         whisper_device=os.environ.get("ARGOS_WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
         voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
+        voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
     )
 
 

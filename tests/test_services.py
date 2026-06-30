@@ -136,6 +136,25 @@ def test_voicevox_synthesize_accepts_speaker_override(monkeypatch):
     assert calls[1][1]["params"]["speaker"] == 8
 
 
+def test_voicevox_synthesize_uses_bearer_token(monkeypatch):
+    """VOICEVOXへの各リクエストにBearer認証を付ける。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"wave-bytes")
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1, bearer_token="voice-token")
+
+    assert client.synthesize("こんにちは") == b"wave-bytes"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer voice-token"
+    assert calls[1][1]["headers"]["Authorization"] == "Bearer voice-token"
+    assert calls[1][1]["headers"]["Content-Type"] == "application/json"
+
+
 def test_kokoro_synthesize_uses_japanese_pipeline(monkeypatch):
     """Kokoroの日本語パイプラインからWAVを生成する。"""
     calls = []

@@ -95,7 +95,7 @@ sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 
 `--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
-`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、OSRM、GPS API、ウェイクワード、Agent Runner、入力マイク、出力デバイスを対話式に設定する。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
 インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `.env` は保持したまま `uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。
 
