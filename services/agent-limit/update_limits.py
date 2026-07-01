@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""agyとcodexの利用制限状況を定期取得し、ARGOSが解釈可能なJSONとして書き出すスクリプト。"""
+"""各エージェントの利用制限状況を定期取得し、ARGOSが解釈可能なJSONとして書き出すスクリプト。"""
 
 import os
 import json
@@ -31,6 +31,15 @@ def _limit_block(limit_data):
     }
 
 
+def _usage_json(usage_data):
+    """five_hour/weeklyの取得結果をARGOS用JSONに変換する。"""
+    return {
+        "5hour": _limit_block(usage_data["five_hour"]),
+        "weekly": _limit_block(usage_data["weekly"]),
+        "other": {},
+    }
+
+
 def main():
     # 1. Codex status の取得と変換
     try:
@@ -58,11 +67,7 @@ def main():
         # gemini のデータを取得 (antigravityで使用)
         gem = agy_data.get("gemini", {})
         if gem:
-            gem_json = {
-                "5hour": _limit_block(gem["five_hour"]),
-                "weekly": _limit_block(gem["weekly"]),
-                "other": {},
-            }
+            gem_json = _usage_json(gem)
             # antigravity.json (Geminiの利用状況を割り当て)
             with open(LIMIT_DIR / "antigravity.json", "w", encoding="utf-8") as f:
                 json.dump(gem_json, f, ensure_ascii=False, indent=2)
@@ -70,6 +75,16 @@ def main():
 
     except Exception as e:
         print(f"Failed to update agy usage: {e}", file=sys.stderr)
+
+    # 3. Claude usage の取得と変換
+    try:
+        claude_data = run_cmd([UV_COMMAND, "run", str(LIMIT_DIR / "claude_usage.py")])
+        claude_json = _usage_json(claude_data)
+        with open(LIMIT_DIR / "claude.json", "w", encoding="utf-8") as f:
+            json.dump(claude_json, f, ensure_ascii=False, indent=2)
+        print("Claude status updated successfully.")
+    except Exception as e:
+        print(f"Failed to update claude usage: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

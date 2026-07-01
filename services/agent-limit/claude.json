@@ -1,5 +1,13 @@
 {
-  "available": false,
-  "label": "未取得",
-  "error": "利用枠取得コマンドを設定すると更新できます"
+  "5hour": {
+    "remain_percentage": 100.0,
+    "use_percentage": 0.0,
+    "reset_at": "07/02 11:40"
+  },
+  "weekly": {
+    "remain_percentage": 100.0,
+    "use_percentage": 0.0,
+    "reset_at": "07/05 14:00"
+  },
+  "other": {}
 }

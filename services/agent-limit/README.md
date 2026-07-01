@@ -1,6 +1,6 @@
 # ttyexec
 
-`codex` / `agy` のようなTUIアプリをtmux経由で自動操作し、利用状況(usage)をJSONで取得するスクリプト集。
+`codex` / `agy` / `claude` のようなTUIアプリをtmux経由で自動操作し、利用状況(usage)をJSONで取得するスクリプト集。
 
 ## 使い方
 
@@ -49,9 +49,26 @@
 - `usage_pct`: 使用率(%)。クォータが100%残っている場合は`0.0`
 - `reset`: リセット予定日時(`MM/DD HH:MM`形式)。クォータが満タンの場合は`null`
 
+### claudeの使用状況取得
+
+```sh
+./claude_usage.py
+```
+
+`claude`を起動して`/usage`を実行し、現在セッションと週次の使用率を以下の形式のJSONで標準出力に出力します。
+
+```json
+{
+  "five_hour": {"usage_pct": 12.34, "reset": "06/15 14:45"},
+  "weekly": {"usage_pct": 56.78, "reset": "06/18 23:14"}
+}
+```
+
 ## 動作の仕組み
 
-両スクリプトともtmuxの一時セッション上で対象のCLIを起動し、画面表示が安定するまで待ってからコマンドを送信、`capture-pane`で画面内容を取得して正規表現で解析します。終了時はESC → `/exit`で正常終了させ、残っていればセッションをkillします。
+各スクリプトはtmuxの一時セッション上で対象のCLIを起動し、画面表示が安定するまで待ってからコマンドを送信、`capture-pane`で画面内容を取得して正規表現で解析します。終了時はESC → `/exit`で正常終了させ、残っていればセッションをkillします。
+
+`update_limits.py` は `codex_status.py` の結果を `codex.json` と `hermes.json` に、`agy_usage.py` の `gemini` を `antigravity.json` に、`claude_usage.py` の結果を `claude.json` に書き出します。
 
 なお`codex`は`/status`を短時間に連続実行すると「refresh requested; run /status again shortly」と表示され値が返らないことがあるため、最大5回まで自動リトライします。
 
