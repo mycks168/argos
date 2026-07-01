@@ -17,6 +17,7 @@ from argos.installer import (
     _resolve_os_packages,
     _ensure_agent_limit_cron,
     _ensure_core_env_defaults,
+    _ensure_tts_filter_shared_token,
     _install_chromium_policy,
     _reload_systemd,
 )
@@ -774,3 +775,38 @@ def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):
 
     values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert values["ARGOS_DASHBOARD_TOKEN"]
+
+
+def test_ensure_tts_filter_shared_token_generates_and_syncs(tmp_path):
+    """本体とtts-filterのBearerトークンを同じ値に揃える。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "tts-filter"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    filter_env = service_dir / ".env"
+    app_env.write_text("TTS_FILTER_URL=http://127.0.0.1:9191\nTTS_FILTER_BEARER_TOKEN=\n", encoding="utf-8")
+    filter_env.write_text("TTS_FILTER_BEARER_TOKEN=change-me\nTTS_FILTER_CONFIG=src/tts_filter/dictionary.yml\n", encoding="utf-8")
+
+    assert _ensure_tts_filter_shared_token(project) is True
+
+    app_values = dict(line.split("=", 1) for line in app_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    filter_values = dict(line.split("=", 1) for line in filter_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert app_values["TTS_FILTER_BEARER_TOKEN"]
+    assert app_values["TTS_FILTER_BEARER_TOKEN"] != "change-me"
+    assert app_values["TTS_FILTER_BEARER_TOKEN"] == filter_values["TTS_FILTER_BEARER_TOKEN"]
+
+
+def test_ensure_tts_filter_shared_token_prefers_app_token(tmp_path):
+    """本体側に実トークンがある場合はtts-filter側へ反映する。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "tts-filter"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    filter_env = service_dir / ".env"
+    app_env.write_text("TTS_FILTER_BEARER_TOKEN=app-token\n", encoding="utf-8")
+    filter_env.write_text("TTS_FILTER_BEARER_TOKEN=service-token\n", encoding="utf-8")
+
+    assert _ensure_tts_filter_shared_token(project) is True
+
+    filter_values = dict(line.split("=", 1) for line in filter_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert filter_values["TTS_FILTER_BEARER_TOKEN"] == "app-token"
