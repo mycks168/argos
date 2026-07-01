@@ -63,17 +63,22 @@ uv run argos-install --apply
 別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、`uv` 導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
 
 ```bash
-sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
+sudo git clone https://github.com/mycks168/argos.git /opt/argos
 cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
+
+`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`--configure` では、利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。空入力の場合は既存設定を維持します。
 
 ```bash
 sudo -iu argos
 codex
 agy
+claude
+hermes
 ```
 
 更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。

@@ -650,6 +650,7 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
             "http://gps.local:8080/gps",
             "y",
             "y",
+            "",
             "-",
             "2",
             "hw:CARD=Speaker,DEV=0",
@@ -691,6 +692,77 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
     assert "AUDIO_OUTPUT_DEVICE=hw:CARD=Speaker,DEV=0" in text
     assert "ARGOS_DASHBOARD_TOKEN=" in text
     assert "ARGOS_DASHBOARD_TOKEN=\n" not in text
+
+
+def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
+    """対話式設定で利用providerからスロットを生成できる。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "\n".join(
+            [
+                "ARGOS_AGENT_PROVIDER=codex",
+                "ARGOS_AGENT_CWD=/home/argos",
+                "ARGOS_AGENT_SLOT_1=デフォルト,codex,/home/argos,2",
+                "ARGOS_AGENT_SLOT_2=アンチグラビティ,antigravity,/home/argos,51",
+                "ARGOS_AGENT_SLOT_3=調査,codex,/home/argos,21",
+                "ARGOS_AGENT_SLOT_4=クロード,claude,/home/argos,8",
+                "ARGOS_DASHBOARD_TOKEN=token",
+                "STT_GATEWAY_URL=",
+                "VOICEVOX_URL=",
+                "VOICEVOX_BEARER_TOKEN=",
+                "OSRM_URL=",
+                "ARGOS_REMOTE_LOCATION_URL=",
+                "ARGOS_WAKEWORD_ENABLED=false",
+                "ARGOS_AGENT_RUNNER_URL=",
+                "ARGOS_PTT_GPIO=",
+                "AUDIO_INPUT_DEVICES=default",
+                "AUDIO_OUTPUT_DEVICE=default",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    answers = iter(
+        [
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "",
+            "codex,claude",
+            "作業",
+            "/opt/argos",
+            "2",
+            "Claude",
+            "/home/argos",
+            "-",
+            "",
+            "",
+            "",
+        ]
+    )
+
+    class Result:
+        """ALSA候補なしの結果を表す。"""
+
+        returncode = 1
+        stdout = ""
+
+    configure_env(
+        env_path,
+        runner=lambda _command, **_kwargs: Result(),
+        input_func=lambda _prompt: next(answers),
+        output_func=lambda _message: None,
+    )
+
+    text = env_path.read_text(encoding="utf-8")
+    assert "ARGOS_AGENT_PROVIDER=codex" in text
+    assert "ARGOS_AGENT_SLOT_1=作業,codex,/opt/argos,2" in text
+    assert "ARGOS_AGENT_SLOT_2=Claude,claude,/home/argos" in text
+    assert "ARGOS_AGENT_SLOT_3=\n" in text
+    assert "ARGOS_AGENT_SLOT_4=\n" in text
 
 
 def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):

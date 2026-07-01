@@ -37,6 +37,19 @@ CHROMIUM_POLICY_TARGETS = (
     Path("/etc/chromium/policies/managed/argos-dashboard.json"),
     Path("/etc/chromium-browser/policies/managed/argos-dashboard.json"),
 )
+AGENT_PROVIDER_CHOICES = ("codex", "antigravity", "claude", "hermes")
+AGENT_SLOT_NAME_DEFAULTS = {
+    "codex": "Codex",
+    "antigravity": "Antigravity",
+    "claude": "Claude",
+    "hermes": "Hermes",
+}
+AGENT_SLOT_VOICE_DEFAULTS = {
+    "codex": "2",
+    "antigravity": "51",
+    "claude": "8",
+    "hermes": "2",
+}
 
 
 @dataclass(frozen=True)
@@ -345,6 +358,7 @@ def configure_env(
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
+    _ask_agent_slots(values, input_func=input_func, output_func=output_func)
     _ask_text(values, "ARGOS_PTT_GPIO", "PTT GPIO BCM番号。GPIOなしなら空欄", input_func=input_func)
     _ask_audio_device(values, "AUDIO_INPUT_DEVICES", "入力マイク", ["arecord", "-L"], runner=runner, input_func=input_func, output_func=output_func)
     _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
@@ -438,6 +452,111 @@ def _ask_bool(
         values[key] = true_value
     elif answer in {"n", "no", "0", "false"}:
         values[key] = false_value
+
+
+def _ask_agent_slots(
+    values: dict[str, str],
+    *,
+    input_func: Callable[[str], str],
+    output_func: Callable[[str], None],
+) -> None:
+    """利用するエージェントと会話スロットを対話入力で更新する。"""
+    current = ",".join(_current_agent_providers(values)) or values.get("ARGOS_AGENT_PROVIDER", "codex")
+    output_func(f"利用可能なエージェント: {', '.join(AGENT_PROVIDER_CHOICES)}")
+    answer = input_func(f"使うエージェントprovider。複数はカンマ区切り [{current}]: ").strip()
+    if not answer:
+        return
+
+    providers = _parse_agent_provider_list(answer)
+    invalid = [provider for provider in providers if provider not in AGENT_PROVIDER_CHOICES]
+    if invalid:
+        output_func(f"未対応のproviderです: {', '.join(invalid)}。スロット設定は変更しません。")
+        return
+    if not providers:
+        output_func("providerが指定されなかったため、スロット設定は変更しません。")
+        return
+
+    existing_slots = _read_agent_slot_values(values)
+    default_cwd = values.get("ARGOS_AGENT_CWD") or values.get("ARGOS_CODEX_CWD") or "/home/argos"
+    values["ARGOS_AGENT_PROVIDER"] = providers[0]
+    output_func("選択したproviderごとに会話スロットを作成します。")
+
+    for index, provider in enumerate(providers, 1):
+        existing = _first_slot_for_provider(existing_slots, provider)
+        default_name = existing.get("name") or AGENT_SLOT_NAME_DEFAULTS.get(provider, provider)
+        default_slot_cwd = existing.get("cwd") or default_cwd
+        default_voice = existing.get("voice") or AGENT_SLOT_VOICE_DEFAULTS.get(provider, "")
+        name = input_func(f"{provider} のスロット名 [{default_name}]: ").strip() or default_name
+        cwd = input_func(f"{name} の作業ディレクトリ [{default_slot_cwd}]: ").strip() or default_slot_cwd
+        voice = input_func(f"{name} のVOICEVOX話者ID。不要なら '-' [{default_voice or '未設定'}]: ").strip()
+        if not voice:
+            voice = default_voice
+        if voice.lower() in {"-", "none", "null", "なし", "不要"}:
+            values[f"ARGOS_AGENT_SLOT_{index}"] = f"{name},{provider},{cwd}"
+        else:
+            values[f"ARGOS_AGENT_SLOT_{index}"] = f"{name},{provider},{cwd},{voice}"
+
+    max_existing = max([len(existing_slots), len(providers)] + _agent_slot_indices(values))
+    for index in range(len(providers) + 1, max_existing + 1):
+        values[f"ARGOS_AGENT_SLOT_{index}"] = ""
+
+
+def _parse_agent_provider_list(raw: str) -> list[str]:
+    """カンマ区切りのprovider指定を順序を保って正規化する。"""
+    providers = [part.strip().lower() for part in raw.replace("、", ",").split(",")]
+    return _unique([provider for provider in providers if provider])
+
+
+def _current_agent_providers(values: dict[str, str]) -> list[str]:
+    """現在の.envから利用中providerの一覧を返す。"""
+    slots = _read_agent_slot_values(values)
+    if slots:
+        return _unique([slot["provider"] for slot in slots if slot.get("provider")])
+    return _parse_agent_provider_list(values.get("ARGOS_AGENT_PROVIDER", "codex"))
+
+
+def _read_agent_slot_values(values: dict[str, str]) -> list[dict[str, str]]:
+    """ARGOS_AGENT_SLOT_Nを辞書の一覧として読む。"""
+    slots: list[dict[str, str]] = []
+    default_provider = values.get("ARGOS_AGENT_PROVIDER", "codex")
+    default_cwd = values.get("ARGOS_AGENT_CWD") or values.get("ARGOS_CODEX_CWD") or "/home/argos"
+    for index in _agent_slot_indices(values):
+        raw = values.get(f"ARGOS_AGENT_SLOT_{index}", "")
+        if not raw:
+            continue
+        parts = [part.strip() for part in raw.split(",", 3)]
+        if not parts or not parts[0]:
+            continue
+        slots.append(
+            {
+                "name": parts[0],
+                "provider": parts[1] if len(parts) > 1 and parts[1] else default_provider,
+                "cwd": parts[2] if len(parts) > 2 and parts[2] else default_cwd,
+                "voice": parts[3] if len(parts) > 3 else "",
+            }
+        )
+    return slots
+
+
+def _agent_slot_indices(values: dict[str, str]) -> list[int]:
+    """定義済みARGOS_AGENT_SLOT_Nの番号を返す。"""
+    indices: list[int] = []
+    prefix = "ARGOS_AGENT_SLOT_"
+    for key in values:
+        if not key.startswith(prefix):
+            continue
+        suffix = key[len(prefix):]
+        if suffix.isdigit():
+            indices.append(int(suffix))
+    return sorted(indices)
+
+
+def _first_slot_for_provider(slots: list[dict[str, str]], provider: str) -> dict[str, str]:
+    """同じproviderの既存スロットがあれば返す。"""
+    for slot in slots:
+        if slot.get("provider") == provider:
+            return slot
+    return {}
 
 
 def _ask_audio_device(

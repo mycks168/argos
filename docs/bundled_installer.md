@@ -89,14 +89,18 @@ user serviceが含まれる場合は、Chromiumやデスクトップセッショ
 OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体とサブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
 
 ```bash
-sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
+sudo git clone https://github.com/mycks168/argos.git /opt/argos
 cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
+`develop` など未リリースブランチを検証する場合は、clone後に対象ブランチへ切り替えてからインストーラを実行する。mainへマージ済みの通常リリースではブランチ指定は不要。
+
 `--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
-`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+
+エージェントproviderは `codex`、`antigravity`、`claude`、`hermes` からカンマ区切りで選択し、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者IDを設定する。これにより、新規インストール時に不要なスロットが最初から表示されることを避ける。
 
 インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `.env` は保持したまま `uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。
 
@@ -149,7 +153,6 @@ uv run argos-install --apply --no-enable \
 
 ## 注意点
 
-- `tts-filter` は `feature/tmux-ttyd-dictionary` ブランチの内容を取り込んだ。
-- `argos-acknowledgement-api` は未コミット変更を含む現在の実体を取り込んだ。
-- `screen-recorder` と `argos-agent-scheduler` はまだ初回コミットがない。
+- `tts-filter`、`argos-acknowledgement-api`、`argos-reminder`、`agent-limit` はARGOSリポジトリ内の同梱サービスとして扱う。
+- `screen-recorder` と `argos-agent-scheduler` は任意同梱サービス候補として扱い、既定有効化の対象外とする。
 - `stt-gateway` とOSRMは現環境ではGPUサーバー側にあり、ARGOS本体へ含めるより外部依存として扱う方が現実的。

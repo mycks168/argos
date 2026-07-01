@@ -388,6 +388,8 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 
 スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。既定スロットのVOICEVOX話者IDは `ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER` で指定できる。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
 
+新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとに `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存のスロット設定を維持する。
+
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
 ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。

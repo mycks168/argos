@@ -1,13 +1,31 @@
-# ttyexec
+# ARGOS agent-limit
 
-`codex` / `agy` / `claude` のようなTUIアプリをtmux経由で自動操作し、利用状況(usage)をJSONで取得するスクリプト集。
+ARGOSのダッシュボードに表示するLLM利用枠JSONを生成する同梱ツールです。`codex` / `agy` / `claude` のようなTUIアプリをtmux経由で自動操作し、取得結果をARGOSが読むJSONへ書き出します。
 
 ## 使い方
+
+通常は `/opt/argos/services/agent-limit` に配置され、インストーラがARGOS実行ユーザーのcronへ5分おきの更新ジョブを登録します。手動で更新する場合は次を実行します。
+
+```sh
+cd /opt/argos/services/agent-limit
+uv run ./update_limits.py
+```
+
+生成先:
+
+- `codex.json`: Codexの5時間枠、週次枠、credits
+- `hermes.json`: Codexと同じ値をHermes枠として表示
+- `antigravity.json`: `agy` のGeminiモデルグループ
+- `claude.json`: `claude` の現在セッション枠と週次枠
+
+各JSONはダッシュボードの `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` から参照されます。
+
+## 個別取得
 
 ### codexの使用状況取得
 
 ```sh
-./codex_status.py
+uv run ./codex_status.py
 ```
 
 `codex`を起動して`/status`を実行し、結果を以下の形式のJSONで標準出力に出力します。
@@ -27,7 +45,7 @@
 ### agyの使用状況取得
 
 ```sh
-./agy_usage.py
+uv run ./agy_usage.py
 ```
 
 `agy`を起動して`/usage`を実行し、モデルグループ(`gemini` / `claude_gpt`)ごとのWeekly/Five Hour使用率を以下の形式のJSONで標準出力に出力します。
@@ -52,7 +70,7 @@
 ### claudeの使用状況取得
 
 ```sh
-./claude_usage.py
+uv run ./claude_usage.py
 ```
 
 `claude`を起動して`/usage`を実行し、現在セッションと週次の使用率を以下の形式のJSONで標準出力に出力します。
@@ -75,7 +93,7 @@
 ## テスト
 
 ```sh
-uv run pytest
+uv run pytest -c pyproject.toml
 ```
 
-実機のtmux/codex/agyには依存せず、キャプチャ済みの画面出力(`tests/fixtures/`)を使ったパース処理の単体テストのみを実行します。
+実機のtmux/codex/agy/claudeには依存せず、キャプチャ済みの画面出力やサンプル文字列を使ったパース処理の単体テストを実行します。
