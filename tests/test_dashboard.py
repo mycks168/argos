@@ -226,6 +226,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
+        assert 'class="brand-controls"' in html
+        assert '.network-status[data-connected="false"]' in html
+        assert "display: none;" in html
         assert 'id="mute-button"' in html
         assert 'id="microphone-button"' in html
         assert 'id="volume-slider"' in html

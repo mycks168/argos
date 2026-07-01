@@ -230,16 +230,26 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
+    .brand-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 8px;
+    }
+    .brand-controls .control-button {
+      flex: 1 1 72px;
+      min-width: 0;
+      padding: 7px 8px;
+    }
     .network-status {
       display: flex;
       align-items: center;
       justify-content: flex-end;
       gap: 7px;
-      margin-top: 8px;
+      min-width: 0;
       color: #8ca0ad;
       font-size: var(--date-font-size);
       font-weight: 800;
-      min-height: 22px;
     }
     .wifi-icon {
       display: inline-flex;
@@ -266,11 +276,7 @@
       box-shadow: 0 0 8px rgba(105, 183, 228, 0.45);
     }
     .network-status[data-connected="false"] {
-      color: #526775;
-    }
-    .network-status[data-connected="false"] .wifi-icon span {
-      background: #26323b;
-      box-shadow: none;
+      display: none;
     }
     .network-label {
       overflow: hidden;
@@ -758,15 +764,15 @@
       <p class="eyebrow">VOICE AGENT</p>
       <div class="brand-row">
         <h1 class="brand">ARGOS</h1>
-        <div style="display: flex; gap: 5px;">
-          <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
-          <button id="microphone-button" class="control-button" type="button" aria-pressed="false">マイクOFF</button>
-          <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
+        <div id="network-status" class="network-status" data-connected="false" data-level="0" title="Wi-Fi未接続" aria-hidden="true">
+          <span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+          <span id="network-label" class="network-label">Wi-Fi未接続</span>
         </div>
       </div>
-      <div id="network-status" class="network-status" data-connected="false" data-level="0" title="Wi-Fi未接続">
-        <span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
-        <span id="network-label" class="network-label">Wi-Fi未接続</span>
+      <div class="brand-controls" aria-label="音声操作">
+        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+        <button id="microphone-button" class="control-button" type="button" aria-pressed="false">マイクOFF</button>
+        <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
       </div>
       
       <div class="clock-date-row">
@@ -1135,6 +1141,7 @@
       networkStatus.dataset.connected = connected ? "true" : "false";
       networkStatus.dataset.level = String(level);
       networkStatus.title = label;
+      networkStatus.setAttribute("aria-hidden", connected ? "false" : "true");
       networkLabel.textContent = label;
     }
     function renderAgentUsage(usage) {
