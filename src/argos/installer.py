@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import pwd
+import secrets
 import shutil
 import subprocess
 import tempfile
@@ -247,6 +248,7 @@ def apply_plan(
         plan = _refresh_plan_uid(plan)
     _ensure_project(project_dir)
     _copy_env_example(project_dir, runner=runner)
+    _ensure_core_env_defaults(project_dir / ".env")
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
     _uv_sync(project_dir, runner=runner)
@@ -322,6 +324,7 @@ def configure_env(
 ) -> None:
     """対話式に実機依存の.env設定を更新する。"""
     values = _read_env_values(env_path)
+    _ensure_dashboard_token(values)
     output_func("ARGOS実機設定を行います。空入力なら現在値を維持します。")
 
     _ask_url(values, "STT_GATEWAY_URL", "STTゲートウェイURL", input_func=input_func)
@@ -336,6 +339,22 @@ def configure_env(
     _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
 
     _write_env_values(env_path, values)
+
+
+def _ensure_core_env_defaults(env_path: Path) -> None:
+    """既存.envに不足しているARGOS本体の必須既定値を補完する。"""
+    values = _read_env_values(env_path)
+    changed = _ensure_dashboard_token(values)
+    if changed:
+        _write_env_values(env_path, values)
+
+
+def _ensure_dashboard_token(values: dict[str, str]) -> bool:
+    """ダッシュボード更新API用Bearerトークンが空なら生成する。"""
+    if values.get("ARGOS_DASHBOARD_TOKEN", "").strip():
+        return False
+    values["ARGOS_DASHBOARD_TOKEN"] = secrets.token_urlsafe(32)
+    return True
 
 
 def _read_env_values(path: Path) -> dict[str, str]:

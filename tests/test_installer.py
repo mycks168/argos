@@ -14,6 +14,7 @@ from argos.installer import (
     CHROMIUM_POLICY_TARGETS,
     _resolve_os_packages,
     _ensure_agent_limit_cron,
+    _ensure_core_env_defaults,
     _install_chromium_policy,
     _reload_systemd,
 )
@@ -193,7 +194,10 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
 
     apply_plan(plan, enable=False, runner=fake_runner)
 
-    assert (project / ".env").read_text(encoding="utf-8") == "DRY_RUN=true\n"
+    env_text = (project / ".env").read_text(encoding="utf-8")
+    assert "DRY_RUN=true" in env_text
+    assert "ARGOS_DASHBOARD_TOKEN=" in env_text
+    assert "ARGOS_DASHBOARD_TOKEN=\n" not in env_text
     assert (tmp_path / "system-units" / "argos.service").exists()
     assert any(command[0] == ["uv", "sync"] for command in commands)
     assert not any("enable" in command[0] for command in commands)
@@ -473,6 +477,7 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
                 "ARGOS_PTT_GPIO=17",
                 "AUDIO_INPUT_DEVICES=default",
                 "AUDIO_OUTPUT_DEVICE=default",
+                "ARGOS_DASHBOARD_TOKEN=",
             ]
         )
         + "\n",
@@ -526,3 +531,16 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
     assert "ARGOS_PTT_GPIO=" in text
     assert "AUDIO_INPUT_DEVICES=plughw:CARD=Mic,DEV=0" in text
     assert "AUDIO_OUTPUT_DEVICE=hw:CARD=Speaker,DEV=0" in text
+    assert "ARGOS_DASHBOARD_TOKEN=" in text
+    assert "ARGOS_DASHBOARD_TOKEN=\n" not in text
+
+
+def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):
+    """既存.envのダッシュボードトークンが空なら自動生成する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_DASHBOARD_TOKEN=\nARGOS_DASHBOARD_ENABLED=true\n", encoding="utf-8")
+
+    _ensure_core_env_defaults(env_path)
+
+    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert values["ARGOS_DASHBOARD_TOKEN"]
