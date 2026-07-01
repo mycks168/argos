@@ -248,6 +248,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'const fontSizeStorageKey = "argos-dashboard-font-size";' in html
         assert "const defaultFontSize = \"small\";" in html
         assert "applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize)" in html
+        assert '--message-font-size: 14px;' in html
+        assert '--notice-title-font-size: 13px;' in html
         assert 'body[data-font-size="large"]' in html
         assert ">ミュート</button>" in html
         assert ">マイクOFF</button>" in html
