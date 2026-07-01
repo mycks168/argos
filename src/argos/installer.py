@@ -22,9 +22,14 @@ DEFAULT_OS_PACKAGES = (
     "curl",
     "git",
     "tmux",
+    "x11-xserver-utils",
 )
 
 AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
+CHROMIUM_POLICY_TARGETS = (
+    Path("/etc/chromium/policies/managed/argos-dashboard.json"),
+    Path("/etc/chromium-browser/policies/managed/argos-dashboard.json"),
+)
 
 
 @dataclass(frozen=True)
@@ -127,6 +132,8 @@ def build_install_plan(
             InstallStep("chown", str(project_dir), "ARGOSプロジェクトを専用ユーザー所有にする"),
             *steps,
         ]
+    if any(service.name == "argos-dashboard-kiosk" for service in services):
+        steps.append(InstallStep("policy", "chromium", "Chromium kiosk向け管理ポリシーを配置する"))
     for service in services:
         steps.extend(_service_steps(service, project_dir=project_dir, system_unit_dir=system_unit_dir, user_unit_dir=user_unit_dir))
     return InstallPlan(
@@ -243,6 +250,8 @@ def apply_plan(
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
     _uv_sync(project_dir, runner=runner)
+    if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
+        _install_chromium_policy(project_dir, runner=runner)
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
     if plan.bootstrap:
@@ -708,7 +717,9 @@ def _ensure_agent_limit_cron(plan: InstallPlan, *, runner=subprocess.run) -> Non
         return
     command = (
         f"*/5 * * * * cd {project_dir / 'services' / 'agent-limit'} "
-        "&& /usr/bin/env uv run python update_limits.py "
+        f"&& /usr/bin/env HOME={plan.service_home} "
+        f"PATH={plan.service_home}/.local/bin:{plan.service_home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin "
+        "uv run python update_limits.py "
         ">/tmp/argos-agent-limit-update.log 2>&1"
     )
     content = existing.rstrip()
@@ -722,6 +733,15 @@ def _ensure_agent_limit_cron(plan: InstallPlan, *, runner=subprocess.run) -> Non
         runner(["sudo", "-u", plan.service_user, "crontab", temp_path], check=True)
     finally:
         Path(temp_path).unlink(missing_ok=True)
+
+
+def _install_chromium_policy(project_dir: Path, *, runner=subprocess.run) -> None:
+    """Chromium kiosk向けの管理ポリシーをUbuntu/Raspberry Pi OS両方へ配置する。"""
+    source = project_dir / "chromium" / "argos-dashboard.json"
+    if not source.exists():
+        return
+    for target in CHROMIUM_POLICY_TARGETS:
+        runner(["sudo", "install", "-D", "-m", "644", str(source), str(target)], check=True)
 
 
 def main(argv: list[str] | None = None) -> int:

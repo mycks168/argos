@@ -11,8 +11,10 @@ from argos.installer import (
     render_unit_template,
     update_project,
     AGENT_LIMIT_CRON_MARKER,
+    CHROMIUM_POLICY_TARGETS,
     _resolve_os_packages,
     _ensure_agent_limit_cron,
+    _install_chromium_policy,
     _reload_systemd,
 )
 
@@ -47,6 +49,7 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert ("tts-filter", "sync") in actions
     assert ("tts-filter", "render-unit") in actions
     assert ("agent-limit", "cron") in actions
+    assert ("", "policy") in actions
     assert ("wakeword-models", "check") in actions
     assert ("stt-gateway", "configure") in actions
     assert plan.service_user == "argos"
@@ -377,6 +380,8 @@ def test_ensure_agent_limit_cron_adds_missing_entry(tmp_path):
     _ensure_agent_limit_cron(plan, runner=fake_runner)
 
     assert AGENT_LIMIT_CRON_MARKER in installed_cron["content"]
+    assert "HOME=/home/argos" in installed_cron["content"]
+    assert "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin" in installed_cron["content"]
     assert "uv run python update_limits.py" in installed_cron["content"]
     assert "*/5 * * * *" in installed_cron["content"]
     assert commands[0][1]["capture_output"] is True
@@ -411,6 +416,24 @@ def test_ensure_agent_limit_cron_skips_existing_entry(tmp_path):
     _ensure_agent_limit_cron(plan, runner=fake_runner)
 
     assert commands == [["sudo", "-u", "argos", "crontab", "-l"]]
+
+
+def test_install_chromium_policy_installs_to_common_paths(tmp_path):
+    """Chromium管理ポリシーをUbuntuとRaspberry Pi OS向けの両方へ配置する。"""
+    project = tmp_path / "argos"
+    policy = project / "chromium" / "argos-dashboard.json"
+    policy.parent.mkdir(parents=True)
+    policy.write_text('{"TranslateEnabled": false}\n', encoding="utf-8")
+    commands = []
+
+    def fake_runner(command, **_kwargs):
+        """installコマンドを記録する。"""
+        commands.append(command)
+
+    _install_chromium_policy(project, runner=fake_runner)
+
+    for target in CHROMIUM_POLICY_TARGETS:
+        assert ["sudo", "install", "-D", "-m", "644", str(policy), str(target)] in commands
 
 
 def test_resolve_os_packages_selects_available_chromium_package():

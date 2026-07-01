@@ -224,7 +224,7 @@ ChromiumでHDMI画面へ全画面表示する場合:
 ./scripts/open-dashboard-kiosk.sh
 ```
 
-キオスク画面は専用のChromiumプロフィールを日本語モードで使います。OSキーリングと翻訳UIは使用せず、ダッシュボード上のマウスカーソルも非表示にします。インストーラーは翻訳バーを無効化するChromium管理ポリシーを `/etc/chromium/policies/managed/` に配置します。
+キオスク画面は専用のChromiumプロフィールを日本語モードで使います。OSキーリング、翻訳UI、Googleサインイン、同期UIは使用せず、ダッシュボード上のマウスカーソルも非表示にします。インストーラーはChromium管理ポリシーを `/etc/chromium/policies/managed/` と `/etc/chromium-browser/policies/managed/` に配置します。起動スクリプトはUbuntuとRaspberry Pi OSの両方を考慮し、`xset` と `gsettings` でスクリーンセーバーとロック画面を可能な範囲で無効化します。
 
 ユーザーsystemdで自動表示する場合:
 
