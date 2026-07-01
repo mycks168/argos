@@ -11,15 +11,35 @@ from pathlib import Path
 
 DEFAULT_IMAGE_URL = "https://static.tenki.jp/static-images/typhoon-detail/recent/japan_near-large.jpg"
 FALLBACK_HTML_URL = "https://tenki.jp/bousai/typhoon/"
-SAVE_DIR = Path("/home/yuki/argos/src/argos/services/dashboard/static")
 SAVE_FILENAME = "typhoon.jpg"
 
 
+def find_env_file():
+    """実行環境に合わせてARGOSの.envファイルを探す。"""
+    explicit_path = os.environ.get("ARGOS_ENV_FILE")
+    candidates = []
+    if explicit_path:
+        candidates.append(Path(explicit_path).expanduser())
+    candidates.append(Path.cwd() / ".env")
+    candidates.extend(parent / ".env" for parent in Path(__file__).resolve().parents)
+    candidates.append(Path("/opt/argos/.env"))
+
+    seen = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def load_env_vars():
-    """/home/yuki/argos/.env ファイルから設定値をロードする。"""
-    env_path = Path("/home/yuki/argos/.env")
+    """ARGOSの.envファイルから設定値をロードする。"""
+    env_path = find_env_file()
     env_vars = {}
-    if env_path.exists():
+    if env_path:
         try:
             with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -32,6 +52,16 @@ def load_env_vars():
         except Exception:
             pass
     return env_vars
+
+
+def get_static_dir(env_vars):
+    """台風画像の保存先staticディレクトリを決定する。"""
+    static_dir = os.environ.get("ARGOS_DASHBOARD_STATIC_DIR") or env_vars.get("ARGOS_DASHBOARD_STATIC_DIR")
+    if static_dir:
+        return Path(static_dir).expanduser()
+
+    argos_home = os.environ.get("ARGOS_HOME") or env_vars.get("ARGOS_HOME") or "/opt/argos"
+    return Path(argos_home).expanduser() / "src" / "argos" / "services" / "dashboard" / "static"
 
 
 def get_image_url(mode, typhoon_id=None):
@@ -150,7 +180,7 @@ def main(argv=None):
             title = f"台風{tid}情報"
 
     # 2. ダウンロードと保存
-    dest = SAVE_DIR / SAVE_FILENAME
+    dest = get_static_dir(env_vars) / SAVE_FILENAME
     try:
         download_image(img_url, dest)
     except Exception as e:

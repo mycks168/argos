@@ -760,6 +760,7 @@
         <h1 class="brand">ARGOS</h1>
         <div style="display: flex; gap: 5px;">
           <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+          <button id="microphone-button" class="control-button" type="button" aria-pressed="false">マイクOFF</button>
           <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
         </div>
       </div>
@@ -845,6 +846,7 @@
     const networkLabel = document.getElementById("network-label");
     const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
+    const microphoneButton = document.getElementById("microphone-button");
     const sessionResetButton = document.getElementById("session-reset-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
@@ -994,6 +996,7 @@
     let splashTimer = null;
     let screensaverTimer = null;
     let muted = false;
+    let microphoneEnabled = true;
     let changingVolume = false;
     let previousDisplayActivitySequence = null;
     let sessionResetConfirmTimer = null;
@@ -1055,6 +1058,9 @@
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      microphoneEnabled = state.microphone?.enabled !== false;
+      microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
+      microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
       const volume = Number.isFinite(Number(state.audio?.volume)) ? Number(state.audio.volume) : Number(volumeSlider.value);
       if (!changingVolume) {
         volumeSlider.value = volume;
@@ -1218,6 +1224,7 @@
     }
     async function sendControl(action, values = {}) {
       muteButton.disabled = true;
+      microphoneButton.disabled = true;
       volumeSlider.disabled = true;
       sessionResetButton.disabled = true;
       try {
@@ -1233,15 +1240,38 @@
         if (!response.ok) {
           throw new Error(await response.text());
         }
+        applyControlResult(await response.json());
         await refresh();
       } finally {
         muteButton.disabled = false;
+        microphoneButton.disabled = false;
         volumeSlider.disabled = false;
         sessionResetButton.disabled = false;
       }
     }
+    function applyControlResult(result) {
+      if (!result || typeof result !== "object") return;
+      if (typeof result.muted === "boolean") {
+        muted = result.muted;
+        muteButton.textContent = muted ? "ミュート中" : "ミュート";
+        muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      }
+      if (typeof result.microphone_enabled === "boolean") {
+        microphoneEnabled = result.microphone_enabled;
+        microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
+        microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
+      }
+      if (Number.isFinite(Number(result.volume))) {
+        const volume = Number(result.volume);
+        volumeSlider.value = volume;
+        volumeLabel.textContent = String(volume);
+      }
+    }
     muteButton.addEventListener("click", () => {
       sendControl(muted ? "unmute" : "mute").catch(error => console.error(error));
+    });
+    microphoneButton.addEventListener("click", () => {
+      sendControl(microphoneEnabled ? "disable_microphone" : "enable_microphone").catch(error => console.error(error));
     });
     sessionResetButton.addEventListener("click", () => {
       if (sessionResetButton.dataset.confirm !== "true") {

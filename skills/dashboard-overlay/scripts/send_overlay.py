@@ -29,11 +29,32 @@ MAP_PRESETS = {
 }
 
 
+def find_env_file():
+    """実行環境に合わせてARGOSの.envファイルを探す。"""
+    explicit_path = os.environ.get("ARGOS_ENV_FILE")
+    candidates = []
+    if explicit_path:
+        candidates.append(Path(explicit_path).expanduser())
+    candidates.append(Path.cwd() / ".env")
+    candidates.extend(parent / ".env" for parent in Path(__file__).resolve().parents)
+    candidates.append(Path("/opt/argos/.env"))
+
+    seen = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def load_env_vars():
-    """/home/yuki/argos/.env ファイルから設定値をロードする。"""
-    env_path = Path("/home/yuki/argos/.env")
+    """ARGOSの.envファイルから設定値をロードする。"""
+    env_path = find_env_file()
     env_vars = {}
-    if env_path.exists():
+    if env_path:
         try:
             with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:

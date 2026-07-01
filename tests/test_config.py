@@ -253,6 +253,7 @@ def test_load_wakeword_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.2")
     monkeypatch.setenv("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.2")
     monkeypatch.setenv("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "1.7")
+    monkeypatch.setenv("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", "true")
 
     settings = load_settings()
 
@@ -274,6 +275,7 @@ def test_load_wakeword_settings(monkeypatch):
     assert settings.wakeword_vad_min_silence_seconds == 1.2
     assert settings.wakeword_vad_check_seconds == 0.2
     assert settings.wakeword_tts_cooldown_seconds == 1.7
+    assert settings.wakeword_require_stt_wakeword is True
 
 
 def test_load_argos_input_devices_from_comma_text(monkeypatch):

@@ -8,7 +8,7 @@ description: ARGOSダッシュボードの中央スロットまたは右スロ�
 ARGOSダッシュボードへ表示イベントを送る。基本は bundled script を使う。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type markdown --title "確認" --content "表示テスト"
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type markdown --title "確認" --content "表示テスト"
 ```
 
 ## 地図の最速コマンド
@@ -16,7 +16,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type
 任意の場所をマーカー表示し、現在地も自動取得して一緒に出す。右ペインではラベルが邪魔になりやすいので `--label-mode popup` を既定の使い方にする。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type map \
   --target-slot right \
   --title "目的地" \
@@ -33,7 +33,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 候補が複数ある場合で `--current-location` が指定されているときは、現在地から一番近い候補を自動で選択します。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/search_and_plot.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/search_and_plot.py \
   -q "道の駅 にしね" \
   -q "道の駅 石神の丘" \
   -q "道の駅 三田貝分校" \
@@ -53,7 +53,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/search_and_plot.py \
 `send_overlay.py` および `search_and_plot.py` に `--route` オプションを指定することで、プロットされた地点（および現在地）を道路沿いに結ぶルートラインを描画します。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/search_and_plot.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/search_and_plot.py \
   -q "道の駅 にしね" \
   -q "道の駅 三田貝分校" \
   --target-slot right \
@@ -70,7 +70,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/search_and_plot.py \
 - 中央に大きく出す場合は `--target-slot center` を使う。
 - まずpayloadだけ確認したい場合は `--dry-run` を付ける。
 - 右ペインの地図でラベルが邪魔な場合は `--label-mode popup` を使う。タップしたマーカーだけ名前を表示する。
-- ARGOSの接続先とBearer tokenは環境変数または `/home/yuki/argos/.env` の `ARGOS_DASHBOARD_HOST`、`ARGOS_DASHBOARD_PORT`、`ARGOS_DASHBOARD_TOKEN` から読む。
+- ARGOSの接続先とBearer tokenは環境変数または `ARGOS_ENV_FILE`、カレントディレクトリ、スキル親ディレクトリ、または `/opt/argos/.env` の `ARGOS_DASHBOARD_HOST`、`ARGOS_DASHBOARD_PORT`、`ARGOS_DASHBOARD_TOKEN` から読む。
 - ユーザーが「表示して」「出して」など地図やダッシュボードへの表示を求めた場合は、いちいち方針確認をせずに、即座に送信（表示）する。
 
 ## Markdownを表示
@@ -78,17 +78,17 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/search_and_plot.py \
 ファイル内容を中央に表示する。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type markdown \
   --target-slot center \
   --title "設計メモ" \
-  --file "/home/yuki/argos/docs/basic_design.md"
+  --file "${ARGOS_HOME:-/opt/argos}/docs/basic_design.md"
 ```
 
 短いテキストを右側に表示する。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type markdown \
   --target-slot right \
   --title "メモ" \
@@ -100,7 +100,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 よく使うルートが分かっている場合だけプリセットも使える。ただし、基本は上の汎用 `--point` 指定を使う。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --preset tsuruoka-roadstations \
   --current-location
 ```
@@ -108,7 +108,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 現在地を追従する地図を中央に表示する。`/api/location` から現在地を取れる場合は `--cur-lat` と `--cur-lng` を省略してもよい。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type map \
   --target-slot center \
   --title "現在地周辺" \
@@ -119,7 +119,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 目的地や経由地を複数表示する（色分け表示も可能）。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type map \
   --target-slot center \
   --title "候補地" \
@@ -131,7 +131,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 単一の目的地を色付きで表示する。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type map \
   --target-slot right \
   --title "目的地" \
@@ -146,7 +146,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 ナビ地図は最前面を差し替えるため、ズーム変更などで再表示しても「閉じる」を何度も押す必要はない。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type nav \
   --target-slot center \
   --title "ナビ" \
@@ -159,7 +159,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 ## 画像を表示
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type image \
   --target-slot center \
   --title "画像確認" \
@@ -169,7 +169,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 ## HTML/Webページを表示
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py \
   --type html \
   --target-slot right \
   --title "Web表示" \
@@ -181,19 +181,19 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py \
 右スロットだけ閉じる。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot right
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot right
 ```
 
 中央スロットだけ閉じる。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot center
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot center
 ```
 
 ## 中央と右を入れ替える
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type swap
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type swap
 ```
 
 ## 注意事項・再確認項目
@@ -206,7 +206,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/send_overlay.py --type
 tenki.jp から最新の台風画像をダウンロードし、ダッシュボードに表示します。表示モードとして日本近海、広域、または個別台風にズームした詳細表示が選択可能です。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/update_typhoon_image.py --target-slot center --mode near
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/update_typhoon_image.py --target-slot center --mode near
 ```
 
 - `--target-slot`: 表示するスロット（`center` または `right`、デフォルトは `center`）
@@ -221,7 +221,7 @@ uv run python /home/yuki/skills/dashboard-overlay/scripts/update_typhoon_image.p
 tenki.jp から台風の実況・予報位置（緯度経度）を取得し、日本地図（Wikimedia素材）の上にプロットしたHTML地図を生成してダッシュボードに表示します。
 
 ```bash
-uv run python /home/yuki/skills/dashboard-overlay/scripts/generate_typhoon_html.py --target-slot center
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/generate_typhoon_html.py --target-slot center
 ```
 
 - `--target-slot`: 表示するスロット（`center` または `right`、デフォルトは `center`）

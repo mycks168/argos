@@ -1,19 +1,24 @@
-import os
 import json
-import urllib.request
 from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open
-import pytest
+from unittest.mock import patch, MagicMock
 from scripts import update_typhoon_image
 
 
-def test_load_env_vars():
-    mock_env = "ARGOS_DASHBOARD_HOST=192.168.1.100\nARGOS_DASHBOARD_PORT=9999\n# comment\nOTHER_VAR=test"
-    with patch("builtins.open", mock_open(read_data=mock_env)), \
-         patch("pathlib.Path.exists", return_value=True):
+def test_load_env_vars(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARGOS_DASHBOARD_HOST=192.168.1.100\nARGOS_DASHBOARD_PORT=9999\n# comment\nOTHER_VAR=test",
+        encoding="utf-8",
+    )
+    with patch.dict("os.environ", {"ARGOS_ENV_FILE": str(env_file)}):
         vars_dict = update_typhoon_image.load_env_vars()
-        assert vars_dict["ARGOS_DASHBOARD_HOST"] == "192.168.1.100"
-        assert vars_dict["ARGOS_DASHBOARD_PORT"] == "9999"
+    assert vars_dict["ARGOS_DASHBOARD_HOST"] == "192.168.1.100"
+    assert vars_dict["ARGOS_DASHBOARD_PORT"] == "9999"
+
+
+def test_get_static_dir_uses_env():
+    with patch.dict("os.environ", {"ARGOS_DASHBOARD_STATIC_DIR": "/tmp/argos-static"}):
+        assert update_typhoon_image.get_static_dir({}) == Path("/tmp/argos-static")
 
 
 def test_get_image_url_wide():
@@ -93,7 +98,7 @@ def test_send_overlay_event():
 def test_main_success_detail(mock_send, mock_download, mock_get_url, mock_load_env):
     ret = update_typhoon_image.main(["--target-slot", "center", "--mode", "detail", "--typhoon-id", "2608"])
     assert ret == 0
-    mock_download.assert_called_once_with("http://example.com/typhoon_2608-large.jpg", Path("/home/yuki/argos/src/argos/services/dashboard/static/typhoon.jpg"))
+    mock_download.assert_called_once_with("http://example.com/typhoon_2608-large.jpg", Path("/opt/argos/src/argos/services/dashboard/static/typhoon.jpg"))
     
     assert mock_send.call_count == 1
     args, kwargs = mock_send.call_args

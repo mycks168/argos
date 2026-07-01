@@ -159,6 +159,16 @@ class DashboardOverlayTest(unittest.TestCase):
         env_vars = module.load_env_vars()
         self.assertIsInstance(env_vars, dict)
 
+    def test_load_env_vars_uses_argos_env_file(self) -> None:
+        """ARGOS_ENV_FILEで指定した.envを優先して読む。"""
+        env_path = Path(__file__).parent / "tmp_send_overlay.env"
+        env_path.write_text("ARGOS_DASHBOARD_HOST=192.0.2.10\n", encoding="utf-8")
+        try:
+            with patch.dict("os.environ", {"ARGOS_ENV_FILE": str(env_path)}):
+                self.assertEqual(module.load_env_vars()["ARGOS_DASHBOARD_HOST"], "192.0.2.10")
+        finally:
+            env_path.unlink(missing_ok=True)
+
 
 if __name__ == "__main__":
     unittest.main()

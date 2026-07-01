@@ -10,14 +10,35 @@ from pathlib import Path
 
 DEFAULT_HTML_URL_TEMPLATE = "https://tenki.jp/bousai/typhoon/{tid}/"
 FALLBACK_TOP_URL = "https://tenki.jp/bousai/typhoon/"
-SAVE_PATH = Path("/home/yuki/argos/src/argos/services/dashboard/static/typhoon_map.html")
+SAVE_FILENAME = "typhoon_map.html"
+
+
+def find_env_file():
+    """実行環境に合わせてARGOSの.envファイルを探す。"""
+    explicit_path = os.environ.get("ARGOS_ENV_FILE")
+    candidates = []
+    if explicit_path:
+        candidates.append(Path(explicit_path).expanduser())
+    candidates.append(Path.cwd() / ".env")
+    candidates.extend(parent / ".env" for parent in Path(__file__).resolve().parents)
+    candidates.append(Path("/opt/argos/.env"))
+
+    seen = set()
+    for candidate in candidates:
+        resolved = candidate.resolve(strict=False)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 def load_env_vars():
-    """/home/yuki/argos/.env ファイルから設定値をロードする。"""
-    env_path = Path("/home/yuki/argos/.env")
+    """ARGOSの.envファイルから設定値をロードする。"""
+    env_path = find_env_file()
     env_vars = {}
-    if env_path.exists():
+    if env_path:
         try:
             with open(env_path, "r", encoding="utf-8") as f:
                 for line in f:
@@ -30,6 +51,16 @@ def load_env_vars():
         except Exception:
             pass
     return env_vars
+
+
+def get_save_path(env_vars):
+    """台風HTMLの保存先パスを決定する。"""
+    static_dir = os.environ.get("ARGOS_DASHBOARD_STATIC_DIR") or env_vars.get("ARGOS_DASHBOARD_STATIC_DIR")
+    if static_dir:
+        return Path(static_dir).expanduser() / SAVE_FILENAME
+
+    argos_home = os.environ.get("ARGOS_HOME") or env_vars.get("ARGOS_HOME") or "/opt/argos"
+    return Path(argos_home).expanduser() / "src" / "argos" / "services" / "dashboard" / "static" / SAVE_FILENAME
 
 
 def fetch_latest_typhoon_id():
@@ -301,9 +332,10 @@ def main(argv=None):
 
     html_content = generate_html(tid, points)
 
-    SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SAVE_PATH.write_text(html_content, encoding="utf-8")
-    print(f"Generated HTML and saved to {SAVE_PATH}")
+    save_path = get_save_path(env_vars)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path.write_text(html_content, encoding="utf-8")
+    print(f"Generated HTML and saved to {save_path}")
 
     if args.dry_run:
         return 0

@@ -1,19 +1,25 @@
-import os
 import json
-import urllib.request
 from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open
+from unittest.mock import patch, MagicMock
 import pytest
 from scripts import generate_typhoon_html
 
 
-def test_load_env_vars():
-    mock_env = "ARGOS_DASHBOARD_HOST=192.168.1.100\nARGOS_DASHBOARD_PORT=9999\n# comment\nOTHER_VAR=test"
-    with patch("builtins.open", mock_open(read_data=mock_env)), \
-         patch("pathlib.Path.exists", return_value=True):
+def test_load_env_vars(tmp_path):
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ARGOS_DASHBOARD_HOST=192.168.1.100\nARGOS_DASHBOARD_PORT=9999\n# comment\nOTHER_VAR=test",
+        encoding="utf-8",
+    )
+    with patch.dict("os.environ", {"ARGOS_ENV_FILE": str(env_file)}):
         vars_dict = generate_typhoon_html.load_env_vars()
-        assert vars_dict["ARGOS_DASHBOARD_HOST"] == "192.168.1.100"
-        assert vars_dict["ARGOS_DASHBOARD_PORT"] == "9999"
+    assert vars_dict["ARGOS_DASHBOARD_HOST"] == "192.168.1.100"
+    assert vars_dict["ARGOS_DASHBOARD_PORT"] == "9999"
+
+
+def test_get_save_path_uses_env():
+    with patch.dict("os.environ", {"ARGOS_DASHBOARD_STATIC_DIR": "/tmp/argos-static"}):
+        assert generate_typhoon_html.get_save_path({}) == Path("/tmp/argos-static/typhoon_map.html")
 
 
 def test_fetch_latest_typhoon_id_success():
