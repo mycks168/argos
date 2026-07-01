@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+import time
 from datetime import datetime, timedelta
 
 from tmux_util import cleanup, send_keys, tmux, wait_for
@@ -60,11 +61,38 @@ def parse_usage(screen, now=None):
     }
 
 
+def _needs_trust_confirmation(screen):
+    """初回起動時の信頼確認や権限確認らしい画面かを判定する。"""
+    lowered = screen.lower()
+    return any(
+        word in lowered
+        for word in (
+            "do you trust",
+            "trust this",
+            "trust the",
+            "approve",
+            "permission",
+            "continue?",
+            "continue",
+        )
+    )
+
+
+def _wait_until_ready(session):
+    """agy起動後、必要なら信頼確認を通して入力可能になるまで待つ。"""
+    screen = wait_for(session, lambda t: "for shortcuts" in t or _needs_trust_confirmation(t), timeout=60)
+    if _needs_trust_confirmation(screen):
+        time.sleep(1.0)
+        send_keys(session, "Enter")
+        screen = wait_for(session, lambda t: "for shortcuts" in t, timeout=60)
+    return screen
+
+
 def main():
     session = f"agy_usage_{os.getpid()}"
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "agy")
     try:
-        wait_for(session, lambda t: "for shortcuts" in t)
+        _wait_until_ready(session)
 
         send_keys(session, "/usage", "Enter")
         screen = wait_for(

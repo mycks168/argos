@@ -144,6 +144,7 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    dashboard_default_font_size: str = "medium"
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
@@ -371,6 +372,7 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),

@@ -20,6 +20,13 @@ from argos.services.dashboard.state import DashboardState
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
+FONT_SIZE_OPTIONS = {"small", "medium", "large"}
+
+
+def _normalize_font_size(value: str) -> str:
+    """ダッシュボードのフォントサイズ設定を正規化する。"""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in FONT_SIZE_OPTIONS else "medium"
 
 
 class DashboardServer:
@@ -34,6 +41,7 @@ class DashboardServer:
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
+        default_font_size: str = "medium",
         location_provider: str = "local",
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
@@ -48,6 +56,7 @@ class DashboardServer:
         self._camera_snapshot_path = camera_snapshot_path
         self._gps_device_path = gps_device_path
         self._screensaver_seconds = screensaver_seconds
+        self._default_font_size = _normalize_font_size(default_font_size)
         self._location_provider = location_provider
         self._remote_location_url = remote_location_url
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
@@ -71,6 +80,7 @@ class DashboardServer:
             self._camera_snapshot_path,
             self._gps_device_path,
             self._screensaver_seconds,
+            self._default_font_size,
             self._location_provider,
             self._remote_location_url,
             self._remote_location_timeout_seconds,
@@ -100,6 +110,7 @@ def _create_handler(
     camera_snapshot_path: Path,
     gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
+    default_font_size: str = "medium",
     location_provider: str = "local",
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
@@ -203,6 +214,7 @@ def _create_handler(
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")

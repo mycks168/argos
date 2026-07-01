@@ -179,7 +179,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5)
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5, default_font_size="small")
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -237,7 +237,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-font-size-option="medium"' in html
         assert 'data-font-size-option="large"' in html
         assert 'const fontSizeStorageKey = "argos-dashboard-font-size";' in html
-        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey))" in html
+        assert "const defaultFontSize = \"small\";" in html
+        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize)" in html
         assert 'body[data-font-size="large"]' in html
         assert ">ミュート</button>" in html
         assert 'muted ? "ミュート中" : "ミュート"' in html

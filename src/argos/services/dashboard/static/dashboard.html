@@ -870,6 +870,7 @@
 
     const overlayCloseButtons = Array.from(document.querySelectorAll(".overlay-close"));
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
+    const defaultFontSize = __ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__;
     const fontSizeStorageKey = "argos-dashboard-font-size";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
@@ -1322,7 +1323,7 @@
       return {kind: "sun", label: "晴れ"};
     }
 
-    applyFontSize(localStorage.getItem(fontSizeStorageKey));
+    applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize);
     updateClock();
     setInterval(updateClock, 1000);
     updateWeather();
