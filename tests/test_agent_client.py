@@ -171,7 +171,7 @@ def test_build_agent_prompt_adds_argos_defaults():
     assert "<ARGOS_SYSTEM_CONTEXT>" in prompt
     assert "車載音声アシスタントARGOS" in prompt
     assert "回答は日本語で短く" in prompt
-    assert "/home/yuki/skills" in prompt
+    assert "/opt/argos/skills" in prompt
     assert "ユーザー発話:\n地図を出して" in prompt
 
 

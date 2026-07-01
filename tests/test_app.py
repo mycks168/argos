@@ -399,13 +399,13 @@ def test_dashboard_control_updates_mute_state(monkeypatch):
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
 
-    assert app._handle_dashboard_control({"action": "mute"}) == {"muted": True, "volume": 90}
+    assert app._handle_dashboard_control({"action": "mute"}) == {"muted": True, "volume": 90, "microphone_enabled": True}
     snapshot = app._dashboard_state.snapshot()
     assert app._audio.cancelled is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["status"]["code"] == "ready"
 
-    assert app._handle_dashboard_control({"action": "unmute"}) == {"muted": False, "volume": 90}
+    assert app._handle_dashboard_control({"action": "unmute"}) == {"muted": False, "volume": 90, "microphone_enabled": True}
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["audio"]["muted"] is False
     assert snapshot["status"]["code"] == "ready"
@@ -416,7 +416,11 @@ def test_dashboard_control_updates_audio_volume(monkeypatch):
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
 
-    assert app._handle_dashboard_control({"action": "set_volume", "volume": 42}) == {"muted": False, "volume": 42}
+    assert app._handle_dashboard_control({"action": "set_volume", "volume": 42}) == {
+        "muted": False,
+        "volume": 42,
+        "microphone_enabled": True,
+    }
     snapshot = app._dashboard_state.snapshot()
 
     assert app._audio.volume == 42
@@ -440,6 +444,32 @@ def test_dashboard_control_resets_current_agent_session(monkeypatch):
     assert app._agent.reset is True
     assert snapshot["notifications"][0]["title"] == "セッションリセット"
     assert snapshot["notifications"][0]["source"] == "ARGOS"
+
+
+def test_dashboard_control_updates_microphone_state(monkeypatch):
+    """ダッシュボード操作でマイク受付状態を切り替える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    assert app._handle_dashboard_control({"action": "disable_microphone"}) == {
+        "muted": False,
+        "volume": 90,
+        "microphone_enabled": False,
+    }
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["microphone"]["enabled"] is False
+
+    app._on_ptt_press()
+    assert app._recorder.started is False
+
+    assert app._on_wakeword_detected() is False
+
+    assert app._handle_dashboard_control({"action": "enable_microphone"}) == {
+        "muted": False,
+        "volume": 90,
+        "microphone_enabled": True,
+    }
+    assert app._dashboard_state.snapshot()["microphone"]["enabled"] is True
 
 
 def test_dashboard_notification_event_can_speak(monkeypatch, capsys):
@@ -655,6 +685,37 @@ def test_run_initializes_gpio_before_auth_prompt(monkeypatch):
     app.run()
 
     assert events[:2] == ["gpio", "speak"]
+
+
+def test_run_skips_gpio_when_ptt_gpio_is_empty(monkeypatch):
+    """PTT GPIO未設定ならGPIO入力を初期化しない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "ptt_gpio": None,
+            "dry_run": False,
+            "startup_sound_enabled": False,
+            "startup_splash_seconds": 0,
+            "auth_enabled": False,
+        }
+    )
+    called = []
+
+    def fake_gpio(*_args):
+        called.append("gpio")
+        return object()
+
+    def sleep_once(_seconds):
+        app._shutdown.set()
+
+    monkeypatch.setattr("argos.core.app.GpioPttInput", fake_gpio)
+    monkeypatch.setattr("argos.core.app.time.sleep", sleep_once)
+    app = ArgosApp(settings)
+
+    app.run()
+
+    assert called == []
 
 
 def test_auth_warning_repeats_until_authenticated(monkeypatch):
@@ -1091,6 +1152,25 @@ def test_wakeword_recording_strips_leading_wakeword(monkeypatch, tmp_path):
 
     assert handled == ["今日の天気は"]
     assert not wav_path.exists()
+
+
+def test_wakeword_recording_requires_stt_wakeword_when_enabled(monkeypatch, tmp_path):
+    """設定有効時はSTT結果が呼びかけから始まらない誤検知を破棄する。"""
+    _patch_app(monkeypatch)
+    wav_path = tmp_path / "wake.wav"
+    wav_path.write_bytes(b"dummy")
+    settings = Settings(**{**_settings().__dict__, "wakeword_require_stt_wakeword": True})
+    app = ArgosApp(settings)
+    handled = []
+
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _path: 100)
+    app._transcribe_wav = lambda path: "テレビの音です"
+    app._handle_text = lambda text: handled.append(text)
+
+    app._process_wakeword_recording(str(wav_path))
+
+    assert handled == []
+    assert app._dashboard_state.snapshot()["notifications"][0]["title"] == "ウェイクワード"
 
 
 def test_wakeword_recording_strips_wakeword_before_auth(monkeypatch, tmp_path):

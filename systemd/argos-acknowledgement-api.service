@@ -1,0 +1,16 @@
+[Unit]
+Description=ARGOS Acknowledgement Phrase Selector API
+After=network.target
+
+[Service]
+Type=simple
+User=@ARGOS_USER@
+Group=@ARGOS_GROUP@
+WorkingDirectory=@PROJECT_DIR@/services/argos-acknowledgement-api
+EnvironmentFile=-@PROJECT_DIR@/services/argos-acknowledgement-api/.env
+ExecStart=@PROJECT_DIR@/services/argos-acknowledgement-api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 23032
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

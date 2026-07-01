@@ -29,6 +29,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state.set_agent("アンチグラビティ", "antigravity")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
+    state.set_microphone_enabled(False)
     state.set_wifi_status(
         {
             "connected": True,
@@ -63,6 +64,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
+    assert snapshot["microphone"]["enabled"] is False
     assert snapshot["network"]["wifi"]["connected"] is True
     assert snapshot["network"]["wifi"]["ssid"] == "車内WiFi"
     assert snapshot["network"]["wifi"]["quality"] == 71
@@ -179,7 +181,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5)
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5, default_font_size="small")
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -224,7 +226,14 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
+        assert 'class="brand-controls"' in html
+        assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html
+        assert "@media (min-width: 761px) and (max-width: 900px)" in html
+        assert ".notifications-panel { grid-column: auto; min-height: 0; }" in html
+        assert '.network-status[data-connected="false"]' in html
+        assert "display: none;" in html
         assert 'id="mute-button"' in html
+        assert 'id="microphone-button"' in html
         assert 'id="volume-slider"' in html
         assert 'aria-label="読み上げ音量"' in html
         assert 'sendControl("set_volume", {volume})' in html
@@ -237,9 +246,15 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-font-size-option="medium"' in html
         assert 'data-font-size-option="large"' in html
         assert 'const fontSizeStorageKey = "argos-dashboard-font-size";' in html
-        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey))" in html
+        assert "const defaultFontSize = \"small\";" in html
+        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize)" in html
+        assert '--message-font-size: 14px;' in html
+        assert '--notice-title-font-size: 13px;' in html
         assert 'body[data-font-size="large"]' in html
         assert ">ミュート</button>" in html
+        assert ">マイクOFF</button>" in html
+        assert 'sendControl(microphoneEnabled ? "disable_microphone" : "enable_microphone")' in html
+        assert "applyControlResult(await response.json())" in html
         assert 'muted ? "ミュート中" : "ミュート"' in html
         assert "border-radius: 8px" in html
         assert "opacity: 0.72" in html

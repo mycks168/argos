@@ -10,7 +10,8 @@ def _render_unit(name: str, project_dir: Path | str = "/opt/argos") -> str:
         text.replace("@PROJECT_DIR@", str(project_dir))
         .replace("@ARGOS_USER@", "argos")
         .replace("@ARGOS_GROUP@", "argos")
-        .replace("@USER_HOME@", "/var/lib/argos")
+        .replace("@USER_HOME@", "/home/argos")
+        .replace("@ARGOS_UID@", "1001")
     )
 
 
@@ -48,7 +49,7 @@ def test_argos_service_uses_project_runtime():
     expected_exec = str(wd / ".venv" / "bin" / "argos")
     assert exec_start == expected_exec
     assert unit["Service"]["Environment"] == (
-        "PATH=/var/lib/argos/.local/bin:/var/lib/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
+        "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin"
     )
 
 
@@ -111,16 +112,26 @@ def test_dashboard_kiosk_disables_translation_ui():
     script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
 
     assert "--lang=ja" in script
+    assert "--no-first-run" in script
+    assert "--no-default-browser-check" in script
     assert "--disable-extensions" in script
+    assert "--disable-sync" in script
     assert "--disable-features=Translate,TranslateUI" in script
     assert "--disable-translate" in script
+    assert "xset s off" in script
+    assert "xset -dpms" in script
+    assert "gsettings set org.gnome.desktop.screensaver lock-enabled false" in script
 
 
 def test_dashboard_chromium_policy_disables_translation():
-    """Chromium管理ポリシーで翻訳バーを無効化する。"""
+    """Chromium管理ポリシーで翻訳バーとサインインUIを無効化する。"""
     policy_path = Path(__file__).parents[1] / "chromium" / "argos-dashboard.json"
+    policy = json.loads(policy_path.read_text())
 
-    assert json.loads(policy_path.read_text())["TranslateEnabled"] is False
+    assert policy["TranslateEnabled"] is False
+    assert policy["BrowserSignin"] == 0
+    assert policy["SyncDisabled"] is True
+    assert policy["PasswordManagerEnabled"] is False
 
 
 def test_hash_auth_keyword_script_exists():

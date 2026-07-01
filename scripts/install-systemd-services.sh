@@ -5,7 +5,8 @@ set -euo pipefail
 project_dir="${ARGOS_PROJECT_DIR:-/opt/argos}"
 service_user="${ARGOS_SERVICE_USER:-argos}"
 service_group="${ARGOS_SERVICE_GROUP:-${service_user}}"
-service_home="${ARGOS_SERVICE_HOME:-/var/lib/argos}"
+service_home="${ARGOS_SERVICE_HOME:-/home/argos}"
+service_uid="${ARGOS_SERVICE_UID:-$(id -u "${service_user}" 2>/dev/null || echo 1000)}"
 unit_dir="${ARGOS_SYSTEMD_UNIT_DIR:-/etc/systemd/system}"
 template_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/systemd"
 
@@ -17,6 +18,7 @@ render_unit() {
     -e "s|@ARGOS_USER@|${service_user}|g" \
     -e "s|@ARGOS_GROUP@|${service_group}|g" \
     -e "s|@USER_HOME@|${service_home}|g" \
+    -e "s|@ARGOS_UID@|${service_uid}|g" \
     "${source_path}" | sudo tee "${target_path}" >/dev/null
 }
 

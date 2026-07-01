@@ -146,6 +146,7 @@ class ArgosApp:
             settings.voicevox_sample_rate,
             settings.voicevox_speed_scale,
             settings.voicevox_volume_scale,
+            settings.voicevox_bearer_token,
         )
         self._voicevox_speakers_by_slot_key = {
             _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker
@@ -210,6 +211,7 @@ class ArgosApp:
         self._cancel_generation = 0
         self._mute_condition = threading.Condition()
         self._muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
+        self._microphone_enabled = True
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
         self._agent_delivery_thread: threading.Thread | None = None
@@ -254,6 +256,7 @@ class ArgosApp:
             port=settings.dashboard_port,
             token=settings.dashboard_token,
             screensaver_seconds=settings.dashboard_screensaver_seconds,
+            default_font_size=settings.dashboard_default_font_size,
             location_provider=settings.location_provider,
             remote_location_url=settings.remote_location_url,
             remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
@@ -271,8 +274,10 @@ class ArgosApp:
         self._run_startup_sequence()
         self._try_face_auth("起動時")
         self._set_ready_or_locked()
-        if not self._settings.dry_run:
+        if not self._settings.dry_run and self._settings.ptt_gpio is not None:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
+        elif not self._settings.dry_run:
+            log.info("ARGOS_PTT_GPIO が未設定のためGPIO PTT入力を無効化します")
         self._start_wakeword_listener()
         self._announce_auth_required()
         self._start_auth_status_monitor()
@@ -626,6 +631,9 @@ class ArgosApp:
 
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
+        if not self._is_microphone_enabled():
+            log.info("マイクOFFのためPTT押下を無視します")
+            return
         log.info("PTT ON: 録音開始")
         if self._wakeword_recording.is_set():
             log.info("ウェイクワード録音中のPTT押下を発話継続として扱います")
@@ -647,6 +655,9 @@ class ArgosApp:
 
     def _on_ptt_release(self) -> None:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
+        if not self._is_microphone_enabled():
+            log.info("マイクOFFのためPTT解放を無視します")
+            return
         log.info("PTT OFF: 録音停止と処理開始")
         if self._wakeword_ptt_hold.is_set():
             log.info("ウェイクワード録音のPTT継続を解除します")
@@ -716,6 +727,9 @@ class ArgosApp:
         """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。"""
         if self._shutdown.is_set():
             return False
+        if not self._is_microphone_enabled():
+            log.info("マイクOFFのためウェイクワード検知を無視します")
+            return False
         if self._recorder.is_recording:
             log.info("PTT録音中のためウェイクワード検知を無視します")
             return False
@@ -743,7 +757,7 @@ class ArgosApp:
         """ウェイクワード後に録音されたWAVを処理スレッドへ渡す。"""
         self._wakeword_recording.clear()
         self._wakeword_ptt_hold.clear()
-        if self._shutdown.is_set():
+        if self._shutdown.is_set() or not self._is_microphone_enabled():
             self._remove_recording_file(wav_path)
             return
         if self._is_auth_locked():
@@ -767,6 +781,10 @@ class ArgosApp:
             if not transcript:
                 log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                return
+            if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript):
+                log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
+                self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
                 return
             transcript = _strip_leading_wakeword(transcript)
             if not transcript:
@@ -827,6 +845,12 @@ class ArgosApp:
             volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
             self._dashboard_state.set_audio_volume(volume)
             self._save_audio_state()
+        elif action == "enable_microphone":
+            self._set_microphone_enabled(True)
+        elif action == "disable_microphone":
+            self._set_microphone_enabled(False)
+        elif action == "toggle_microphone":
+            self._set_microphone_enabled(not self._is_microphone_enabled())
         elif action == "reset_agent_session":
             slot_name = self._agent.current_name
             slot_provider = self._agent.current_provider
@@ -844,7 +868,7 @@ class ArgosApp:
             }
         else:
             raise ValueError(f"未対応の操作です: {action}")
-        return {"muted": self._is_muted(), "volume": self._audio.volume}
+        return {"muted": self._is_muted(), "volume": self._audio.volume, "microphone_enabled": self._is_microphone_enabled()}
 
     def _handle_dashboard_event(self, payload: dict[str, object], response: dict[str, object]) -> None:
         """外部表示イベントに応じて通知音や読み上げを行う。"""
@@ -1235,6 +1259,25 @@ class ArgosApp:
         with self._mute_condition:
             return self._muted
 
+    def _set_microphone_enabled(self, enabled: bool) -> None:
+        """ダッシュボード操作によるマイク受付状態を更新する。"""
+        changed = self._microphone_enabled != enabled
+        self._microphone_enabled = enabled
+        if not enabled:
+            self._recorder.cancel()
+            self._wakeword_recording.clear()
+            self._wakeword_ptt_hold.clear()
+            self._set_ready_or_locked()
+        self._dashboard_state.set_microphone_enabled(enabled)
+        if changed:
+            title = "マイクON" if enabled else "マイクOFF"
+            message = "マイク入力を受け付けます。" if enabled else "マイク入力を停止しました。"
+            self._dashboard_state.add_notification(title, message, source="ARGOS")
+
+    def _is_microphone_enabled(self) -> bool:
+        """マイク入力を受け付ける状態ならTrueを返す。"""
+        return self._microphone_enabled
+
     def _save_audio_state(self) -> None:
         """現在の読み上げ音量とミュート状態を保存する。"""
         try:
@@ -1305,3 +1348,8 @@ _LEADING_WAKEWORD_PATTERN = re.compile(
 def _strip_leading_wakeword(text: str) -> str:
     """ウェイクワード経由STTの先頭に混ざった呼びかけだけを除去する。"""
     return _LEADING_WAKEWORD_PATTERN.sub("", text, count=1).strip()
+
+
+def _has_leading_wakeword(text: str) -> bool:
+    """STT結果が呼びかけから始まるかを判定する。"""
+    return bool(_LEADING_WAKEWORD_PATTERN.match(text))

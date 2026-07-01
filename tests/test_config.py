@@ -66,6 +66,24 @@ def test_load_wifi_status_refresh_seconds(monkeypatch):
     assert settings.wifi_status_refresh_seconds == 15
 
 
+def test_load_empty_ptt_gpio_disables_gpio(monkeypatch):
+    """PTT GPIOが空ならGPIO入力を無効化する。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio is None
+
+
+def test_load_ptt_gpio_number(monkeypatch):
+    """PTT GPIOにBCM番号があれば整数として読み込む。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "17")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio == 17
+
+
 def test_load_agent_system_prompt_settings(monkeypatch):
     """エージェント共通システムプロンプト設定を読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")
@@ -170,6 +188,15 @@ def test_load_stt_gateway_token(monkeypatch):
     assert settings.stt_gateway_token == "stt-token"
 
 
+def test_load_voicevox_bearer_token(monkeypatch):
+    """VOICEVOXのBearerトークンを読み込む。"""
+    monkeypatch.setenv("VOICEVOX_BEARER_TOKEN", "voice-token")
+
+    settings = load_settings()
+
+    assert settings.voicevox_bearer_token == "voice-token"
+
+
 def test_load_voicevox_speed_scale(monkeypatch):
     """VOICEVOXの話速設定を読み込む。"""
     monkeypatch.setenv("VOICEVOX_SPEED_SCALE", "1.1")
@@ -226,6 +253,7 @@ def test_load_wakeword_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.2")
     monkeypatch.setenv("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.2")
     monkeypatch.setenv("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "1.7")
+    monkeypatch.setenv("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", "true")
 
     settings = load_settings()
 
@@ -247,6 +275,7 @@ def test_load_wakeword_settings(monkeypatch):
     assert settings.wakeword_vad_min_silence_seconds == 1.2
     assert settings.wakeword_vad_check_seconds == 0.2
     assert settings.wakeword_tts_cooldown_seconds == 1.7
+    assert settings.wakeword_require_stt_wakeword is True
 
 
 def test_load_argos_input_devices_from_comma_text(monkeypatch):
@@ -457,6 +486,7 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
+    monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
     monkeypatch.setenv("ARGOS_LOCATION_PROVIDER", "remote")
     monkeypatch.setenv("ARGOS_REMOTE_LOCATION_URL", "http://example.test/gps")
     monkeypatch.setenv("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "1.5")
@@ -468,6 +498,7 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
     assert settings.dashboard_screensaver_seconds == 12.5
+    assert settings.dashboard_default_font_size == "small"
     assert settings.location_provider == "remote"
     assert settings.remote_location_url == "http://example.test/gps"
     assert settings.remote_location_timeout_seconds == 1.5

@@ -75,7 +75,7 @@ class Settings:
     dashboard_host: str
     dashboard_port: int
     dashboard_token: str
-    ptt_gpio: int
+    ptt_gpio: int | None
     silence_rms_threshold: float
     dry_run: bool
     codex_home: str
@@ -144,6 +144,7 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    dashboard_default_font_size: str = "medium"
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
@@ -154,6 +155,7 @@ class Settings:
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
     voicevox_volume_scale: float = 1.0
+    voicevox_bearer_token: str = ""
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -181,10 +183,11 @@ class Settings:
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
     wakeword_score_log_path: str = ""
+    wakeword_require_stt_wakeword: bool = False
     agent_system_prompt: str = ""
     agent_system_prompt_file: str = ""
     agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
-    agent_skills_dir: str = "/home/yuki/skills"
+    agent_skills_dir: str = "/opt/argos/skills"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -303,7 +306,7 @@ def load_settings() -> Settings:
             "ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH",
             "~/.argos/agent-system-prompts.json",
         ),
-        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/home/yuki/skills"),
+        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/opt/argos/skills"),
         agent_usage_commands=_load_agent_usage_commands(),
         agent_usage_refresh_seconds=float(os.environ.get("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "300")),
         agent_usage_command_timeout_seconds=float(
@@ -332,6 +335,7 @@ def load_settings() -> Settings:
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
         wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
+        wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
@@ -370,10 +374,11 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
-        ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
+        ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),
@@ -464,6 +469,7 @@ def load_settings() -> Settings:
         whisper_device=os.environ.get("ARGOS_WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
         voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
+        voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
     )
 
 

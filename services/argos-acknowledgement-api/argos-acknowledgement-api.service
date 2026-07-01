@@ -1,0 +1,15 @@
+[Unit]
+Description=ARGOS Acknowledgement Phrase Selector API
+After=network.target
+
+[Service]
+Type=simple
+User=yuki
+WorkingDirectory=/home/yuki/argos-acknowledgement-api
+EnvironmentFile=/home/yuki/argos-acknowledgement-api/.env
+ExecStart=/home/yuki/argos-acknowledgement-api/.venv/bin/uvicorn main:app --host 127.0.0.1 --port 23032
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

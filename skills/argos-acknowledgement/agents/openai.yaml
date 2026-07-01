@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARGOS Acknowledgement"
+  short_description: "ARGOSの初期待機応答をACK API側で修正する"
+  default_prompt: "ARGOSの最初の返事がおかしいので、argos-acknowledgement-api側のルール、テスト、READMEを更新してください。"

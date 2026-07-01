@@ -62,6 +62,8 @@ VOICEVOX Engine は次の順で呼び出す。
 
 `audio_query` の JSON に `outputSamplingRate` と `VOICEVOX_SPEED_SCALE` で指定した `speedScale` を設定してから `synthesis` に渡す。
 
+`VOICEVOX_BEARER_TOKEN` が設定されている場合は、`audio_query` と `synthesis` の両方へ `Authorization: Bearer <token>` を付ける。未設定の場合は認証ヘッダーを送らない。
+
 `VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
 
 Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_ID`、`ARGOS_KOKORO_SAMPLE_RATE` で調整する。Kokoro を使う環境では `uv sync --extra kokoro` を実行し、必要に応じて `uv run python -m unidic download` で日本語辞書を用意する。
@@ -134,13 +136,13 @@ Codex の最終出力は途中経過の単純な続きではなく、応答全�
 初回発話:
 
 ```bash
-/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
 ```
 
 同一スロットの継続発話:
 
 ```bash
-/home/yuki/.local/bin/claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
 ```
 
 ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。
@@ -149,7 +151,7 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 ### HDMI ダッシュボード
 
-`ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。画面幅が狭い場合は通知欄を下へ回り込ませる。
+`ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。800x600程度の画面では左側操作を圧縮した3列表示を維持し、さらに狭い場合だけ通知欄を下へ回り込ませる。
 
 画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
@@ -158,18 +160,19 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` はオレンジの流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は緑系の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。
 中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルにはスロット一覧をARGOSロゴ直下の横並びチップとして表示し、現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。スロット数が増えた場合は、左側パネルの縦方向を圧迫しないよう、スロット一覧だけをタッチ操作で横スクロールできるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。
-左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ行の右端に置き、角丸の小型ボタンとして表示する。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
-左側パネルにはフォントサイズ切替ボタンを表示し、ダッシュボードの主要テキストを `小`、`中`、`大` から選べるようにする。選択値はキオスクブラウザのローカルストレージへ保存し、画面再読み込み後も維持する。切替対象は会話欄、通知欄、現在スロット、状態表示、スロットチップなどの可読性に関わるテキストとする。
+左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ直下の操作行に置き、狭い画面でも折り返して見切れないようにする。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。インストーラーは `.env` の `ARGOS_DASHBOARD_TOKEN` が空の場合、`--apply` または `--update` 実行時にランダムなトークンを自動生成する。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
+同じ領域にマイクOFFボタンを表示する。操作は `enable_microphone`、`disable_microphone`、`toggle_microphone` で受け付ける。マイクOFF中はPTT押下とウェイクワード検知を無視し、進行中の録音があれば破棄する。これは読み上げミュートとは独立した一時停止で、再起動後の永続化はしない。
+左側パネルにはフォントサイズ切替ボタンを表示し、ダッシュボードの主要テキストを `小`、`中`、`大` から選べるようにする。選択値はキオスクブラウザのローカルストレージへ保存し、画面再読み込み後も維持する。未保存時は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` を初期値にする。切替対象は会話欄、通知欄、現在スロット、状態表示、スロットチップなどの可読性に関わるテキストとする。
 左側パネルの `CURRENT SLOT` にはセッションリセットボタンを表示する。誤操作防止のため、1回目のタップで確認表示に切り替え、5秒以内にもう一度タップした場合だけ `POST /api/control` に `{"action":"reset_agent_session"}` を送る。この操作は現在スロットのエージェントセッションIDだけを削除し、ダッシュボードに残っている会話履歴や通知は削除しない。リセット後の次回エージェント呼び出しは新規セッションとして開始し、完了時に通常どおり新しいセッションIDを保存する。
 左側パネルの左端には読み上げ音量の縦スライダーを表示する。スライダーは `POST /api/control` に `{"action":"set_volume","volume":0..100}` を送信し、ARGOS本体の `AudioPlayer` が16bit PCM WAVを小分けに再生しながらソフトウェア音量を反映する。これにより `plughw` 直指定でALSAミキサーを通らない出力でも、再生中の次の小さい再生ブロックから読み上げ音量を変更できる。ALSAミキサー操作は `AUDIO_OUTPUT_CARD` が設定されている場合はそのカード、未設定の場合はデフォルトミキサーへベストエフォートで送る。起動時は `ARGOS_AUDIO_STATE_PATH` の保存済み音量を優先し、保存済み音量がない場合だけ `AUDIO_OUTPUT_VOLUME` を初期値として使う。保存値が壊れている場合は無視する。
 左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX`、`ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY`、`ARGOS_AGENT_USAGE_COMMAND_CLAUDE` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
 
-左側パネルのARGOSロゴ直下にはWi-Fi状態をバーアイコンで表示する。ARGOS本体は `/proc/net/wireless` から電波品質を読み、`iwgetid` でSSIDを取得する。更新間隔は `ARGOS_WIFI_STATUS_REFRESH_SECONDS` で指定し、未接続または取得不能の場合は薄い未接続表示にする。
+左側パネルのARGOSロゴ横にはWi-Fi状態をバーアイコンで表示する。ARGOS本体は `/proc/net/wireless` から電波品質を読み、`iwgetid` でSSIDを取得する。更新間隔は `ARGOS_WIFI_STATUS_REFRESH_SECONDS` で指定し、未接続または取得不能の場合はWi-Fi表示自体を出さない。
 
 左側パネルの日付行には現在地に基づく天気と気温を表示する。天気アイコンは端末フォントに依存する絵文字を使わず、CSSで描画する簡易アイコンを使う。
 文字起こし、LLMエージェント、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、通知欄へ優先度 `high` の通知を追加する。直前と同一のエラーは重複追加しない。また、LLMエージェントからの応答取得でエラーが発生した際は、リミット制限エラー（`rate limit`、`quota`、`limit`など）であれば「リミット制限に達しました。」、その他の一般エラーであれば「エージェントの応答取得に失敗しました。」と音声で読み上げて報告する。
 
-キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシー `TranslateEnabled=false` で翻訳UIを無効化し、ダッシュボード上のマウスカーソルを非表示にする。
+キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシーで翻訳UI、Googleサインイン、同期UI、パスワード保存を無効化し、ダッシュボード上のマウスカーソルを非表示にする。起動時は `xset` と `gsettings` を使い、UbuntuとRaspberry Pi OSの両方でスクリーンセーバー、DPMS、ロック画面を可能な範囲で無効化する。
 タッチパネルはlabwcでHDMI画面へ割り当て、`mouseEmulation=no` にしてタッチ操作によるマウスカーソル表示を抑止する。
 
 カメラ静止画は `/tmp/argos/camera-latest.jpg` に保存する。ダッシュボードHTTPサーバーは `/camera/latest.jpg` で最新画像を配信する。
@@ -270,7 +273,7 @@ PTT録音中は本人確認の繰り返し案内と警告音を再生しない�
 録音WAVは `/tmp/argos/utterance-*.wav` のユニークな一時ファイル名で作成する。固定名を使わないことで、前回録音のSTT処理中に次の録音が始まっても、次の録音開始処理が前回録音ファイルを削除しないようにする。STTゲートウェイへ送るmultipartファイル名も実際の録音ファイル名に合わせる。録音をキャンセルした場合はその録音ファイルを削除し、STT処理に渡した録音ファイルも処理終了時に削除する。異常終了などで残った古い録音一時ファイルはARGOS起動時に削除する。
 短い本人確認キーワードはSTT側で空文字になりやすいため、録音停止後にWAVヘッダーを修復し、前後へ短い無音を追加してから文字起こしへ渡す。
 
-GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
+`ARGOS_PTT_GPIO` が空欄の場合、GPIO PTT入力は初期化しない。UbuntuなどGPIOがない環境ではこの設定にして起動できるようにする。値がある場合、GPIO入力は gpiozero のコールバックに処理を直接ぶら下げず、ポーリングした押下/解放エッジをキューに積み、別スレッドで順番にアプリへ渡す。これにより、録音開始やキャンセル処理中でも物理解放イベントを取り逃がしにくくする。
 
 GPIO入力は起動直後の本人確認案内を読み上げる前に初期化する。これにより「本人確認してください」の読み上げ中にPTTを押した場合も、読み上げを止めて録音を開始できる。
 
@@ -334,6 +337,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - ウェイクワード検知後の録音中にPTTを押した場合は、別録音を開始せず、そのウェイクワード発話をPTT解放まで継続する
 - 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
 - 読み上げ終了後も `ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS` 秒間はウェイクワード検知を無視し、検知バッファをクリアする。これはウェイクワードだけの自己音声対策で、PTT録音には影響しない
+- `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` の場合、ウェイクワード後録音のSTT結果が「アルゴス」などの呼びかけから始まる時だけ本文処理へ進む。自宅など通信遅延が小さく誤検知を強く抑えたい環境向けの設定とする
 - 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
 - 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う
 - `ARGOS_WAKEWORD_ENDPOINT_MODE=rms` の場合、`ARGOS_WAKEWORD_RECORD_MIN_SECONDS` 以上録音した後、`SILENCE_RMS_THRESHOLD` 未満の状態が `ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS` 続いたら終了する
@@ -383,6 +387,8 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 - `voicevox_speaker`: 任意。指定した場合、このスロットの読み上げだけ指定VOICEVOX話者IDを使う
 
 スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。既定スロットのVOICEVOX話者IDは `ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER` で指定できる。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
+
+新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとに `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存のスロット設定を維持する。
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
