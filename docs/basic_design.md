@@ -52,6 +52,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 ```
 
 ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
+`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。
 
 ### VOICEVOX
 

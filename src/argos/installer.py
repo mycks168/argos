@@ -33,6 +33,7 @@ DEFAULT_OS_PACKAGES = (
 )
 
 AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
+PLACEHOLDER_TOKENS = {"", "change-me", "changeme", "change_me"}
 CHROMIUM_POLICY_TARGETS = (
     Path("/etc/chromium/policies/managed/argos-dashboard.json"),
     Path("/etc/chromium-browser/policies/managed/argos-dashboard.json"),
@@ -280,6 +281,7 @@ def apply_plan(
         _ensure_service_home_dirs(plan, runner=runner)
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
+    _ensure_tts_filter_shared_token(project_dir)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
@@ -380,6 +382,45 @@ def _ensure_dashboard_token(values: dict[str, str]) -> bool:
         return False
     values["ARGOS_DASHBOARD_TOKEN"] = secrets.token_urlsafe(32)
     return True
+
+
+def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
+    """ARGOS本体とtts-filter APIのBearerトークンを同じ値に揃える。"""
+    app_env = project_dir / ".env"
+    filter_env = project_dir / "services" / "tts-filter" / ".env"
+    if not app_env.exists() or not filter_env.exists():
+        return False
+
+    app_values = _read_env_values(app_env)
+    filter_values = _read_env_values(filter_env)
+    app_token = app_values.get("TTS_FILTER_BEARER_TOKEN", "").strip()
+    filter_token = filter_values.get("TTS_FILTER_BEARER_TOKEN", "").strip()
+    token = _select_shared_token(app_token, filter_token)
+
+    changed = False
+    if app_token != token:
+        app_values["TTS_FILTER_BEARER_TOKEN"] = token
+        _write_env_values(app_env, app_values)
+        changed = True
+    if filter_token != token:
+        filter_values["TTS_FILTER_BEARER_TOKEN"] = token
+        _write_env_values(filter_env, filter_values)
+        changed = True
+    return changed
+
+
+def _select_shared_token(app_token: str, filter_token: str) -> str:
+    """既存設定から共有Bearerトークンを選び、未設定なら生成する。"""
+    if _is_real_token(app_token):
+        return app_token
+    if _is_real_token(filter_token):
+        return filter_token
+    return secrets.token_urlsafe(32)
+
+
+def _is_real_token(value: str) -> bool:
+    """空値やサンプル値ではないBearerトークンか判定する。"""
+    return value.strip().lower() not in PLACEHOLDER_TOKENS
 
 
 def _read_env_values(path: Path) -> dict[str, str]:

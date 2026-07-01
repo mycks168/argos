@@ -39,7 +39,7 @@ systemctl status argos.service
 journalctl -u argos.service -f
 ```
 
-設定を変更した場合は `.env` を更新してから再起動します。
+設定を変更した場合は `.env` を更新してから再起動します。tts-filter を使う場合は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` が一致している必要があります。`argos-install --apply` または `--update` はこの値を自動で揃えます。
 
 ```bash
 sudo systemctl restart argos.service
