@@ -1,0 +1,4 @@
+interface:
+  display_name: "ARGOS Terminal Control"
+  short_description: "ARGOSのttyd+tmux端末操作を簡潔に実行"
+  default_prompt: "Use $argos-terminal-control to send a concise command to the ARGOS dashboard terminal."

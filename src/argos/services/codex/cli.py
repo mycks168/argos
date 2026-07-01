@@ -176,6 +176,10 @@ class CodexCliClient:
         output_path = tempfile.NamedTemporaryFile(prefix="argos-codex-", suffix=".txt", delete=False)
         output_path.close()
         started_at = time.time()
+        # "stream"(既定)は途中経過を逐次読み上げる。"final"は途中経過を読み上げず、
+        # 完了後のまとめだけを1回読み上げる。Codexの完了後の出力は途中経過の続きではなく
+        # 全体を再構成したまとめのことがあり、両方読み上げると同じ内容を2回話してしまうため。
+        stream_mode = self._settings.codex_stream_mode != "final"
         try:
             command = self._build_command(conversation, output_path.name)
             env = self._build_env(conversation.slot)
@@ -219,7 +223,8 @@ class CodexCliClient:
                 if not delta:
                     continue
                 emitted += delta
-                yield delta
+                if stream_mode:
+                    yield delta
 
             stderr = proc.stderr.read() if proc.stderr else ""
             return_code = proc.wait(timeout=10)
@@ -238,15 +243,13 @@ class CodexCliClient:
                     self._store.save(_slot_key(conversation.slot), session_id)
             conversation.started = True
             text = Path(output_path.name).read_text(encoding="utf-8").strip()
-            if text and not text.startswith(emitted):
-                if emitted:
-                    yield "\n" + text
-                else:
+            if not stream_mode:
+                # finalモード: 途中経過は読み上げず、完了後のまとめだけを1回返す。
+                if text:
                     yield text
-            elif text:
-                rest = text[len(emitted):]
-                if rest:
-                    yield rest
+            elif not emitted and text:
+                # streamモードで途中経過が一切取れなかった場合のフォールバック。
+                yield text
         finally:
             try:
                 os.remove(output_path.name)
@@ -312,14 +315,22 @@ def _load_event(line: str) -> dict:
 
 
 def _extract_session_id(event: dict) -> str:
-    """Codex イベントからセッションIDを取り出す。"""
-    if event.get("type") != "session_meta":
-        return ""
-    payload = event.get("payload", {})
-    if not isinstance(payload, dict):
-        return ""
-    value = payload.get("id", "")
-    return value if isinstance(value, str) else ""
+    """Codex イベントからセッションIDを取り出す。
+
+    現行の `codex exec --json` は起動時に `thread.started` で `thread_id` を返す。
+    旧バージョンの `session_meta`（`~/.codex/sessions/` 配下の保存ファイル形式）も
+    念のため互換対応する。
+    """
+    if event.get("type") == "thread.started":
+        value = event.get("thread_id", "")
+        return value if isinstance(value, str) else ""
+    if event.get("type") == "session_meta":
+        payload = event.get("payload", {})
+        if not isinstance(payload, dict):
+            return ""
+        value = payload.get("id", "")
+        return value if isinstance(value, str) else ""
+    return ""
 
 
 def _load_recent_session_id(slot: AgentSlot, settings: Settings, started_at: float) -> str:
@@ -368,7 +379,18 @@ def _extract_text_delta(event: dict, emitted: str) -> str:
 
 
 def _extract_text(event: dict) -> str:
-    """Codex イベントから読み上げ対象のテキストを取り出す。"""
+    """Codex イベントから読み上げ対象のテキストを取り出す。
+
+    現行の `codex exec --json` は `item.completed`（`item.type == "agent_message"`）で
+    完成済みのエージェント発話を1件ずつ返す。`command_execution` など他のitem種別は
+    読み上げ対象に含めない。旧バージョンの `event_msg`/`response_item` 形式も
+    念のため互換対応する。
+    """
+    if event.get("type") == "item.completed":
+        item = event.get("item", {})
+        if isinstance(item, dict) and item.get("type") == "agent_message":
+            return str(item.get("text", ""))
+        return ""
     payload = event.get("payload", {})
     if event.get("type") == "event_msg" and payload.get("type") == "agent_message":
         if payload.get("phase") in ("final_answer", None):

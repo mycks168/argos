@@ -7,6 +7,8 @@ dependencies = [
     "adafruit-circuitpython-rgb-display",
     "gpiozero",
     "lgpio",
+    "numpy>=1.26",
+    "onnxruntime>=1.20",
     "pillow",
     "python-dotenv",
     "requests",
@@ -28,9 +30,13 @@ kokoro = [
 whisper = [
     "faster-whisper>=1.2.1",
 ]
+wakeword = [
+]
 
 [project.scripts]
 argos = "argos.main:main"
+argos-agent-runner = "argos.agent_runner_main:main"
+argos-install = "argos.installer:main"
 
 [build-system]
 requires = ["hatchling"]

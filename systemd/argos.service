@@ -1,19 +1,20 @@
 [Unit]
 Description=ARGOS voice Codex agent
-Documentation=file:/home/pi/argos/README.md
-After=network-online.target sound.target
-Wants=network-online.target
+Documentation=file:@PROJECT_DIR@/README.md
+After=network-online.target tailscale-online.target sound.target
+Wants=network-online.target tailscale-online.target
 
 [Service]
 Type=simple
-User=pi
-Group=pi
-WorkingDirectory=/home/pi/argos
-EnvironmentFile=/home/pi/argos/.env
-Environment=XDG_RUNTIME_DIR=/run/user/1000
-Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-Environment=PATH=/home/pi/.local/bin:/home/pi/.cargo/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/pi/argos/.venv/bin/argos
+User=@ARGOS_USER@
+Group=@ARGOS_GROUP@
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@PROJECT_DIR@/.env
+Environment=HOME=@USER_HOME@
+Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@ARGOS_UID@/bus
+Environment=PATH=@USER_HOME@/.local/bin:@USER_HOME@/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@PROJECT_DIR@/.venv/bin/argos
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

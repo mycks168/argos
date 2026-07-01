@@ -254,9 +254,9 @@ def _count_lines(path: Path | None) -> int:
     if path is None:
         return 0
     try:
-        with path.open("r", encoding="utf-8") as file:
+        with path.open("r", encoding="utf-8", errors="replace") as file:
             return sum(1 for _ in file)
-    except OSError:
+    except (OSError, UnicodeError):
         return 0
 
 
@@ -274,7 +274,7 @@ def _read_jsonl_entries(path: Path) -> list[dict[str, Any]]:
     """JSONLファイルを辞書のリストとして読み込む。"""
     entries: list[dict[str, Any]] = []
     try:
-        with path.open("r", encoding="utf-8") as file:
+        with path.open("r", encoding="utf-8", errors="replace") as file:
             for line in file:
                 if not line.strip():
                     continue
@@ -284,7 +284,7 @@ def _read_jsonl_entries(path: Path) -> list[dict[str, Any]]:
                     continue
                 if isinstance(value, dict):
                     entries.append(value)
-    except OSError:
+    except (OSError, UnicodeError):
         return []
     return entries
 

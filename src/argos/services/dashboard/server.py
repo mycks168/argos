@@ -13,12 +13,20 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
 
 
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
+FONT_SIZE_OPTIONS = {"small", "medium", "large"}
+
+
+def _normalize_font_size(value: str) -> str:
+    """ダッシュボードのフォントサイズ設定を正規化する。"""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in FONT_SIZE_OPTIONS else "medium"
 
 
 class DashboardServer:
@@ -31,8 +39,14 @@ class DashboardServer:
         port: int,
         token: str,
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
+        gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
+        default_font_size: str = "medium",
+        location_provider: str = "local",
+        remote_location_url: str = "",
+        remote_location_timeout_seconds: float = 2.0,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -40,8 +54,14 @@ class DashboardServer:
         self._port = port
         self._token = token
         self._camera_snapshot_path = camera_snapshot_path
+        self._gps_device_path = gps_device_path
         self._screensaver_seconds = screensaver_seconds
+        self._default_font_size = _normalize_font_size(default_font_size)
+        self._location_provider = location_provider
+        self._remote_location_url = remote_location_url
+        self._remote_location_timeout_seconds = remote_location_timeout_seconds
         self._control_handler = control_handler
+        self._event_handler = event_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -58,8 +78,14 @@ class DashboardServer:
             self._state,
             self._token,
             self._camera_snapshot_path,
+            self._gps_device_path,
             self._screensaver_seconds,
+            self._default_font_size,
+            self._location_provider,
+            self._remote_location_url,
+            self._remote_location_timeout_seconds,
             self._control_handler,
+            self._event_handler,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -82,8 +108,14 @@ def _create_handler(
     state: DashboardState,
     token: str,
     camera_snapshot_path: Path,
+    gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
+    default_font_size: str = "medium",
+    location_provider: str = "local",
+    remote_location_url: str = "",
+    remote_location_timeout_seconds: float = 2.0,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -95,10 +127,21 @@ def _create_handler(
             path = urlparse(self.path).path
             if path == "/":
                 self._send_html()
+            elif path.startswith("/static/"):
+                self._send_static_file(path)
             elif path == "/api/health":
                 self._send_json({"status": "ok"})
             elif path == "/api/state":
                 self._send_json(state.snapshot())
+            elif path == "/api/location":
+                self._send_json(
+                    read_location(
+                        location_provider,
+                        gps_device_path,
+                        remote_location_url,
+                        remote_location_timeout_seconds,
+                    )
+                )
             elif path == "/api/stream":
                 self._send_sse()
             elif path == "/camera/latest.jpg":
@@ -118,6 +161,8 @@ def _create_handler(
                 payload = self._read_json()
                 if path == "/api/events":
                     response = _apply_event(state, payload)
+                    if event_handler is not None:
+                        event_handler(payload, response)
                     status = HTTPStatus.CREATED
                 else:
                     response = self._apply_control(payload)
@@ -169,12 +214,43 @@ def _create_handler(
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
             self.end_headers()
             self.wfile.write(html)
+
+        def _send_static_file(self, path: str) -> None:
+            """static ディレクトリ内の静的ファイルを返す。"""
+            filename = path.replace("/static/", "", 1)
+            if ".." in filename or filename.startswith("/") or filename.startswith("."):
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
+            try:
+                content = files("argos.services.dashboard.static").joinpath(filename).read_bytes()
+            except FileNotFoundError:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+
+            mime_type = "application/octet-stream"
+            if filename.endswith(".html"):
+                mime_type = "text/html; charset=utf-8"
+            elif filename.endswith(".js"):
+                mime_type = "application/javascript; charset=utf-8"
+            elif filename.endswith(".css"):
+                mime_type = "text/css; charset=utf-8"
+            elif filename.endswith(".png"):
+                mime_type = "image/png"
+            elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+                mime_type = "image/jpeg"
+
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
 
         def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
             """JSONレスポンスを返す。"""
@@ -249,6 +325,29 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
     if event_type == "clear_notifications":
         state.clear_notifications()
         return {"status": "cleared"}
+    if event_type == "overlay":
+        target_slot = _optional_text(payload, "target_slot", 20) or "right"
+        if target_slot not in {"center", "right"}:
+            raise ValueError(f"無効な target_slot です: {target_slot}")
+        state.push_overlay(
+            target_slot=target_slot,
+            overlay_type=_required_text(payload, "overlay_type", 40),
+            title=_required_text(payload, "title", 120),
+            content=_optional_text(payload, "content", 64000),
+            url=_optional_text(payload, "url", 2000),
+            options=payload.get("options"),
+            replace_top=bool(payload.get("replace_top", False)),
+        )
+        return {"status": "overlay_updated"}
+    if event_type == "clear_overlay":
+        target_slot = _optional_text(payload, "target_slot", 20) or "all"
+        if target_slot not in {"center", "right", "all"}:
+            raise ValueError(f"無効な target_slot です: {target_slot}")
+        state.pop_overlay(target_slot)
+        return {"status": "overlay_cleared"}
+    if event_type == "swap_slots":
+        state.swap_slots()
+        return {"status": "slots_swapped"}
     raise ValueError(f"未対応のイベント種別です: {event_type}")
 
 

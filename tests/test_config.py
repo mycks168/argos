@@ -23,6 +23,91 @@ def test_load_agent_provider(monkeypatch):
     assert settings.agent_provider == "codex"
 
 
+def test_load_agent_runner_settings(monkeypatch):
+    """Agent Runner接続設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_URL", "http://127.0.0.1:28765")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_TOKEN", "runner-token")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_HOST", "127.0.0.2")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_PORT", "28766")
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_STATE_DIR", "/tmp/runner")
+
+    settings = load_settings()
+
+    assert settings.agent_runner_url == "http://127.0.0.1:28765"
+    assert settings.agent_runner_token == "runner-token"
+    assert settings.agent_runner_host == "127.0.0.2"
+    assert settings.agent_runner_port == 28766
+    assert settings.agent_runner_state_dir == "/tmp/runner"
+
+
+def test_load_agent_usage_commands(monkeypatch):
+    """エージェント別の利用枠取得コマンドを読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_COMMAND_CODEX", "/tmp/codex-usage")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY", "/tmp/agy-usage")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "60")
+    monkeypatch.setenv("ARGOS_AGENT_USAGE_TIMEOUT_SECONDS", "3")
+
+    settings = load_settings()
+    commands = {command.provider: command.command for command in settings.agent_usage_commands}
+
+    assert commands["codex"] == "/tmp/codex-usage"
+    assert commands["antigravity"] == "/tmp/agy-usage"
+    assert "timeout_seconds" not in commands
+    assert settings.agent_usage_refresh_seconds == 60
+    assert settings.agent_usage_command_timeout_seconds == 3
+
+
+def test_load_wifi_status_refresh_seconds(monkeypatch):
+    """Wi-Fi状態の更新間隔を読み込む。"""
+    monkeypatch.setenv("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "15")
+
+    settings = load_settings()
+
+    assert settings.wifi_status_refresh_seconds == 15
+
+
+def test_load_empty_ptt_gpio_disables_gpio(monkeypatch):
+    """PTT GPIOが空ならGPIO入力を無効化する。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio is None
+
+
+def test_load_ptt_gpio_number(monkeypatch):
+    """PTT GPIOにBCM番号があれば整数として読み込む。"""
+    monkeypatch.setenv("ARGOS_PTT_GPIO", "17")
+
+    settings = load_settings()
+
+    assert settings.ptt_gpio == 17
+
+
+def test_load_agent_system_prompt_settings(monkeypatch):
+    """エージェント共通システムプロンプト設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT_FILE", "/tmp/argos-prompt.md")
+    monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH", "/tmp/argos-prompt-state.json")
+    monkeypatch.setenv("ARGOS_AGENT_SKILLS_DIR", "/tmp/skills")
+
+    settings = load_settings()
+
+    assert settings.agent_system_prompt == "追加指示"
+    assert settings.agent_system_prompt_file == "/tmp/argos-prompt.md"
+    assert settings.agent_system_prompt_state_path == "/tmp/argos-prompt-state.json"
+    assert settings.agent_skills_dir == "/tmp/skills"
+
+
+def test_load_wakeword_score_log_path(monkeypatch):
+    """ウェイクワードスコアログの出力先を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_SCORE_LOG_PATH", "/tmp/argos/wakeword-score.log")
+
+    settings = load_settings()
+
+    assert settings.wakeword_score_log_path == "/tmp/argos/wakeword-score.log"
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
@@ -32,7 +117,7 @@ def test_load_default_slot_uses_pi_home(monkeypatch):
 
     settings = load_settings()
 
-    assert settings.agent_slots[0].cwd == "/home/pi"
+    assert settings.agent_slots[0].cwd == "/opt/argos"
 
 
 def test_load_numbered_slots(monkeypatch):
@@ -46,6 +131,29 @@ def test_load_numbered_slots(monkeypatch):
     assert settings.agent_slots[0].provider == "codex"
     assert settings.agent_slots[1].provider == "antigravity"
     assert settings.agent_slots[1].cwd == "/tmp/b"
+
+
+def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):
+    """スロットごとのVOICEVOX話者IDを読み込む。"""
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_1", "一番,codex,/tmp/a,8")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_2", "二番,antigravity,/tmp/b,14")
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_3", raising=False)
+
+    settings = load_settings()
+
+    assert settings.agent_slots[0].voicevox_speaker == 8
+    assert settings.agent_slots[1].voicevox_speaker == 14
+
+
+def test_load_default_slot_voicevox_speaker(monkeypatch):
+    """単一既定スロットのVOICEVOX話者IDを読み込む。"""
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
+    monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER", "7")
+
+    settings = load_settings()
+
+    assert settings.agent_slots[0].voicevox_speaker == 7
 
 
 def test_load_legacy_codex_slots(monkeypatch):
@@ -80,6 +188,15 @@ def test_load_stt_gateway_token(monkeypatch):
     assert settings.stt_gateway_token == "stt-token"
 
 
+def test_load_voicevox_bearer_token(monkeypatch):
+    """VOICEVOXのBearerトークンを読み込む。"""
+    monkeypatch.setenv("VOICEVOX_BEARER_TOKEN", "voice-token")
+
+    settings = load_settings()
+
+    assert settings.voicevox_bearer_token == "voice-token"
+
+
 def test_load_voicevox_speed_scale(monkeypatch):
     """VOICEVOXの話速設定を読み込む。"""
     monkeypatch.setenv("VOICEVOX_SPEED_SCALE", "1.1")
@@ -87,6 +204,15 @@ def test_load_voicevox_speed_scale(monkeypatch):
     settings = load_settings()
 
     assert settings.voicevox_speed_scale == 1.1
+
+
+def test_load_voicevox_volume_scale(monkeypatch):
+    """VOICEVOXの音量スケール設定を読み込む。"""
+    monkeypatch.setenv("VOICEVOX_VOLUME_SCALE", "1.5")
+
+    settings = load_settings()
+
+    assert settings.voicevox_volume_scale == 1.5
 
 
 def test_load_audio_input_devices(monkeypatch):
@@ -105,6 +231,51 @@ def test_load_audio_state_path(monkeypatch):
     settings = load_settings()
 
     assert settings.audio_state_path == "/tmp/audio-state.json"
+
+
+def test_load_wakeword_settings(monkeypatch):
+    """ウェイクワード設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_WAKEWORD_MODEL_DIR", "/tmp/wakeword")
+    monkeypatch.setenv("ARGOS_WAKEWORD_THRESHOLD", "0.7")
+    monkeypatch.setenv("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "48000")
+    monkeypatch.setenv("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_CHUNK_MS", "100")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "9")
+    monkeypatch.setenv("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "0.8")
+    monkeypatch.setenv("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "2.5")
+    monkeypatch.setenv("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.3")
+    monkeypatch.setenv("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MODEL", "/tmp/silero.onnx")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.4")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.2")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.2")
+    monkeypatch.setenv("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "1.7")
+    monkeypatch.setenv("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", "true")
+
+    settings = load_settings()
+
+    assert settings.wakeword_enabled is True
+    assert settings.wakeword_model_dir == "/tmp/wakeword"
+    assert settings.wakeword_threshold == 0.7
+    assert settings.wakeword_capture_sample_rate == 48000
+    assert settings.wakeword_window_seconds == 2.5
+    assert settings.wakeword_interval_seconds == 0.5
+    assert settings.wakeword_chunk_ms == 100
+    assert settings.wakeword_record_min_seconds == 1.5
+    assert settings.wakeword_record_max_seconds == 9
+    assert settings.wakeword_record_silence_seconds == 0.8
+    assert settings.wakeword_pre_roll_seconds == 2.5
+    assert settings.wakeword_min_actual_seconds == 0.3
+    assert settings.wakeword_endpoint_mode == "vad"
+    assert settings.wakeword_vad_model_path == "/tmp/silero.onnx"
+    assert settings.wakeword_vad_threshold == 0.4
+    assert settings.wakeword_vad_min_silence_seconds == 1.2
+    assert settings.wakeword_vad_check_seconds == 0.2
+    assert settings.wakeword_tts_cooldown_seconds == 1.7
+    assert settings.wakeword_require_stt_wakeword is True
 
 
 def test_load_argos_input_devices_from_comma_text(monkeypatch):
@@ -155,6 +326,8 @@ def test_load_antigravity_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_SANDBOX", "true")
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "30s")
     monkeypatch.setenv("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", "true")
+    monkeypatch.setenv("ARGOS_ACKNOWLEDGEMENT_URL", "http://ack")
+    monkeypatch.setenv("ARGOS_ACKNOWLEDGEMENT_TOKEN", "ack-token")
 
     settings = load_settings()
 
@@ -165,6 +338,8 @@ def test_load_antigravity_settings(monkeypatch):
     assert settings.antigravity_sandbox is True
     assert settings.antigravity_print_timeout == "30s"
     assert settings.antigravity_continue_session is True
+    assert settings.acknowledgement_url == "http://ack"
+    assert settings.acknowledgement_token == "ack-token"
 
 
 def test_load_hermes_settings(monkeypatch):
@@ -311,6 +486,10 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
+    monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
+    monkeypatch.setenv("ARGOS_LOCATION_PROVIDER", "remote")
+    monkeypatch.setenv("ARGOS_REMOTE_LOCATION_URL", "http://example.test/gps")
+    monkeypatch.setenv("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "1.5")
 
     settings = load_settings()
 
@@ -319,3 +498,7 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
     assert settings.dashboard_screensaver_seconds == 12.5
+    assert settings.dashboard_default_font_size == "small"
+    assert settings.location_provider == "remote"
+    assert settings.remote_location_url == "http://example.test/gps"
+    assert settings.remote_location_timeout_seconds == 1.5

@@ -1,0 +1,22 @@
+[Unit]
+Description=ARGOS agent runner
+Documentation=file:@PROJECT_DIR@/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@ARGOS_USER@
+Group=@ARGOS_GROUP@
+WorkingDirectory=@PROJECT_DIR@
+EnvironmentFile=@PROJECT_DIR@/.env
+Environment=HOME=@USER_HOME@
+Environment=PATH=@USER_HOME@/.local/bin:@USER_HOME@/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=@PROJECT_DIR@/.venv/bin/argos-agent-runner
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
+
+[Install]
+WantedBy=multi-user.target

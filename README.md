@@ -5,7 +5,7 @@ ARGOS（Autonomous Road Guardian & Observation System）は、Raspberry Pi の P
 ## 使い方
 
 ```bash
-cd /home/pi/argos
+cd /opt/argos
 uv sync --extra dev
 cp .env.example .env
 uv run argos
@@ -24,12 +24,13 @@ DRY_RUN では `/next` で Codex スロット切替、`/reset` で現在スロ�
 サービスとして常駐させる場合:
 
 ```bash
-cd /home/pi/argos
+cd /opt/argos
 uv sync
-sudo cp systemd/argos.service /etc/systemd/system/argos.service
-sudo systemctl daemon-reload
+ARGOS_PROJECT_DIR=/opt/argos ARGOS_SERVICE_USER=argos ARGOS_SERVICE_GROUP=argos ./scripts/install-systemd-services.sh
 sudo systemctl enable --now argos.service
 ```
+
+ARGOSは `network-online.target` と `tailscale-online.target` の後に起動します。Tailscale越しの VOICEVOX や周辺サービスを使う場合、追加の依存サービスは実機側のsystemd drop-inで指定してください。
 
 状態確認とログ確認:
 
@@ -38,19 +39,67 @@ systemctl status argos.service
 journalctl -u argos.service -f
 ```
 
-設定を変更した場合は `.env` を更新してから再起動します。
+設定を変更した場合は `.env` を更新してから再起動します。tts-filter を使う場合は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` が一致している必要があります。`argos-install --apply` または `--update` はこの値を自動で揃えます。
 
 ```bash
 sudo systemctl restart argos.service
 ```
 
+## ARGOS一式インストーラ
+
+ARGOS本体、TTSフィルター、相槌API、リマインダー、スキルなどをまとめて導入するためのインストーラがあります。まずdry-runで計画を確認します。
+
+```bash
+uv run argos-install
+uv run argos-install --json
+```
+
+実際に `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
+
+```bash
+uv run argos-install --apply
+```
+
+別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、`uv` 導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
+
+```bash
+sudo git clone https://github.com/mycks168/argos.git /opt/argos
+cd /opt/argos
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
+```
+
+`develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
+
+`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`--configure` では、利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。空入力の場合は既存設定を維持します。
+
+```bash
+sudo -iu argos
+codex
+agy
+claude
+hermes
+```
+
+更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
+
+```bash
+cd /opt/argos
+sudo env "PATH=$PATH" uv run argos-install --update
+```
+
+対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
+ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
+
 複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 
 ```text
-AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
+AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 ```
 
 ## PTT 操作
+
+`ARGOS_PTT_GPIO` にBCM番号を指定するとGPIOのPTTスイッチを使います。UbuntuなどGPIOがない環境では空欄にするとGPIO入力を初期化しません。
 
 - PTT ON: 録音開始
 - PTT OFF: 録音停止、文字起こし、Codex 実行、読み上げ
@@ -60,10 +109,33 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - 処理中に押し続ける: 再生中の音声を止め、そのまま録音開始
 
 処理中の読み上げを止めて次の録音を始めた場合、前の処理の終了タイミングでは録音中状態を維持し、ボタン解放で録音停止と送信へ進みます。
+本人確認でロック中の場合は、短いキーワード発話を破棄しないよう、短押しでも録音として処理します。ただし短押し2回はロック中でも録音を破棄し、Codex スロット切替を優先します。
+録音WAVは `/tmp/argos/utterance-*.wav` のユニークな一時ファイルとして作成し、STT処理後に削除します。STTゲートウェイへ送るmultipartファイル名も実際の録音ファイル名に合わせます。これにより、次の録音開始で前の録音ファイルを消してしまう競合を避けます。起動時には古い録音一時ファイルも掃除します。
+短い本人確認キーワードがSTTで空文字になりにくいよう、録音停止後にWAVの前後へ短い無音を追加してから文字起こしへ渡します。
+
+## ウェイクワード
+
+`ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
+自宅などSTTゲートウェイが近く誤検知を抑えたい環境では、`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` にすると、文字起こし結果が「アルゴス」などの呼びかけから始まる場合だけ処理します。ダッシュボードのマイクOFFボタンを押すと、PTTとウェイクワードの受付を一時停止できます。
+
+モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
+
+```text
+models/wakeword/
+  argos.onnx
+  melspectrogram.onnx
+  embedding_model.onnx
+  argos_eval.json
+  silero_vad_v6.onnx
+```
+
+既定は無効です。車内ノイズで誤検知する場合は `ARGOS_WAKEWORD_THRESHOLD` を上げます。VADモデルを別の場所に置く場合は `ARGOS_WAKEWORD_VAD_MODEL` で指定します。ONNX Runtime は標準依存として入ります。
 
 ## 読み上げ
 
 Codex の応答は `--json` の JSONL イベントから取得し、句読点や改行で分割して VOICEVOX に順次投入します。キャンセル時は再生中の音声と未再生チャンクを破棄します。
+
+エージェント利用枠表示は `services/agent-limit/update_limits.py` が生成するJSONを読みます。インストーラーはこの更新スクリプトを5分おきに動かすcronをARGOS実行ユーザーへ登録します。
 
 `ARGOS_LCD_ENABLED=true` の場合、読み上げる文を ST7789 LCD にも表示します。日本語表示には IPA 系フォントを使います。夜間でも明るくなりすぎないよう、LCDは黒背景に白文字で表示します。
 
@@ -80,6 +152,8 @@ Codex の応答は `--json` の JSONL イベントから取得し、句読点や
 
 Codex CLI が途中イベントを出した場合は、その差分から順に処理します。CLI 側が最終回答までイベントを出さない場合でも、最終回答は上記の区切りで分割して読み上げます。
 
+短い読み上げ文はTTSキャッシュに保存し、同じテキストとVOICEVOX話者IDの組み合わせでは再合成を省略します。`ARGOS_TTS_CACHE_ENABLED=false` で無効化できます。
+
 Codex を呼び出した直後は、作業を始めたことを短い音声で通知します。応答が遅い場合は、待機中であることを一定間隔で追加通知します。通知文はAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選びます。待機通知の再生中にCodex本文が届いた場合は、待機通知の再生完了後に本文を読み上げます。
 
 最初の発話処理時は、前回の利用時刻に応じて短い挨拶を読み上げます。10分以内の再利用では挨拶を省略し、日付が変わった場合は時間帯に合わせて挨拶します。状態は `ARGOS_GREETING_STATE_PATH` のJSONへ保存します。
@@ -88,13 +162,15 @@ ARGOS 起動時は、HDMIダッシュボードに短いスプラッシュアニ�
 
 ## 本人確認
 
-`ARGOS_AUTH_ENABLED=true` にすると、本人確認が済むまで発話をCodexへ送りません。現段階では音声キーワード解除に対応しています。キーワードは平文では保存せず、次のコマンドでハッシュ化して `.env` の `ARGOS_AUTH_KEYWORD_HASH` に設定します。
+`ARGOS_AUTH_ENABLED=true` にすると、本人確認が済むまで発話をCodexへ送りません。現段階では音声キーワード解除に対応しています。キーワードは平文では保存せず、次のコマンドでハッシュ化して `.env` の `ARGOS_AUTH_KEYWORD_HASH` に設定します。STTの表記ゆれを許可したい場合は、複数のハッシュをセミコロン区切りで設定できます。
+本人確認の繰り返し案内や警告音は、PTT録音中には再生しません。案内音声がマイクへ回り込んでキーワード認識を妨げることを避けるためです。
 
 ```bash
 uv run scripts/hash-auth-keyword.py
 ```
 
 ロック中の発話は文字起こしだけに使い、キーワードが一致した場合はロックを解除します。解除キーワードそのものはCodexへ送りません。認証済みの有効期限が待機中に切れた場合は、ダッシュボード表示も自動で「ロック中」へ戻ります。
+ロック中にPTTを押している間は、ダッシュボードに「本人確認録音中」と表示します。PTTを離した後は「本人確認中」と表示し、押下が認識されたかを画面で確認できるようにします。
 
 カメラ照合を使う場合は、まず顔サンプルを登録します。
 
@@ -136,11 +212,17 @@ ARGOS_DASHBOARD_TOKEN=<ランダムなトークン>
 ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 ```
 
-ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、現在のエージェントスロット、会話履歴、外部通知を表示します。1920x440では3列、狭い画面では通知欄が下へ回り込みます。
+`ARGOS_DASHBOARD_TOKEN` が空の場合、`argos-install --apply` または `--update` 実行時にランダムなトークンを自動生成します。ミュート、マイクOFF、音量変更などの画面操作は、このトークンで保護された `/api/control` を使います。
+
+ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、現在のエージェントスロット、Wi-Fi接続状態、会話履歴、外部通知を表示します。1920x440では3列、800x600程度では通知欄を右側に残すコンパクト3列、さらに狭い画面では通知欄を下へ回り込ませます。
 会話更新時は通知欄を再描画しないため、表示中の画像を安定して保持します。
 中央の会話欄と右側の通知欄はタッチ操作で縦にスクロールできます。会話欄は現在のエージェントスロットごとに切り替わり、末尾を表示しているときだけ新しい会話へ自動追従するため、過去ログを読んでいる途中で表示位置は変わりません。左側パネルにはスロット一覧を横並びチップで表示し、スロット数が増えた場合は一覧だけを横にスクロールできます。裏で完了したスロットは未読表示にします。表示中ではないスロットの応答は読み上げず、そのスロットへ切り替えたときに句読点単位で分割して読み上げます。
-`ARGOS_DASHBOARD_SCREENSAVER_SECONDS` 秒間操作がない場合は、黒い全画面表示へ切り替わります。0以下にすると無効化できます。現段階ではバックライトやHDMI出力は消しません。タッチ操作に加えて、PTT録音開始でも黒表示を解除します。
-左側のミュートボタンで読み上げを一時停止できます。ミュート中は再生中の音声を止め、解除後はキューに残っている読み上げから再開します。ミュート状態はボタン表示で示し、録音中などの動作表示はそのまま維持します。
+`ARGOS_DASHBOARD_SCREENSAVER_SECONDS` 秒間操作がない場合は、ロック中も黒い全画面表示へ切り替わります。0以下にすると無効化できます。現段階ではバックライトやHDMI出力は消しません。タッチ操作に加えて、PTT録音開始でも黒表示を解除します。
+地図オーバーレイの現在地は、既定ではローカルのgpsdまたはGPSデバイスから取得します。外部端末のGPS APIを使う場合は、`.env` で `ARGOS_LOCATION_PROVIDER=remote` と `ARGOS_REMOTE_LOCATION_URL` を設定します。
+ARGOSロゴ直下のミュートボタンで読み上げを一時停止できます。ミュート中は再生中の音声を止め、解除後はキューに残っている読み上げから再開します。ミュート状態はボタン表示で示し、録音中などの動作表示はそのまま維持します。
+同じ操作行のマイクOFFボタンで、PTTとウェイクワードの受付を一時停止できます。もう一度押すとマイク受付を再開します。Wi-Fi状態は接続中だけARGOSロゴ横に表示します。
+左側のフォントサイズボタンで、ダッシュボードの主要テキストを `小`、`中`、`大` から切り替えられます。選択値はブラウザのローカルストレージに保存され、キオスク画面の再読み込み後も維持されます。未保存時の初期値は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` で指定できます。
+`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
 文字起こし、Codex、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、右側の通知欄へ赤色で表示します。同じエラーが連続した場合は1件にまとめます。
 
 `/tmp/argos/camera-latest.jpg` に静止画を置くと、`/camera/latest.jpg` で配信できます。通知の `image_url` にこのURLを指定すると、カメラ画像も表示できます。
@@ -151,7 +233,7 @@ ChromiumでHDMI画面へ全画面表示する場合:
 ./scripts/open-dashboard-kiosk.sh
 ```
 
-キオスク画面は専用のChromiumプロフィールを日本語モードで使います。OSキーリングと翻訳UIは使用せず、ダッシュボード上のマウスカーソルも非表示にします。インストーラーは翻訳バーを無効化するChromium管理ポリシーを `/etc/chromium/policies/managed/` に配置します。
+キオスク画面は専用のChromiumプロフィールを日本語モードで使います。OSキーリング、翻訳UI、Googleサインイン、同期UIは使用せず、ダッシュボード上のマウスカーソルも非表示にします。インストーラーはChromium管理ポリシーを `/etc/chromium/policies/managed/` と `/etc/chromium-browser/policies/managed/` に配置します。起動スクリプトはUbuntuとRaspberry Pi OSの両方を考慮し、`xset` と `gsettings` でスクリーンセーバーとロック画面を可能な範囲で無効化します。
 
 ユーザーsystemdで自動表示する場合:
 
@@ -171,7 +253,14 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 ```
 
 通知では `image_url` と `link_url` も指定できます。会話追加は `user_message` または `agent_message`、状態更新は `status`、通知削除は `clear_notifications` を `type` に指定します。
+通知イベントに `sound: true` や `speak: true` を付けると、ARGOS本体が画面を起こし、通知音または通知本文の読み上げを行います。
 ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。変更した音量とミュート状態は `ARGOS_AUDIO_STATE_PATH` に保存し、ARGOS再起動後も前回の状態を復元します。
+
+ttyd がインストール済みなら、tmux セッションを中央または右ペインへ表示できます。既定では `127.0.0.1:7681` に ttyd を起動し、`argos-terminal` セッションを iframe 表示します。Webターミナルはシェル操作権限を持つため、外部公開せずローカル表示に閉じてください。
+
+```bash
+uv run scripts/show-ttyd-tmux-overlay.py --target-slot center --replace-top
+```
 
 `ARGOS_DASHBOARD_HOST=0.0.0.0` ではLAN内の他端末から画面も閲覧できます。会話履歴を含むため、インターネットへ直接公開しないでください。
 
@@ -183,8 +272,18 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 - Codex CLI: `codex exec` と `codex exec resume`
 - Hermes Agent CLI: `hermes chat -q`
 
-Codex のセッションIDは `CODEX_HOME/argos-sessions.json` にスロットごとに保存します。`--json` の標準出力にセッションIDが出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルからIDを補完します。サービス再起動後も保存済みIDを使って同じセッションを再開します。`/reset` を入力すると、現在スロットの保存済みIDも削除します。
+Codex のセッションIDは `ARGOS_AGENT_STATE_PATH` にスロットごとに保存します。`--json` の標準出力にセッションIDが出ない場合は、`CODEX_HOME/sessions` の直近セッションファイルからIDを補完します。サービス再起動後も保存済みIDを使って同じセッションを再開します。`/reset` を入力すると、現在スロットの保存済みIDも削除します。
 
-Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
+ARGOS共通のシステム指示は各スロットの会話開始時だけエージェントへ渡します。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE`、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定できます。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、`/reset` 後は再度注入します。
+
+Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目に話者IDを指定し、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8` のように設定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
+
+ARGOS本体の再起動で実行中エージェントを巻き込まない構成にする場合は、別サービスとして Agent Runner を起動します。
+
+```bash
+uv run argos-agent-runner
+```
+
+ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。
 
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

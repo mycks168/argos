@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -34,11 +35,17 @@ class AuthGate:
         self._failure_threshold = failure_threshold
         self._trusted_until: datetime | None = None
         self._failures = 0
+        self._has_authenticated_once = False
 
     @property
     def enabled(self) -> bool:
         """認証ゲートが有効か返す。"""
         return self._enabled
+
+    @property
+    def has_authenticated_once(self) -> bool:
+        """一度でも認証されたか返す。"""
+        return self._has_authenticated_once
 
     def is_authenticated(self, now: datetime | None = None) -> bool:
         """現在の認証状態を返す。"""
@@ -53,6 +60,7 @@ class AuthGate:
             return
         current = now or datetime.now().astimezone()
         self._trusted_until = current + self._trust_duration
+        self._has_authenticated_once = True
 
     def verify_keyword(self, phrase: str, now: datetime | None = None) -> AuthResult:
         """音声キーワードでロック解除を試みる。"""
@@ -61,7 +69,7 @@ class AuthGate:
         if not self._keyword_hash:
             self._failures += 1
             return AuthResult(False, "音声キーワードが未設定です。", self._failures >= self._failure_threshold)
-        if verify_keyword_hash(phrase.strip(), self._keyword_hash):
+        if verify_keyword_hashes(phrase.strip(), self._keyword_hash):
             self._failures = 0
             self.mark_activity(now)
             return AuthResult(True, "本人確認しました。")
@@ -100,3 +108,16 @@ def verify_keyword_hash(keyword: str, encoded_hash: str) -> bool:
         return False
     actual_digest = hashlib.pbkdf2_hmac("sha256", keyword.encode("utf-8"), salt, iterations)
     return hmac.compare_digest(actual_digest, expected_digest)
+
+
+def verify_keyword_hashes(keyword: str, encoded_hashes: str) -> bool:
+    """複数の保存済みハッシュのいずれかに音声キーワードが一致するか判定する。"""
+    for encoded_hash in _split_keyword_hashes(encoded_hashes):
+        if verify_keyword_hash(keyword, encoded_hash):
+            return True
+    return False
+
+
+def _split_keyword_hashes(encoded_hashes: str) -> list[str]:
+    """セミコロン、カンマ、改行区切りのキーワードハッシュを配列へ分割する。"""
+    return [item.strip() for item in re.split(r"[;,\n]+", encoded_hashes) if item.strip()]

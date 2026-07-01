@@ -36,6 +36,22 @@ class DashboardState:
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
+        self._microphone = {"enabled": True, "updated_at": _now_iso()}
+        self._network = {
+            "wifi": {
+                "connected": False,
+                "interface": "",
+                "ssid": "",
+                "quality": None,
+                "level_dbm": None,
+                "updated_at": _now_iso(),
+            }
+        }
+        self._agent_usage: dict[str, dict[str, Any]] = {}
+        self._overlay = {"active": False, "updated_at": _now_iso()}
+        self._display_activity = {"sequence": 0, "updated_at": _now_iso()}
+        self._slot_stack_center = [{"type": "conversation", "title": "会話", "created_at": _now_iso()}]
+        self._slot_stack_right = [{"type": "notifications", "title": "通知", "created_at": _now_iso()}]
 
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
@@ -45,9 +61,21 @@ class DashboardState:
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
                 "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
+                "agent_usage": {
+                    "current": deepcopy(self._agent_usage.get(str(self._agent["provider"]).lower())),
+                    "providers": deepcopy(self._agent_usage),
+                },
                 "audio": deepcopy(self._audio),
+                "microphone": deepcopy(self._microphone),
+                "network": deepcopy(self._network),
+                "overlay": deepcopy(self._overlay),
+                "display_activity": deepcopy(self._display_activity),
                 "messages": deepcopy(list(self._current_messages_locked())),
                 "notifications": deepcopy(list(self._notifications)),
+                "slot_stacks": {
+                    "center": deepcopy(self._slot_stack_center),
+                    "right": deepcopy(self._slot_stack_right),
+                },
             }
 
     def set_status(self, code: str, label: str) -> None:
@@ -112,6 +140,49 @@ class DashboardState:
             self._audio = {**self._audio, "volume": max(0, min(100, int(volume))), "updated_at": _now_iso()}
             self._publish_locked()
 
+    def set_microphone_enabled(self, enabled: bool) -> None:
+        """マイク入力の受付状態を更新する。"""
+        with self._lock:
+            self._microphone = {"enabled": bool(enabled), "updated_at": _now_iso()}
+            self._publish_locked()
+
+    def set_wifi_status(self, status: dict[str, Any]) -> None:
+        """Wi-Fi接続状態を更新する。"""
+        with self._lock:
+            self._network = {
+                **self._network,
+                "wifi": {
+                    "connected": bool(status.get("connected", False)),
+                    "interface": str(status.get("interface", "")),
+                    "ssid": str(status.get("ssid", "")),
+                    "quality": status.get("quality"),
+                    "level_dbm": status.get("level_dbm"),
+                    "updated_at": _now_iso(),
+                },
+            }
+            self._publish_locked()
+
+    def set_agent_usage(self, provider: str, usage: dict[str, Any]) -> None:
+        """エージェントプロバイダ別の利用枠表示を更新する。"""
+        with self._lock:
+            normalized = provider.strip().lower()
+            self._agent_usage[normalized] = {**deepcopy(usage), "provider": normalized}
+            self._publish_locked()
+
+    def has_agent_usage(self, provider: str) -> bool:
+        """指定プロバイダの利用枠表示が既にあるか返す。"""
+        with self._lock:
+            return provider.strip().lower() in self._agent_usage
+
+    def wake_display(self) -> None:
+        """音声再生などの利用者向け出力に合わせて画面を起こす。"""
+        with self._lock:
+            self._display_activity = {
+                "sequence": int(self._display_activity["sequence"]) + 1,
+                "updated_at": _now_iso(),
+            }
+            self._publish_locked()
+
     def add_message(self, role: str, text: str, streaming: bool = False) -> str:
         """会話メッセージを追加し、メッセージIDを返す。"""
         message_id = uuid.uuid4().hex
@@ -127,6 +198,26 @@ class DashboardState:
                 }
             )
             self._message_slots[message_id] = self._current_slot_key
+            self._cleanup_message_slots_locked()
+            self._publish_locked()
+        return message_id
+
+    def add_message_to_slot(self, name: str, provider: str, role: str, text: str) -> str:
+        """指定スロットへ会話メッセージを追加し、メッセージIDを返す。"""
+        message_id = uuid.uuid4().hex
+        key = _slot_key(name, provider)
+        with self._lock:
+            self._ensure_slot_locked(name, provider)
+            self._messages_by_slot.setdefault(key, deque(maxlen=self._max_messages)).append(
+                {
+                    "id": message_id,
+                    "role": role,
+                    "text": text,
+                    "streaming": False,
+                    "created_at": _now_iso(),
+                }
+            )
+            self._message_slots[message_id] = key
             self._cleanup_message_slots_locked()
             self._publish_locked()
         return message_id
@@ -227,6 +318,108 @@ class DashboardState:
         if messages is None:
             return None
         return next((message for message in messages if message["id"] == message_id), None)
+
+    def set_overlay(
+        self,
+        overlay_type: str,
+        title: str,
+        content: str = "",
+        url: str = "",
+        options: dict[str, Any] | None = None,
+        target_slot: str = "right",
+    ) -> None:
+        """後方互換用のオーバーレイ設定。内部的に push_overlay を呼び出す。"""
+        self.push_overlay(target_slot, overlay_type, title, content, url, options)
+
+    def clear_overlay(self, target_slot: str = "all") -> None:
+        """後方互換用のオーバーレイ消去。内部的に pop_overlay を呼び出す。"""
+        self.pop_overlay(target_slot)
+
+    def push_overlay(
+        self,
+        target_slot: str,
+        overlay_type: str,
+        title: str,
+        content: str = "",
+        url: str = "",
+        options: dict[str, Any] | None = None,
+        replace_top: bool = False,
+    ) -> None:
+        """指定したスロットにオーバーレイを表示する。"""
+        with self._lock:
+            stack = self._slot_stack_center if target_slot == "center" else self._slot_stack_right
+            item = {
+                "type": overlay_type,
+                "title": title,
+                "content": content,
+                "url": url,
+                "options": deepcopy(options) if options is not None else {},
+                "created_at": _now_iso(),
+            }
+            if replace_top and len(stack) > 1:
+                stack[-1] = item
+            else:
+                stack.append(item)
+            # 互換用の _overlay を更新
+            self._overlay = {
+                "active": True,
+                "type": overlay_type,
+                "title": title,
+                "content": content,
+                "url": url,
+                "options": deepcopy(options) if options is not None else {},
+                "updated_at": _now_iso(),
+            }
+            self._publish_locked()
+
+    def pop_overlay(self, target_slot: str) -> None:
+        """指定したスロット（またはすべて）から一時コンテンツを消去（スタックからPop）。"""
+        with self._lock:
+            slots = ["center", "right"] if target_slot == "all" else [target_slot]
+            for s in slots:
+                stack = self._slot_stack_center if s == "center" else self._slot_stack_right
+                if len(stack) > 1:
+                    stack.pop()
+            # 互換用 _overlay の更新
+            has_active = len(self._slot_stack_center) > 1 or len(self._slot_stack_right) > 1
+            if not has_active:
+                self._overlay = {
+                    "active": False,
+                    "updated_at": _now_iso(),
+                }
+            else:
+                active_stack = self._slot_stack_right if len(self._slot_stack_right) > 1 else self._slot_stack_center
+                self._overlay = {
+                    "active": True,
+                    "type": active_stack[-1]["type"],
+                    "title": active_stack[-1]["title"],
+                    "content": active_stack[-1].get("content", ""),
+                    "url": active_stack[-1].get("url", ""),
+                    "options": deepcopy(active_stack[-1].get("options", {})),
+                    "updated_at": _now_iso(),
+                }
+            self._publish_locked()
+
+    def swap_slots(self) -> None:
+        """左右のスロットの表示内容を入れ替える（スタック全体を交換）。"""
+        with self._lock:
+            self._slot_stack_center, self._slot_stack_right = self._slot_stack_right, self._slot_stack_center
+            # 互換用 _overlay の更新
+            has_active = len(self._slot_stack_center) > 1 or len(self._slot_stack_right) > 1
+            if has_active:
+                active_stack = self._slot_stack_right if len(self._slot_stack_right) > 1 else self._slot_stack_center
+                self._overlay = {
+                    "active": True,
+                    "type": active_stack[-1]["type"],
+                    "title": active_stack[-1]["title"],
+                    "content": active_stack[-1].get("content", ""),
+                    "url": active_stack[-1].get("url", ""),
+                    "options": deepcopy(active_stack[-1].get("options", {})),
+                    "updated_at": _now_iso(),
+                }
+            else:
+                self._overlay = {"active": False, "updated_at": _now_iso()}
+            self._publish_locked()
 
     def _current_messages_locked(self) -> deque[dict[str, Any]]:
         """現在スロットの会話履歴を返す。"""

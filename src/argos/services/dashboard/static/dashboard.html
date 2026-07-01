@@ -10,9 +10,127 @@
       font-family: "Noto Sans CJK JP", "IPAexGothic", "IPAGothic", sans-serif;
       background: #070b0f;
       color: #edf3f7;
+      --agent-name-font-size: 20px;
+      --clock-font-size: 36px;
+      --control-font-size: 13px;
+      --message-font-size: 18px;
+      --notice-text-font-size: 14px;
+      --notice-title-font-size: 16px;
+      --slot-font-size: 12px;
+      --status-font-size: 21px;
+      --date-font-size: 16px;
+    }
+    body[data-font-size="small"] {
+      --agent-name-font-size: 16px;
+      --clock-font-size: 28px;
+      --control-font-size: 11px;
+      --message-font-size: 14px;
+      --notice-text-font-size: 12px;
+      --notice-title-font-size: 13px;
+      --slot-font-size: 10px;
+      --status-font-size: 17px;
+      --date-font-size: 12px;
+    }
+    body[data-font-size="large"] {
+      --agent-name-font-size: 23px;
+      --clock-font-size: 40px;
+      --control-font-size: 14px;
+      --message-font-size: 21px;
+      --notice-text-font-size: 16px;
+      --notice-title-font-size: 18px;
+      --slot-font-size: 13px;
+      --status-font-size: 24px;
+      --date-font-size: 18px;
     }
     *, *::before, *::after { box-sizing: border-box; cursor: none !important; }
     body { margin: 0; min-height: 100vh; background: #070b0f; cursor: none; overflow: hidden; }
+    body::before,
+    body::after {
+      content: "";
+      position: fixed;
+      inset: 5px;
+      z-index: 39;
+      border-radius: 14px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 160ms ease, box-shadow 160ms ease;
+    }
+    body::before {
+      border: 6px solid transparent;
+      box-shadow: 0 0 0 transparent;
+    }
+    body::after {
+      padding: 6px;
+      background: linear-gradient(90deg, transparent 0%, var(--status-frame-color, transparent) 18%, transparent 36%, transparent 64%, var(--status-frame-color, transparent) 82%, transparent 100%);
+      background-size: 220% 100%;
+      -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      -webkit-mask-composite: xor;
+      mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+      mask-composite: exclude;
+    }
+    body[data-status-code="listening"],
+    body[data-status-code="auth_listening"] {
+      --status-frame-color: #f4d35e;
+    }
+    body[data-status-code="thinking"],
+    body[data-status-code="authenticating"] {
+      --status-frame-color: #5ed3ff;
+    }
+    body[data-status-code="transcribing"] {
+      --status-frame-color: #ff9f43;
+    }
+    body[data-status-code="speaking"] {
+      --status-frame-color: #6ee7a8;
+    }
+    body[data-status-code="locked"],
+    body[data-status-code="alert"],
+    body[data-status-code="error"] {
+      --status-frame-color: #ff6b4a;
+    }
+    body[data-status-code="listening"]::before,
+    body[data-status-code="auth_listening"]::before {
+      opacity: 1;
+      border-color: rgba(244, 211, 94, 0.9);
+      box-shadow: 0 0 18px rgba(244, 211, 94, 0.58), inset 0 0 16px rgba(244, 211, 94, 0.18);
+      animation: listening-frame-pulse 1.05s ease-in-out infinite alternate;
+    }
+    body[data-status-code="thinking"]::before,
+    body[data-status-code="authenticating"]::before {
+      opacity: 1;
+      border-color: rgba(94, 211, 255, 0.72);
+      box-shadow: 0 0 16px rgba(94, 211, 255, 0.38), inset 0 0 14px rgba(94, 211, 255, 0.12);
+    }
+    body[data-status-code="transcribing"]::before {
+      opacity: 1;
+      border-color: rgba(255, 159, 67, 0.78);
+      box-shadow: 0 0 17px rgba(255, 159, 67, 0.42), inset 0 0 14px rgba(255, 159, 67, 0.14);
+    }
+    body[data-status-code="thinking"]::after,
+    body[data-status-code="authenticating"]::after,
+    body[data-status-code="transcribing"]::after {
+      opacity: 1;
+      animation: status-frame-flow 1.7s linear infinite;
+    }
+    body[data-status-code="speaking"]::before {
+      opacity: 1;
+      border-color: rgba(110, 231, 168, 0.62);
+      box-shadow: 0 0 14px rgba(110, 231, 168, 0.32), inset 0 0 12px rgba(110, 231, 168, 0.1);
+    }
+    body[data-status-code="locked"]::before,
+    body[data-status-code="alert"]::before,
+    body[data-status-code="error"]::before {
+      opacity: 1;
+      border-color: rgba(255, 107, 74, 0.72);
+      box-shadow: 0 0 18px rgba(255, 107, 74, 0.38), inset 0 0 14px rgba(255, 107, 74, 0.12);
+    }
+    @keyframes listening-frame-pulse {
+      from { box-shadow: 0 0 10px rgba(244, 211, 94, 0.34), inset 0 0 10px rgba(244, 211, 94, 0.12); }
+      to { box-shadow: 0 0 24px rgba(244, 211, 94, 0.72), inset 0 0 20px rgba(244, 211, 94, 0.22); }
+    }
+    @keyframes status-frame-flow {
+      from { background-position: 220% 0; }
+      to { background-position: -220% 0; }
+    }
     .splash {
       position: fixed;
       inset: 0;
@@ -83,10 +201,10 @@
     .status-panel { position: relative; padding-left: 54px; }
     .volume-control {
       position: absolute;
-      left: 13px;
+      left: 10px;
       top: 16px;
       bottom: 16px;
-      width: 26px;
+      width: 38px;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -94,7 +212,7 @@
     }
     .volume-slider {
       flex: 1;
-      width: 26px;
+      width: 38px;
       min-height: 180px;
       accent-color: #69b7e4;
       writing-mode: vertical-lr;
@@ -102,9 +220,9 @@
       cursor: pointer !important;
     }
     .volume-label {
-      width: 32px;
+      width: 38px;
       color: #aebdc6;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 800;
       text-align: center;
       font-variant-numeric: tabular-nums;
@@ -112,8 +230,61 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
-    .clock { margin-top: 18px; color: #f4d35e; font-size: 36px; font-variant-numeric: tabular-nums; }
-    .date { margin-top: 4px; color: #aebdc6; font-size: 15px; }
+    .brand-controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 5px;
+      margin-top: 8px;
+    }
+    .brand-controls .control-button {
+      min-width: 0;
+      padding: 7px 8px;
+    }
+    .network-status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 7px;
+      min-width: 0;
+      color: #8ca0ad;
+      font-size: var(--date-font-size);
+      font-weight: 800;
+    }
+    .wifi-icon {
+      display: inline-flex;
+      align-items: flex-end;
+      gap: 2px;
+      height: 16px;
+      width: 23px;
+    }
+    .wifi-icon span {
+      display: block;
+      width: 4px;
+      border-radius: 2px 2px 0 0;
+      background: #354855;
+    }
+    .wifi-icon span:nth-child(1) { height: 5px; }
+    .wifi-icon span:nth-child(2) { height: 8px; }
+    .wifi-icon span:nth-child(3) { height: 11px; }
+    .wifi-icon span:nth-child(4) { height: 14px; }
+    .network-status[data-level="1"] .wifi-icon span:nth-child(-n+1),
+    .network-status[data-level="2"] .wifi-icon span:nth-child(-n+2),
+    .network-status[data-level="3"] .wifi-icon span:nth-child(-n+3),
+    .network-status[data-level="4"] .wifi-icon span:nth-child(-n+4) {
+      background: #69b7e4;
+      box-shadow: 0 0 8px rgba(105, 183, 228, 0.45);
+    }
+    .network-status[data-connected="false"] {
+      display: none;
+    }
+    .network-label {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 150px;
+    }
+    .clock { margin-top: 0; color: #f4d35e; font-size: var(--clock-font-size); font-variant-numeric: tabular-nums; }
+    .date { margin-top: 0; color: #aebdc6; font-size: 18px; }
     .agent {
       margin-top: 18px;
       padding: 9px 10px;
@@ -121,8 +292,65 @@
       background: #101820;
     }
     .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .agent-name { margin-top: 3px; color: #edf3f7; font-size: 20px; font-weight: 800; overflow-wrap: anywhere; }
+    .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
     .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .agent {
+      margin-top: 10px;
+      padding: 6px 8px;
+      border-left: 3px solid #69b7e4;
+      background: #101820;
+    }
+    .agent-usage {
+      display: none;
+      margin-top: 8px;
+      padding: 6px 8px;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #0d151c;
+      color: #aebdc6;
+      font-size: var(--date-font-size);
+      box-sizing: border-box;
+    }
+    .agent-usage.is-visible { display: block; }
+    .agent-usage-title {
+      color: #8ca0ad;
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .agent-usage-provider {
+      color: #f4d35e;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .agent-usage-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .agent-usage-label { color: #edf3f7; font-weight: 800; }
+    .agent-usage-value { color: #f4d35e; font-weight: 800; font-variant-numeric: tabular-nums; display: flex; align-items: baseline; gap: 4px; }
+    .agent-usage-value-text { color: #edf3f7; font-weight: 800; word-break: break-all; }
+    .agent-usage-reset { color: #8ca0ad; font-size: 11px; font-weight: normal; }
+    .agent-usage-error { margin-top: 4px; color: #ff8c42; font-weight: 700; font-size: 12px; overflow-wrap: anywhere; }
+    .agent-usage-row-wrapper {
+      margin-top: 4px;
+    }
+    .agent-usage-progress-container {
+      width: 100%;
+      height: 6px;
+      background: #20303c;
+      border-radius: 3px;
+      margin-top: 3px;
+      overflow: hidden;
+    }
+    .agent-usage-progress-bar {
+      height: 100%;
+      border-radius: 3px;
+      transition: width 0.3s ease;
+    }
     .slots {
       display: flex;
       gap: 6px;
@@ -145,7 +373,7 @@
       color: #aebdc6;
       padding: 5px 9px;
       font: inherit;
-      font-size: 12px;
+      font-size: var(--slot-font-size);
       font-weight: 800;
       line-height: 1.2;
       text-align: center;
@@ -157,15 +385,18 @@
     .slot-button[data-unread="true"] { border-color: #f4d35e; color: #f4d35e; background: #211d0e; }
     .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
-      display: flex; align-items: center; gap: 10px; margin-top: 22px;
-      font-size: 21px; font-weight: 700;
+      display: flex; align-items: center; gap: 10px; margin-top: 10px;
+      font-size: var(--status-font-size); font-weight: 700;
     }
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
+    .status[data-code="transcribing"] .status-dot { background: #ff9f43; box-shadow: 0 0 10px #ff9f43; }
     .status[data-code="speaking"] .status-dot { background: #69b7e4; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
+    .status[data-code="auth_listening"] .status-dot { background: #ff8c42; box-shadow: 0 0 10px #ff8c42; }
+    .status[data-code="authenticating"] .status-dot { background: #f4d35e; }
     .status[data-code="muted"] .status-dot { background: #8ca0ad; }
     .status[data-code="alert"] .status-dot { background: #ff2e2e; box-shadow: 0 0 14px #ff2e2e; }
     .status[data-code="error"] .status-dot { background: #ff6b6b; }
@@ -176,7 +407,7 @@
       border-radius: 8px;
       padding: 8px 12px;
       font: inherit;
-      font-size: 13px;
+      font-size: var(--control-font-size);
       font-weight: 800;
       text-align: center;
       white-space: nowrap;
@@ -190,6 +421,37 @@
       opacity: 1;
     }
     .control-button:disabled { opacity: 0.55; }
+    .session-reset-button {
+      margin-top: 10px;
+      width: 100%;
+    }
+    .session-reset-button[data-confirm="true"] {
+      border-color: #f4d35e;
+      color: #f4d35e;
+      opacity: 1;
+    }
+    .font-size-control {
+      display: flex;
+      gap: 5px;
+      margin-top: 10px;
+    }
+    .font-size-button {
+      flex: 1;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #0d151c;
+      color: #aebdc6;
+      padding: 5px 0;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer !important;
+    }
+    .font-size-button[aria-pressed="true"] {
+      border-color: #69b7e4;
+      background: #102131;
+      color: #edf3f7;
+    }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
       height: calc(100vh - 43px);
@@ -203,7 +465,7 @@
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
     .meta { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .text { margin-top: 3px; font-size: 18px; line-height: 1.38; overflow-wrap: anywhere; }
+    .text { margin-top: 3px; font-size: var(--message-font-size); line-height: 1.38; overflow-wrap: anywhere; }
     .notifications {
       height: calc(100vh - 43px);
       overflow-y: auto;
@@ -214,9 +476,9 @@
     .notifications::-webkit-scrollbar { display: none; }
     .notice { border-left: 3px solid #2a9d8f; padding: 3px 0 4px 11px; }
     .notice[data-priority="high"] { border-color: #e63946; }
-    .notice-title { color: #e8f0f4; font-size: 16px; font-weight: 700; text-decoration: none; }
+    .notice-title { color: #e8f0f4; font-size: var(--notice-title-font-size); font-weight: 700; text-decoration: none; }
     a.notice-title:hover { text-decoration: underline; }
-    .notice-text { margin-top: 3px; color: #c3d0d7; font-size: 14px; line-height: 1.3; }
+    .notice-text { margin-top: 3px; color: #c3d0d7; font-size: var(--notice-text-font-size); line-height: 1.3; }
     .notice-image { width: 100%; max-height: 220px; margin-top: 6px; background: #000; object-fit: contain; }
     .empty { color: #738591; font-size: 15px; }
     @media (max-width: 1200px) {
@@ -225,11 +487,253 @@
       .notifications-panel { grid-column: 1 / -1; min-height: 180px; }
       .messages, .notifications { height: auto; max-height: 420px; }
     }
+    @media (min-width: 761px) and (max-width: 900px) {
+      body { overflow: hidden; }
+      .dashboard { grid-template-columns: minmax(178px, 0.74fr) minmax(345px, 1.55fr) minmax(235px, 0.95fr); }
+      section { padding: 10px 12px; }
+      .status-panel { padding-left: 44px; }
+      .volume-control { left: 8px; top: 12px; bottom: 12px; width: 30px; gap: 5px; }
+      .volume-slider { width: 30px; min-height: 130px; }
+      .volume-label { width: 30px; font-size: 11px; }
+      .eyebrow { margin-bottom: 5px; font-size: 10px; }
+      .brand { font-size: 28px; }
+      .brand-controls { gap: 3px; margin-top: 6px; }
+      .brand-controls .control-button { padding: 5px 3px; font-size: 10px; border-radius: 6px; }
+      .clock-date-row { margin-top: 8px; gap: 6px; }
+      .agent { margin-top: 7px; padding: 5px 6px; }
+      .slots { margin-top: 6px; min-height: 26px; gap: 4px; }
+      .slot-button { max-width: 102px; padding: 4px 6px; }
+      .status { margin-top: 7px; gap: 7px; }
+      .agent-usage { margin-top: 6px; padding: 5px 6px; }
+      .notifications-panel { grid-column: auto; min-height: 0; }
+      .messages, .notifications { height: calc(100vh - 21px); max-height: none; }
+    }
     @media (max-width: 760px) {
       .dashboard { display: block; }
       section { border-bottom: 1px solid #26323b; }
       .brand-row { align-items: flex-start; }
       .messages, .notifications { max-height: none; }
+    }
+
+    /* 各スロット内の相対配置用コンテナ */
+    .slot-container {
+      position: relative;
+      height: 100%;
+      width: 100%;
+    }
+    /* スロット内オーバーレイのスタイル設定 */
+    .slot-overlay {
+      position: relative;
+      z-index: 10;
+      background: rgba(7, 11, 15, 0.95);
+      backdrop-filter: blur(12px);
+      display: none;
+      flex-direction: column;
+      height: 100%;
+      width: 100%;
+    }
+    .slot-overlay.is-active {
+      display: flex;
+    }
+    .overlay-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 16px;
+      border-bottom: 1px solid #26323b;
+      background: #0b1117;
+    }
+    .overlay-header h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #f4d35e;
+      font-weight: 800;
+    }
+    .overlay-close {
+      border: 1px solid #e63946;
+      background: rgba(230, 57, 70, 0.1);
+      color: #e63946;
+      padding: 4px 12px;
+      font-size: 12px;
+      font-weight: 800;
+      border-radius: 4px;
+      cursor: pointer !important;
+      transition: background 150ms ease, transform 100ms ease;
+    }
+    .overlay-close:hover {
+      background: rgba(230, 57, 70, 0.25);
+    }
+    .overlay-close:active {
+      transform: scale(0.96);
+    }
+    .overlay-body {
+      flex: 1;
+      background: #000;
+      position: relative;
+    }
+    .overlay-body iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: transparent;
+    }
+
+    .clock-date-row {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      margin-top: 14px;
+      width: 100%;
+      white-space: nowrap;
+    }
+    .clock-date-row .clock {
+      white-space: nowrap;
+    }
+    .clock-date-row .date {
+      font-size: var(--date-font-size);
+      white-space: nowrap;
+    }
+    .clock-date-row .weather {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
+      font-size: 18px;
+      font-weight: 800;
+      color: #69b7e4;
+      white-space: nowrap;
+    }
+    .weather-symbol {
+      position: relative;
+      display: inline-block;
+      width: 24px;
+      height: 20px;
+      flex: 0 0 auto;
+    }
+    .weather-symbol[data-kind="sun"]::before {
+      content: "";
+      position: absolute;
+      left: 5px;
+      top: 3px;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #facc15;
+      box-shadow: 0 0 0 3px rgba(250, 204, 21, 0.24), 0 0 10px rgba(250, 204, 21, 0.55);
+    }
+    .weather-symbol[data-kind="cloud"]::before,
+    .weather-symbol[data-kind="rain"]::before,
+    .weather-symbol[data-kind="snow"]::before,
+    .weather-symbol[data-kind="thunder"]::before,
+    .weather-symbol[data-kind="fog"]::before {
+      content: "";
+      position: absolute;
+      left: 2px;
+      top: 8px;
+      width: 20px;
+      height: 9px;
+      border-radius: 999px;
+      background: #cbd5e1;
+      box-shadow: 5px -5px 0 -1px #cbd5e1, 10px -2px 0 -2px #cbd5e1;
+    }
+    .weather-symbol[data-kind="rain"]::after {
+      content: "";
+      position: absolute;
+      left: 6px;
+      top: 16px;
+      width: 3px;
+      height: 6px;
+      border-radius: 2px;
+      background: #60a5fa;
+      box-shadow: 6px 0 0 #60a5fa, 12px 0 0 #60a5fa;
+      transform: skewX(-18deg);
+    }
+    .weather-symbol[data-kind="snow"]::after {
+      content: "*";
+      position: absolute;
+      left: 5px;
+      top: 12px;
+      color: #bfdbfe;
+      font-size: 18px;
+      line-height: 1;
+      letter-spacing: 3px;
+    }
+    .weather-symbol[data-kind="thunder"]::after {
+      content: "";
+      position: absolute;
+      left: 10px;
+      top: 13px;
+      width: 7px;
+      height: 10px;
+      background: #facc15;
+      clip-path: polygon(42% 0, 100% 0, 62% 42%, 100% 42%, 28% 100%, 48% 56%, 0 56%);
+    }
+    .weather-symbol[data-kind="fog"]::after {
+      content: "";
+      position: absolute;
+      left: 3px;
+      top: 16px;
+      width: 18px;
+      height: 2px;
+      border-radius: 2px;
+      background: #94a3b8;
+      box-shadow: 0 4px 0 #94a3b8;
+    }
+    .weather-label {
+      color: #69b7e4;
+    }
+    .slots-container {
+      margin-top: auto;
+    }
+
+    /* 設定モーダル */
+    .settings-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .settings-modal-content {
+      width: min(400px, 90vw);
+      border: 1px solid #354855;
+      background: #0b1117;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+    }
+    .settings-modal-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 16px;
+      border-bottom: 1px solid #26323b;
+      background: #0d151c;
+    }
+    .settings-modal-header h2 {
+      margin: 0;
+      font-size: 16px;
+      color: #edf3f7;
+      font-weight: 800;
+    }
+    .settings-modal-body {
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .settings-row {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .settings-label {
+      color: #8ca0ad;
+      font-size: 12px;
+      font-weight: 700;
     }
   </style>
 </head>
@@ -243,8 +747,36 @@
       <div class="splash-bars"><span></span><span></span><span></span></div>
     </div>
   </div>
+  <!-- 設定モーダル -->
+  <div id="settings-modal" class="settings-modal" aria-hidden="true" style="display: none;">
+    <div class="settings-modal-content">
+      <div class="settings-modal-header">
+        <h2>システム設定</h2>
+        <button id="settings-close-button" class="control-button" type="button">閉じる</button>
+      </div>
+      <div class="settings-modal-body">
+        <div class="settings-row">
+          <span class="settings-label">画面レイアウト</span>
+          <button id="swap-button" class="control-button" type="button" style="width: 100%;">左右入れ替え</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">表示フォントサイズ</span>
+          <div class="font-size-control" role="group" aria-label="フォントサイズ">
+            <button class="font-size-button" type="button" data-font-size-option="small" aria-pressed="false">小</button>
+            <button class="font-size-button" type="button" data-font-size-option="medium" aria-pressed="true">中</button>
+            <button class="font-size-button" type="button" data-font-size-option="large" aria-pressed="false">大</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">会話セッション</span>
+          <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <main class="dashboard">
-    <section class="status-panel">
+    <section class="status-panel" style="display: flex; flex-direction: column;">
       <div class="volume-control">
         <input id="volume-slider" class="volume-slider" type="range" min="0" max="100" step="5" value="90" aria-label="読み上げ音量">
         <div id="volume-label" class="volume-label">90</div>
@@ -252,29 +784,80 @@
       <p class="eyebrow">VOICE AGENT</p>
       <div class="brand-row">
         <h1 class="brand">ARGOS</h1>
-        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+        <div id="network-status" class="network-status" data-connected="false" data-level="0" title="Wi-Fi未接続" aria-hidden="true">
+          <span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
+          <span id="network-label" class="network-label">Wi-Fi未接続</span>
+        </div>
       </div>
-      <div id="slots" class="slots" aria-label="エージェントスロット"></div>
-      <div id="clock" class="clock">--:--</div>
-      <div id="date" class="date"></div>
+      <div class="brand-controls" aria-label="音声操作">
+        <button id="mute-button" class="control-button" type="button" aria-pressed="false">ミュート</button>
+        <button id="microphone-button" class="control-button" type="button" aria-pressed="false">マイクOFF</button>
+        <button id="settings-open-button" class="control-button" type="button">⚙️ 設定</button>
+      </div>
+      
+      <div class="clock-date-row">
+        <div id="clock" class="clock">--:--</div>
+        <div id="date" class="date"></div>
+        <div id="weather" class="weather"></div>
+      </div>
+
+      <div id="status" class="status" data-code="ready">
+        <span class="status-dot"></span><span id="status-label">待機中</span>
+      </div>
+
       <div class="agent">
         <div class="agent-label">CURRENT SLOT</div>
         <div id="agent-name" class="agent-name">--</div>
         <div id="agent-provider" class="agent-provider">--</div>
       </div>
-      <div id="status" class="status" data-code="ready">
-        <span class="status-dot"></span><span id="status-label">待機中</span>
+
+      <div id="agent-usage" class="agent-usage" aria-live="polite"></div>
+
+      <div class="slots-container">
+        <p class="eyebrow" style="margin-top: 10px; margin-bottom: 4px;">SLOTS</p>
+        <div id="slots" class="slots" aria-label="エージェントスロット"></div>
       </div>
     </section>
-    <section>
-      <p class="eyebrow">CONVERSATION</p>
-      <div id="messages" class="messages"></div>
+    
+    <!-- 中央スロット (スロット1) -->
+    <section id="slot-center">
+      <div id="slot-container-center" class="slot-container">
+        <div id="conversation-view" class="slot-container">
+          <p class="eyebrow">CONVERSATION</p>
+          <div id="messages" class="messages"></div>
+        </div>
+        <div id="overlay-center" class="slot-overlay">
+          <div class="overlay-header">
+            <h2 id="overlay-title-center" class="overlay-title">--</h2>
+            <button class="overlay-close" type="button" data-slot="center">閉じる</button>
+          </div>
+          <div class="overlay-body">
+            <iframe id="iframe-center" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+          </div>
+        </div>
+      </div>
     </section>
-    <section class="notifications-panel">
-      <p class="eyebrow">NOTIFICATIONS</p>
-      <div id="notifications" class="notifications"></div>
+
+    <!-- 右スロット (スロット2) -->
+    <section class="notifications-panel" id="slot-right">
+      <div id="slot-container-right" class="slot-container">
+        <div id="notifications-view" class="slot-container">
+          <p class="eyebrow">NOTIFICATIONS</p>
+          <div id="notifications" class="notifications"></div>
+        </div>
+        <div id="overlay-right" class="slot-overlay">
+          <div class="overlay-header">
+            <h2 id="overlay-title-right" class="overlay-title">--</h2>
+            <button class="overlay-close" type="button" data-slot="right">閉じる</button>
+          </div>
+          <div class="overlay-body">
+            <iframe id="iframe-right" src="about:blank" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
+
   <script>
     const messages = document.getElementById("messages");
     const notifications = document.getElementById("notifications");
@@ -284,19 +867,165 @@
     const statusLabel = document.getElementById("status-label");
     const agentName = document.getElementById("agent-name");
     const agentProvider = document.getElementById("agent-provider");
+    const agentUsage = document.getElementById("agent-usage");
+    const networkStatus = document.getElementById("network-status");
+    const networkLabel = document.getElementById("network-label");
     const slots = document.getElementById("slots");
     const muteButton = document.getElementById("mute-button");
+    const microphoneButton = document.getElementById("microphone-button");
+    const sessionResetButton = document.getElementById("session-reset-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
+    const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+
+    const swapButton = document.getElementById("swap-button");
+
+    // 各スロット用のDOM要素
+    const slotCenter = document.getElementById("slot-center");
+    const slotContainerCenter = document.getElementById("slot-container-center");
+    const conversationView = document.getElementById("conversation-view");
+    const overlayCenter = document.getElementById("overlay-center");
+    const overlayTitleCenter = document.getElementById("overlay-title-center");
+    const iframeCenter = document.getElementById("iframe-center");
+
+    const slotRight = document.getElementById("slot-right");
+    const slotContainerRight = document.getElementById("slot-container-right");
+    const notificationsView = document.getElementById("notifications-view");
+    const overlayRight = document.getElementById("overlay-right");
+    const overlayTitleRight = document.getElementById("overlay-title-right");
+    const iframeRight = document.getElementById("iframe-right");
+
+    const overlayCloseButtons = Array.from(document.querySelectorAll(".overlay-close"));
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
+    const defaultFontSize = __ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__;
+    const fontSizeStorageKey = "argos-dashboard-font-size";
+    const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    
+    // スロットごとの表示キャッシュ
+    let prevSlotsState = {
+      center: { type: "", url: "", content: "" },
+      right: { type: "", url: "", content: "" }
+    };
+
+    function renderSlots(state) {
+      const stacks = state.slot_stacks || {
+        center: [{"type": "conversation", "title": "会話"}],
+        right: [{"type": "notifications", "title": "通知"}]
+      };
+
+      const centerTop = stacks.center[stacks.center.length - 1];
+      const rightTop = stacks.right[stacks.right.length - 1];
+
+      // デフォルトビューの物理的な配置（アペンド先）をスタックに合わせて移動する
+      if (centerTop.type === "conversation") {
+        if (conversationView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(conversationView, overlayCenter);
+        }
+      } else if (centerTop.type === "notifications") {
+        if (notificationsView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(notificationsView, overlayCenter);
+        }
+      }
+
+      if (rightTop.type === "conversation") {
+        if (conversationView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(conversationView, overlayRight);
+        }
+      } else if (rightTop.type === "notifications") {
+        if (notificationsView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(notificationsView, overlayRight);
+        }
+      }
+
+      const centerDefaultView = (centerTop.type === "notifications") ? notificationsView : conversationView;
+      const rightDefaultView = (rightTop.type === "conversation") ? conversationView : notificationsView;
+
+      renderSlot("center", centerTop, centerDefaultView, overlayCenter, overlayTitleCenter, iframeCenter);
+      renderSlot("right", rightTop, rightDefaultView, overlayRight, overlayTitleRight, iframeRight);
+    }
+
+    function renderSlot(slotName, topItem, defaultView, overlayEl, titleEl, iframeEl) {
+      const prev = prevSlotsState[slotName];
+      const type = topItem.type;
+      const url = topItem.url || "";
+      const content = topItem.content || "";
+      const title = topItem.title || "表示";
+
+      // チラつきと再描画を防ぐため、状態に変更がない場合は何もしない
+      if (prev.type === type && prev.url === url && prev.content === content) {
+        return;
+      }
+
+      prev.type = type;
+      prev.url = url;
+      prev.content = content;
+
+      if (type === "conversation") {
+        previousMessages = "";
+        defaultView.style.display = "";
+        overlayEl.classList.remove("is-active");
+        iframeEl.src = "about:blank";
+        iframeEl.setAttribute("data-src", "about:blank");
+        iframeEl.onload = null;
+      } else if (type === "notifications") {
+        previousNotifications = "";
+        defaultView.style.display = "";
+        overlayEl.classList.remove("is-active");
+        iframeEl.src = "about:blank";
+        iframeEl.setAttribute("data-src", "about:blank");
+        iframeEl.onload = null;
+      } else {
+        defaultView.style.display = "none";
+        titleEl.textContent = title;
+        const targetUrl = url || "about:blank";
+
+        if (iframeEl.getAttribute("data-src") !== targetUrl) {
+          iframeEl.setAttribute("data-src", targetUrl);
+          
+          if (content) {
+            iframeEl.onload = () => {
+              setTimeout(() => {
+                try {
+                  iframeEl.contentWindow.postMessage({
+                    type: "content",
+                    data: content,
+                    options: topItem.options || {}
+                  }, "*");
+                } catch (e) {
+                  console.error("Failed to post message to iframe:", e);
+                }
+              }, 50);
+            };
+          } else {
+            iframeEl.onload = null;
+          }
+          iframeEl.src = targetUrl;
+        } else if (content) {
+          try {
+            iframeEl.contentWindow.postMessage({
+              type: "content",
+              data: content,
+              options: topItem.options || {}
+            }, "*");
+          } catch (e) {
+            // onloadでの実行を待つ
+          }
+        }
+
+        overlayEl.classList.add("is-active");
+      }
+    }
     let splashTimer = null;
     let screensaverTimer = null;
     let muted = false;
+    let microphoneEnabled = true;
     let changingVolume = false;
+    let previousDisplayActivitySequence = null;
+    let sessionResetConfirmTimer = null;
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -304,6 +1033,14 @@
       const now = new Date();
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
       document.getElementById("date").textContent = now.toLocaleDateString("ja-JP", {month:"long", day:"numeric", weekday:"short"});
+    }
+    function applyFontSize(size) {
+      const normalized = fontSizeOptions.has(size) ? size : "medium";
+      document.body.dataset.fontSize = normalized;
+      localStorage.setItem(fontSizeStorageKey, normalized);
+      fontSizeButtons.forEach(button => {
+        button.setAttribute("aria-pressed", button.dataset.fontSizeOption === normalized ? "true" : "false");
+      });
     }
     function isNearLatestMessage() {
       return messages.scrollHeight - messages.scrollTop - messages.clientHeight < 24;
@@ -331,9 +1068,12 @@
     }
     function render(state) {
       status.dataset.code = state.status.code;
+      document.body.dataset.statusCode = state.status.code || "ready";
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
       agentProvider.textContent = state.agent?.provider || "--";
+      renderNetworkStatus(state.network?.wifi);
+      renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `
         <button class="slot-button" type="button" disabled
           data-active="${slot.active ? "true" : "false"}"
@@ -344,6 +1084,9 @@
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      microphoneEnabled = state.microphone?.enabled !== false;
+      microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
+      microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
       const volume = Number.isFinite(Number(state.audio?.volume)) ? Number(state.audio.volume) : Number(volumeSlider.value);
       if (!changingVolume) {
         volumeSlider.value = volume;
@@ -352,9 +1095,19 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      if (state.status.code === "listening" || state.status.code === "locked") {
+      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);
+      if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }
+      const displayActivitySequence = state.display_activity?.sequence ?? 0;
+      if (previousDisplayActivitySequence !== null && displayActivitySequence !== previousDisplayActivitySequence) {
+        resetScreensaver();
+      }
+      previousDisplayActivitySequence = displayActivitySequence;
+
+      // スロットスタックを先に反映し、会話/通知へ戻る場合は描画キャッシュを破棄する
+      renderSlots(state);
+
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
       if (nextMessages !== previousMessages) {
@@ -384,13 +1137,123 @@
         previousNotifications = nextNotifications;
       }
     }
+    function extractPercent(str) {
+      if (!str) return null;
+      const m = str.match(/(\d+(?:\.\d+)?)\s*%/);
+      return m ? parseFloat(m[1]) : null;
+    }
+    function wifiLevel(quality) {
+      const value = Number(quality);
+      if (!Number.isFinite(value) || value <= 0) return 0;
+      if (value >= 75) return 4;
+      if (value >= 50) return 3;
+      if (value >= 25) return 2;
+      return 1;
+    }
+    function renderNetworkStatus(wifi) {
+      const connected = Boolean(wifi?.connected);
+      const quality = Number(wifi?.quality);
+      const level = connected ? wifiLevel(quality) : 0;
+      const ssid = String(wifi?.ssid || "");
+      const label = connected
+        ? `${ssid || "Wi-Fi"}${Number.isFinite(quality) ? ` ${Math.round(quality)}%` : ""}`
+        : "Wi-Fi未接続";
+      networkStatus.dataset.connected = connected ? "true" : "false";
+      networkStatus.dataset.level = String(level);
+      networkStatus.title = label;
+      networkStatus.setAttribute("aria-hidden", connected ? "false" : "true");
+      networkLabel.textContent = label;
+    }
+    function renderAgentUsage(usage) {
+      if (!usage || !usage.provider) {
+        agentUsage.classList.remove("is-visible");
+        agentUsage.innerHTML = "";
+        return;
+      }
+      
+      let rowsHtml = "";
+      
+      // 5時間枠
+      if (usage.five_hour) {
+        const usePct = usage.five_hour.use_percentage;
+        let color = "#00b140"; // 緑
+        if (usePct >= 80) color = "#ff4d4d"; // 赤
+        else if (usePct >= 50) color = "#f4d35e"; // 黄
+        
+        rowsHtml += `
+          <div class="agent-usage-row-wrapper">
+            <div class="agent-usage-row">
+              <span class="agent-usage-label">5時間</span>
+              <span class="agent-usage-value">${usePct}% <span class="agent-usage-reset">(更新: ${escapeHtml(usage.five_hour.reset_at || "")})</span></span>
+            </div>
+            <div class="agent-usage-progress-container">
+              <div class="agent-usage-progress-bar" style="width: ${usePct}%; background-color: ${color};"></div>
+            </div>
+          </div>
+        `;
+      }
+      
+      // 週の枠
+      if (usage.weekly) {
+        const usePct = usage.weekly.use_percentage;
+        let color = "#00b140"; // 緑
+        if (usePct >= 80) color = "#ff4d4d"; // 赤
+        else if (usePct >= 50) color = "#f4d35e"; // 黄
+        
+        rowsHtml += `
+          <div class="agent-usage-row-wrapper">
+            <div class="agent-usage-row">
+              <span class="agent-usage-label">週間</span>
+              <span class="agent-usage-value">${usePct}% <span class="agent-usage-reset">(更新: ${escapeHtml(usage.weekly.reset_at || "")})</span></span>
+            </div>
+            <div class="agent-usage-progress-container">
+              <div class="agent-usage-progress-bar" style="width: ${usePct}%; background-color: ${color};"></div>
+            </div>
+          </div>
+        `;
+      }
+      
+      // 追加情報
+      const otherText = usage.other_text || "--";
+      rowsHtml += `
+        <div class="agent-usage-row-wrapper">
+          <div class="agent-usage-row">
+            <span class="agent-usage-label">追加情報</span>
+            <span class="agent-usage-value-text">${escapeHtml(otherText)}</span>
+          </div>
+        </div>
+      `;
+
+      const error = usage.error ? `<div class="agent-usage-error">${escapeHtml(usage.error)}</div>` : "";
+      agentUsage.innerHTML = `
+        <div class="agent-usage-title">USAGE <span class="agent-usage-provider">${escapeHtml(usage.provider)}</span></div>
+        ${rowsHtml}
+        ${error}`;
+      agentUsage.classList.add("is-visible");
+    }
+    function formatUsageBucket(bucket) {
+      const remaining = bucket.remaining || "";
+      const limit = bucket.limit || "";
+      if (remaining && limit) {
+        return `${remaining} / ${limit}`;
+      }
+      if (remaining) {
+        return `残り ${remaining}`;
+      }
+      if (limit) {
+        return `上限 ${limit}`;
+      }
+      return bucket.reset_at ? `更新 ${bucket.reset_at}` : "--";
+    }
     async function refresh() {
       const response = await fetch("/api/state", {cache:"no-store"});
       render(await response.json());
     }
     async function sendControl(action, values = {}) {
       muteButton.disabled = true;
+      microphoneButton.disabled = true;
       volumeSlider.disabled = true;
+      sessionResetButton.disabled = true;
       try {
         const headers = {"Content-Type": "application/json"};
         if (dashboardToken) {
@@ -404,14 +1267,54 @@
         if (!response.ok) {
           throw new Error(await response.text());
         }
+        applyControlResult(await response.json());
         await refresh();
       } finally {
         muteButton.disabled = false;
+        microphoneButton.disabled = false;
         volumeSlider.disabled = false;
+        sessionResetButton.disabled = false;
+      }
+    }
+    function applyControlResult(result) {
+      if (!result || typeof result !== "object") return;
+      if (typeof result.muted === "boolean") {
+        muted = result.muted;
+        muteButton.textContent = muted ? "ミュート中" : "ミュート";
+        muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      }
+      if (typeof result.microphone_enabled === "boolean") {
+        microphoneEnabled = result.microphone_enabled;
+        microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
+        microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
+      }
+      if (Number.isFinite(Number(result.volume))) {
+        const volume = Number(result.volume);
+        volumeSlider.value = volume;
+        volumeLabel.textContent = String(volume);
       }
     }
     muteButton.addEventListener("click", () => {
       sendControl(muted ? "unmute" : "mute").catch(error => console.error(error));
+    });
+    microphoneButton.addEventListener("click", () => {
+      sendControl(microphoneEnabled ? "disable_microphone" : "enable_microphone").catch(error => console.error(error));
+    });
+    sessionResetButton.addEventListener("click", () => {
+      if (sessionResetButton.dataset.confirm !== "true") {
+        sessionResetButton.dataset.confirm = "true";
+        sessionResetButton.textContent = "もう一度で実行";
+        window.clearTimeout(sessionResetConfirmTimer);
+        sessionResetConfirmTimer = window.setTimeout(() => {
+          sessionResetButton.dataset.confirm = "false";
+          sessionResetButton.textContent = "セッションリセット";
+        }, 5000);
+        return;
+      }
+      window.clearTimeout(sessionResetConfirmTimer);
+      sessionResetButton.dataset.confirm = "false";
+      sessionResetButton.textContent = "セッションリセット";
+      sendControl("reset_agent_session").catch(error => console.error(error));
     });
     volumeSlider.addEventListener("input", () => {
       changingVolume = true;
@@ -423,14 +1326,125 @@
         .catch(error => console.error(error))
         .finally(() => { changingVolume = false; });
     });
+    fontSizeButtons.forEach(button => {
+      button.addEventListener("click", () => applyFontSize(button.dataset.fontSizeOption));
+    });
+    let lastWeatherFetchTime = 0;
+    let lastWeatherLat = 0;
+    let lastWeatherLng = 0;
+
+    async function updateWeather() {
+      try {
+        const locResponse = await fetch("/api/location");
+        if (!locResponse.ok) return;
+        const loc = await locResponse.json();
+        if (!loc || !loc.available || !loc.lat || !loc.lng) return;
+
+        const now = Date.now();
+        const dist = Math.sqrt((loc.lat - lastWeatherLat) ** 2 + (loc.lng - lastWeatherLng) ** 2);
+        
+        if (lastWeatherFetchTime === 0 || (now - lastWeatherFetchTime > 3600000) || dist > 0.05) {
+          const weatherResponse = await fetch(
+            `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lng}&current=temperature_2m,weather_code`
+          );
+          if (!weatherResponse.ok) return;
+          const weatherData = await weatherResponse.json();
+          if (weatherData && weatherData.current) {
+            const temp = weatherData.current.temperature_2m;
+            const code = weatherData.current.weather_code;
+            const weather = getWeatherDisplay(code);
+            document.getElementById("weather").innerHTML = `
+              <span class="weather-symbol" data-kind="${weather.kind}" aria-hidden="true"></span>
+              <span class="weather-label">${weather.label} ${Math.round(temp)}℃</span>`;
+            lastWeatherFetchTime = now;
+            lastWeatherLat = loc.lat;
+            lastWeatherLng = loc.lng;
+          }
+        }
+      } catch (error) {
+        console.error("Failed to update weather:", error);
+      }
+    }
+
+    function getWeatherDisplay(code) {
+      if (code === 0) return {kind: "sun", label: "晴れ"};
+      if (code === 1) return {kind: "sun", label: "晴れ"};
+      if (code === 2) return {kind: "cloud", label: "曇り"};
+      if (code === 3) return {kind: "cloud", label: "曇り"};
+      if (code === 45 || code === 48) return {kind: "fog", label: "霧"};
+      if (code >= 51 && code <= 55) return {kind: "rain", label: "霧雨"};
+      if (code >= 61 && code <= 65) return {kind: "rain", label: "雨"};
+      if (code >= 71 && code <= 75) return {kind: "snow", label: "雪"};
+      if (code >= 80 && code <= 82) return {kind: "rain", label: "にわか雨"};
+      if (code >= 95 && code <= 99) return {kind: "thunder", label: "雷雨"};
+      return {kind: "sun", label: "晴れ"};
+    }
+
+    applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize);
     updateClock();
     setInterval(updateClock, 1000);
+    updateWeather();
+    setInterval(updateWeather, 60000);
     ["pointerdown", "touchstart", "keydown", "wheel"].forEach(eventName => {
       window.addEventListener(eventName, resetScreensaver, {passive: true});
     });
     resetScreensaver();
     showSplash();
     refresh();
+
+    // オーバーレイ消去などのイベント送信用のヘルパー関数
+    async function sendEvent(type, values = {}) {
+      try {
+        const headers = {"Content-Type": "application/json"};
+        if (dashboardToken) {
+          headers.Authorization = `Bearer ${dashboardToken}`;
+        }
+        const response = await fetch("/api/events", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({type, ...values}),
+        });
+        if (!response.ok) {
+          throw new Error(await response.text());
+        }
+        await refresh();
+      } catch (error) {
+        console.error("Failed to send event:", error);
+      }
+    }
+
+    // 設定モーダルの制御
+    const settingsModal = document.getElementById("settings-modal");
+    const settingsOpenButton = document.getElementById("settings-open-button");
+    const settingsCloseButton = document.getElementById("settings-close-button");
+
+    settingsOpenButton.addEventListener("click", () => {
+      settingsModal.style.display = "flex";
+      settingsModal.setAttribute("aria-hidden", "false");
+    });
+
+    settingsCloseButton.addEventListener("click", () => {
+      settingsModal.style.display = "none";
+      settingsModal.setAttribute("aria-hidden", "true");
+    });
+
+    settingsModal.addEventListener("click", (e) => {
+      if (e.target === settingsModal) {
+        settingsModal.style.display = "none";
+        settingsModal.setAttribute("aria-hidden", "true");
+      }
+    });
+    overlayCloseButtons.forEach(button => {
+      button.addEventListener("click", () => {
+        const slot = button.getAttribute("data-slot");
+        sendEvent("clear_overlay", { target_slot: slot }).catch(error => console.error(error));
+      });
+    });
+
+    swapButton.addEventListener("click", () => {
+      sendEvent("swap_slots").catch(error => console.error(error));
+    });
+
     const stream = new EventSource("/api/stream");
     stream.addEventListener("open", refresh);
     stream.addEventListener("update", refresh);

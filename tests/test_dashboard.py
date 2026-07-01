@@ -4,6 +4,9 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+from argos.services.dashboard import location as dashboard_location
+from argos.services.dashboard import server as dashboard_server
+from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location, parse_remote_location
 from argos.services.dashboard.server import DashboardServer, _apply_event
 from argos.services.dashboard.state import DashboardState
 
@@ -26,6 +29,27 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     state.set_agent("アンチグラビティ", "antigravity")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
+    state.set_microphone_enabled(False)
+    state.set_wifi_status(
+        {
+            "connected": True,
+            "interface": "wlan0",
+            "ssid": "車内WiFi",
+            "quality": 71,
+            "level_dbm": -45,
+        }
+    )
+    state.set_agent_usage(
+        "antigravity",
+        {
+            "available": True,
+            "label": "利用枠",
+            "five_hour": {"label": "5時間", "remain_percentage": 95.0, "use_percentage": 5.0, "reset_at": "10:00"},
+            "weekly": {"label": "週間", "remain_percentage": 34.0, "use_percentage": 66.0, "reset_at": "06/19 06:59"},
+            "other_text": "878 credits",
+            "error": "",
+        },
+    )
     message_id = state.add_message("assistant", "", streaming=True)
     state.append_message(message_id, "返答")
     state.finish_message(message_id)
@@ -40,9 +64,26 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
     assert snapshot["audio"]["volume"] == 64
+    assert snapshot["microphone"]["enabled"] is False
+    assert snapshot["network"]["wifi"]["connected"] is True
+    assert snapshot["network"]["wifi"]["ssid"] == "車内WiFi"
+    assert snapshot["network"]["wifi"]["quality"] == 71
+    assert snapshot["agent_usage"]["current"]["weekly"]["remain_percentage"] == 34.0
+    assert snapshot["display_activity"]["sequence"] == 0
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
+
+
+def test_dashboard_state_wake_display_updates_activity():
+    """音声再生などで画面を起こすためのアクティビティを更新できる。"""
+    state = DashboardState()
+
+    state.wake_display()
+    snapshot = state.snapshot()
+
+    assert snapshot["display_activity"]["sequence"] == 1
+    assert snapshot["display_activity"]["updated_at"]
 
 
 def test_dashboard_state_notifies_subscribers():
@@ -140,7 +181,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5)
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5, default_font_size="small")
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -150,6 +191,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "cursor: none" in html
         assert "cursor: none !important" in html
         assert "nextNotifications !== previousNotifications" in html
+        assert "previousMessages = \"\";" in html
+        assert "previousNotifications = \"\";" in html
+        assert "renderSlots(state);" in html
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html
@@ -162,8 +206,18 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
         assert 'data-code="alert"' in html
+        assert 'body[data-status-code="listening"]::before' in html
+        assert 'body[data-status-code="transcribing"]::before' in html
+        assert 'body[data-status-code="transcribing"]::after' in html
+        assert 'body[data-status-code="thinking"]::after' in html
+        assert ".status[data-code=\"transcribing\"] .status-dot" in html
+        assert "status-frame-flow" in html
+        assert 'document.body.dataset.statusCode = state.status.code || "ready";' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
+        assert 'id="agent-usage"' in html
+        assert "renderAgentUsage(state.agent_usage?.current)" in html
+        assert "formatUsageBucket(bucket)" in html
         assert 'id="slots"' in html
         assert ".slots::-webkit-scrollbar" in html
         assert "overflow-x: auto" in html
@@ -172,11 +226,35 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
+        assert 'class="brand-controls"' in html
+        assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html
+        assert "@media (min-width: 761px) and (max-width: 900px)" in html
+        assert ".notifications-panel { grid-column: auto; min-height: 0; }" in html
+        assert '.network-status[data-connected="false"]' in html
+        assert "display: none;" in html
         assert 'id="mute-button"' in html
+        assert 'id="microphone-button"' in html
         assert 'id="volume-slider"' in html
         assert 'aria-label="読み上げ音量"' in html
         assert 'sendControl("set_volume", {volume})' in html
+        assert 'id="session-reset-button"' in html
+        assert "セッションリセット" in html
+        assert "もう一度で実行" in html
+        assert 'sendControl("reset_agent_session")' in html
+        assert 'aria-label="フォントサイズ"' in html
+        assert 'data-font-size-option="small"' in html
+        assert 'data-font-size-option="medium"' in html
+        assert 'data-font-size-option="large"' in html
+        assert 'const fontSizeStorageKey = "argos-dashboard-font-size";' in html
+        assert "const defaultFontSize = \"small\";" in html
+        assert "applyFontSize(localStorage.getItem(fontSizeStorageKey) || defaultFontSize)" in html
+        assert '--message-font-size: 14px;' in html
+        assert '--notice-title-font-size: 13px;' in html
+        assert 'body[data-font-size="large"]' in html
         assert ">ミュート</button>" in html
+        assert ">マイクOFF</button>" in html
+        assert 'sendControl(microphoneEnabled ? "disable_microphone" : "enable_microphone")' in html
+        assert "applyControlResult(await response.json())" in html
         assert 'muted ? "ミュート中" : "ミュート"' in html
         assert "border-radius: 8px" in html
         assert "opacity: 0.72" in html
@@ -184,10 +262,18 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const screensaverTimeoutMs = Math.max(0, Number(12.5) * 1000);" in html
         assert 'id="screensaver"' in html
         assert "resetScreensaver()" in html
-        assert 'state.status.code === "listening" || state.status.code === "locked"' in html
+        assert 'const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);' in html
+        assert '"locked"]);' not in html
+        assert "state.display_activity?.sequence" in html
         assert "showScreensaver" in html
         assert '"pointermove"' not in html
         assert 'data-code="muted"' in html
+        assert 'id="slot-center"' in html
+        assert 'id="slot-right"' in html
+        assert 'id="iframe-center"' in html
+        assert 'id="iframe-right"' in html
+        assert 'id="swap-button"' in html
+        assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
@@ -225,6 +311,26 @@ def test_dashboard_control_api_calls_handler():
     assert calls == [{"action": "mute", "volume": 55}]
 
 
+def test_dashboard_event_api_calls_handler():
+    """外部イベントAPIは状態更新後にイベントハンドラーを呼ぶ。"""
+    calls = []
+
+    def handle_event(payload, response):
+        calls.append((payload, response))
+
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", event_handler=handle_event)
+    server.start()
+    url = f"http://{server.address[0]}:{server.address[1]}/api/events"
+    try:
+        status, body = _read_json(url, "POST", {"type": "notification", "title": "予定", "speak": True}, "secret")
+    finally:
+        server.stop()
+
+    assert status == 201
+    assert body["id"]
+    assert calls == [({"type": "notification", "title": "予定", "speak": True}, body)]
+
+
 def test_dashboard_server_rejects_invalid_token():
     """外部イベントAPIはBearer認証なしで更新できない。"""
     server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
@@ -239,3 +345,300 @@ def test_dashboard_server_rejects_invalid_token():
             raise AssertionError("認証エラーになりませんでした")
     finally:
         server.stop()
+
+
+def test_dashboard_state_supports_overlay():
+    """オーバーレイの表示状態を設定・消去できる。"""
+    state = DashboardState()
+
+    # 初期状態
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is False
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "conversation"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "notifications"
+
+    # 設定 (後方互換の set_overlay を経由)
+    state.set_overlay(
+        overlay_type="map",
+        title="周辺地図",
+        content="地図テスト",
+        url="http://127.0.0.1/map",
+        options={"lat": 35.6, "lng": 139.6}
+    )
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is True
+    assert snapshot["overlay"]["type"] == "map"
+    assert snapshot["overlay"]["title"] == "周辺地図"
+    assert snapshot["overlay"]["content"] == "地図テスト"
+    assert snapshot["overlay"]["url"] == "http://127.0.0.1/map"
+    assert snapshot["overlay"]["options"] == {"lat": 35.6, "lng": 139.6}
+    # 後方互換で right スロットに積まれていること
+    assert len(snapshot["slot_stacks"]["right"]) == 2
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
+
+    # 消去 (後方互換の clear_overlay を経由)
+    state.clear_overlay()
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is False
+    assert len(snapshot["slot_stacks"]["right"]) == 1
+
+    # 新仕様スロットスタックの直接テスト
+    state.push_overlay("center", "map", "中央地図", url="http://map")
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["center"]) == 2
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "map"
+    assert snapshot["slot_stacks"]["center"][-1]["title"] == "中央地図"
+
+    # スロット入れ替え
+    state.swap_slots()
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "notifications"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "map"
+    assert snapshot["slot_stacks"]["right"][-1]["title"] == "中央地図"
+
+    # スロットPop
+    state.pop_overlay("right")
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["right"]) == 1
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "conversation"  # swapしたので底はconversation
+
+
+def test_apply_event_supports_overlay():
+    """外部イベントAPIを介してオーバーレイの表示・消去イベントを適用できる。"""
+    state = DashboardState()
+
+    # overlayイベントの適用 (target_slot 省略時は right)
+    _apply_event(state, {
+        "type": "overlay",
+        "overlay_type": "markdown",
+        "title": "タスクリスト",
+        "content": "# タスクリスト\n- [ ] 開発",
+        "url": "/static/reader.html",
+        "options": {"foo": "bar"}
+    })
+    snapshot = state.snapshot()
+    assert snapshot["overlay"]["active"] is True
+    assert snapshot["overlay"]["type"] == "markdown"
+    assert snapshot["overlay"]["title"] == "タスクリスト"
+    assert snapshot["overlay"]["content"] == "# タスクリスト\n- [ ] 開発"
+    assert snapshot["overlay"]["url"] == "/static/reader.html"
+    assert snapshot["overlay"]["options"] == {"foo": "bar"}
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "markdown"
+
+    # target_slot="center" での overlay イベントの適用
+    _apply_event(state, {
+        "type": "overlay",
+        "target_slot": "center",
+        "overlay_type": "map",
+        "title": "中央地図",
+        "url": "http://map"
+    })
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "map"
+
+    # replace_top 付きの overlay イベントは同じスロットの最前面を差し替える
+    _apply_event(state, {
+        "type": "overlay",
+        "target_slot": "center",
+        "overlay_type": "nav",
+        "title": "ナビ",
+        "url": "/static/nav.html?zoom=14",
+        "replace_top": True,
+    })
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["center"]) == 2
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "nav"
+    assert snapshot["slot_stacks"]["center"][-1]["url"] == "/static/nav.html?zoom=14"
+
+    # swap_slots イベントの適用
+    _apply_event(state, {"type": "swap_slots"})
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "markdown"
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "nav"
+
+    # clear_overlay イベントの適用 (centerスロットをpop)
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "center"})
+    snapshot = state.snapshot()
+    # centerは notifications が pop できないのでそのまま
+    assert snapshot["slot_stacks"]["center"][-1]["type"] == "notifications"
+
+    # clear_overlay イベントの適用 (rightスロットをpop)
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "right"})
+    snapshot = state.snapshot()
+    assert snapshot["slot_stacks"]["right"][-1]["type"] == "conversation"  # 地図が消えてデフォルトに戻る
+    assert snapshot["overlay"]["active"] is False
+
+
+def test_dashboard_server_serves_static_files():
+    """/static/* 経由でパッケージ内の静的ファイルを返せる。"""
+    state = DashboardState()
+    server = DashboardServer(state, "127.0.0.1", 0, "secret")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        # reader.html を取得してみる
+        with urlopen(base_url + "/static/reader.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Markdown Reader" in html
+
+        # map.html を取得してみる
+        with urlopen(base_url + "/static/map.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Map Viewer" in html
+            assert "current-location-marker" in html
+            assert "destination-marker" in html
+            assert "bindTooltip" in html
+            assert "labelMode" in html
+            assert "label_mode" in html
+
+        # nav.html を取得してみる
+        with urlopen(base_url + "/static/nav.html", timeout=2) as response:
+            assert response.headers["Content-Type"] == "text/html; charset=utf-8"
+            html = response.read().decode("utf-8")
+            assert "Navigation Map" in html
+            assert "現在地追従中" in html
+            assert 'params.get("orientation")' in html
+            assert "進行方向" in html
+            assert "/api/location" in html
+
+        # 存在しないファイルは404
+        with pytest.raises(HTTPError) as exc:
+            urlopen(base_url + "/static/nonexistent.html", timeout=2)
+        assert exc.value.code == 404
+
+        # ディレクトリトラバーサルのガードテスト
+        with pytest.raises(HTTPError) as exc:
+            urlopen(base_url + "/static/../server.py", timeout=2)
+        assert exc.value.code == 403
+    finally:
+        server.stop()
+
+
+def test_parse_nmea_location_from_rmc():
+    """RMC文から現在地、速度、進行方向を取り出せる。"""
+    location = parse_nmea_location("$GPRMC,054543.20,A,3713.69073,N,13950.85569,E,26.529,242.71,120626,,,D*57")
+
+    assert location is not None
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.2281788)
+    assert location["lng"] == pytest.approx(139.8475948)
+    assert location["speed_kmh"] == 49.1
+    assert location["course"] == 242.71
+
+
+def test_parse_gpsd_tpv():
+    """gpsdのTPV JSONから現在地を取り出せる。"""
+    location = parse_gpsd_tpv(
+        '{"class":"TPV","mode":3,"lat":37.110871441,"lon":139.720415378,"speed":0.029,"track":347.2306}'
+    )
+
+    assert location is not None
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.110871441)
+    assert location["lng"] == pytest.approx(139.720415378)
+    assert location["speed_kmh"] == 0.1
+    assert location["course"] == 347.2306
+
+
+def test_parse_remote_location_from_car_logger_latest():
+    """カーロガーの /api/latest レスポンスを現在地形式へ変換できる。"""
+    location = parse_remote_location(
+        {
+            "point": {
+                "lat": 37.110871441,
+                "lon": 139.720415378,
+                "speed_kmh": 12.3,
+                "course": 242.7,
+                "recorded_at": "2026-06-12T12:34:56+09:00",
+            }
+        }
+    )
+
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(37.110871441)
+    assert location["lng"] == pytest.approx(139.720415378)
+    assert location["speed_kmh"] == 12.3
+    assert location["course"] == 242.7
+    assert location["updated_at"] == "2026-06-12T12:34:56+09:00"
+    assert location["source"] == "remote"
+
+
+def test_parse_remote_location_from_car_logger_gps():
+    """カーロガーの /gps レスポンスを現在地形式へ変換できる。"""
+    location = parse_remote_location(
+        {
+            "has_fix": True,
+            "lat": 35.681236,
+            "lon": 139.767125,
+            "speed_kmh": 0.0,
+            "last_fix_at": "2026-06-12T22:09:08+00:00",
+        }
+    )
+
+    assert location["available"] is True
+    assert location["lat"] == pytest.approx(35.681236)
+    assert location["lng"] == pytest.approx(139.767125)
+    assert location["speed_kmh"] == 0.0
+    assert location["updated_at"] == "2026-06-12T22:09:08+00:00"
+    assert location["source"] == "remote"
+    assert location["has_fix"] is True
+
+
+def test_dashboard_server_serves_location(monkeypatch, tmp_path):
+    """GPSデバイス相当のNMEAファイルから現在地APIを返せる。"""
+    monkeypatch.setattr(dashboard_location, "read_gpsd_location", lambda timeout_seconds=1.2: {"available": False, "error": "gpsdなし"})
+    gps_file = tmp_path / "gps.nmea"
+    gps_file.write_text(
+        "$GPRMC,054543.20,A,3713.69073,N,13950.85569,E,26.529,242.71,120626,,,D*57\n",
+        encoding="ascii",
+    )
+    state = DashboardState()
+    server = DashboardServer(state, "127.0.0.1", 0, "secret", gps_device_path=gps_file)
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        _, payload = _read_json(base_url + "/api/location")
+    finally:
+        server.stop()
+
+    assert payload["available"] is True
+    assert payload["lat"] == pytest.approx(37.2281788)
+    assert payload["lng"] == pytest.approx(139.8475948)
+
+
+def test_dashboard_server_serves_remote_location(monkeypatch):
+    """リモートGPS設定時は指定URLから現在地を返す。"""
+    calls = []
+
+    def fake_read_location(provider, device_path, remote_url, timeout_seconds):
+        calls.append((provider, remote_url, timeout_seconds))
+        return {
+            "available": True,
+            "lat": 35.0,
+            "lng": 139.0,
+            "updated_at": "2026-06-12T12:34:56+09:00",
+        }
+
+    monkeypatch.setattr(dashboard_server, "read_location", fake_read_location)
+    state = DashboardState()
+    server = DashboardServer(
+        state,
+        "127.0.0.1",
+        0,
+        "secret",
+        location_provider="remote",
+        remote_location_url="http://example.test/gps",
+        remote_location_timeout_seconds=1.5,
+    )
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        _, payload = _read_json(base_url + "/api/location")
+    finally:
+        server.stop()
+
+    assert payload["available"] is True
+    assert payload["lat"] == 35.0
+    assert calls == [("remote", "http://example.test/gps", 1.5)]

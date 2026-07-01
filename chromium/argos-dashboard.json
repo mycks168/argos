@@ -1,3 +1,7 @@
 {
+  "BrowserSignin": 0,
+  "PasswordManagerEnabled": false,
+  "PromotionalTabsEnabled": false,
+  "SyncDisabled": true,
   "TranslateEnabled": false
 }

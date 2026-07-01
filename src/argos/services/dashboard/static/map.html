@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Map Viewer</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+    }
+    /* 地図タイル用のシンプルなダークモードフィルター */
+    .leaflet-tile-container {
+      filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(95%);
+    }
+    .leaflet-container {
+      background: #0d151c !important;
+    }
+    .map-label {
+      background: rgba(12, 18, 24, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      border-radius: 6px;
+      color: #fff;
+      font: 700 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      padding: 5px 8px;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+      white-space: nowrap;
+    }
+    .leaflet-tooltip-top.map-label::before {
+      border-top-color: rgba(12, 18, 24, 0.88);
+    }
+    .leaflet-control-scale-line {
+      background: rgba(12, 18, 24, 0.88) !important;
+      border: 1px solid rgba(255, 255, 255, 0.22) !important;
+      border-top: none !important;
+      color: #fff !important;
+      font-weight: bold;
+    }
+    .current-location-marker {
+      align-items: center;
+      background: #28a8ff;
+      border: 3px solid #fff;
+      border-radius: 999px;
+      box-shadow: 0 0 0 5px rgba(40, 168, 255, 0.22), 0 3px 10px rgba(0, 0, 0, 0.55);
+      display: flex;
+      height: 22px;
+      justify-content: center;
+      width: 22px;
+    }
+    .current-location-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 7px;
+      width: 7px;
+    }
+    .destination-marker {
+      background: #ff4d4d;
+      border: 3px solid #fff;
+      border-radius: 999px 999px 999px 0;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.55);
+      height: 24px;
+      transform: rotate(-45deg);
+      width: 24px;
+    }
+    .destination-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 8px;
+      left: 8px;
+      position: absolute;
+      top: 8px;
+      width: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // クエリパラメータの解析
+    const params = new URLSearchParams(window.location.search);
+    const curLat = parseFloat(params.get('cur_lat'));
+    const curLng = parseFloat(params.get('cur_lng'));
+    const followCurrentLocation = params.get('follow') === '1';
+    const labelMode = params.get('label_mode') || 'permanent';
+
+    // 経路描画用の変数とスロットリング
+    let routePolyline = null;
+    let lastRouteFetchTime = 0;
+    const routeParam = params.get('route') === '1' || params.get('route') === 'true';
+    const osrmUrl = params.get('osrm_url') || 'http://localhost:5001';
+
+    // 地図の初期化
+    const map = L.map('map', {
+      zoomControl: false // すっきりしたダッシュボード外観にするためズームコントロールを非表示に
+    }).setView([35.6895, 139.6917], 13); // ビュー初期化前のオブジェクト追加エラーを防ぐため仮の初期ビューを設定
+
+    // OpenStreetMapタイルレイヤーを追加
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    // 距離の凡例（スケール）を表示
+    L.control.scale({ imperial: false }).addTo(map);
+
+    async function fetchAndDrawRoute() {
+      if (!routeParam) return;
+      
+      const now = Date.now();
+      if (now - lastRouteFetchTime < 5000) { // 5秒以内の再呼び出しは無視
+        return;
+      }
+      lastRouteFetchTime = now;
+      
+      const coords = [];
+      
+      if (currentMarker) {
+        const curLatLng = currentMarker.getLatLng();
+        coords.push([curLatLng.lat, curLatLng.lng]);
+      } else if (!isNaN(curLat) && !isNaN(curLng)) {
+        coords.push([curLat, curLng]);
+      }
+      
+      const destinationMarkers = markers.filter(m => m !== currentMarker);
+      if (destinationMarkers.length > 0) {
+        destinationMarkers.forEach(m => {
+          const latLng = m.getLatLng();
+          coords.push([latLng.lat, latLng.lng]);
+        });
+      } else {
+        const pLat = parseFloat(params.get('lat'));
+        const pLng = parseFloat(params.get('lng'));
+        if (!isNaN(pLat) && !isNaN(pLng)) {
+          coords.push([pLat, pLng]);
+        }
+      }
+      
+      if (coords.length < 2) {
+        return;
+      }
+      
+      const coordStr = coords.map(c => `${c[1]},${c[0]}`).join(';');
+      const url = `${osrmUrl.replace(/\/$/, '')}/route/v1/driving/${coordStr}?overview=full&geometries=geojson`;
+      
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`OSRM HTTP error: ${response.status}`);
+        }
+        const data = await response.json();
+        const routes = data.routes;
+        if (routes && routes.length > 0) {
+          const coordinates = routes[0].geometry.coordinates;
+          const latLngs = coordinates.map(c => [c[1], c[0]]);
+          
+          if (routePolyline) {
+            map.removeLayer(routePolyline);
+          }
+          
+          routePolyline = L.polyline(latLngs, {
+            color: '#28a8ff',
+            weight: 5,
+            opacity: 0.75,
+            lineJoin: 'round'
+          }).addTo(map);
+        }
+      } catch (error) {
+        console.warn('経路の取得に失敗しました:', error);
+      }
+    }
+
+    const markers = [];
+    const dynamicMarkers = [];
+    let currentMarker = null;
+    let currentCircle = null;
+
+    // 接近判定用のパラメータ（クエリパラメータから取得）
+    const nearThreshold = parseInt(params.get('near_threshold')) || 2000;
+    const farOffset = parseInt(params.get('far_offset')) || 500;
+
+    // 接近判定用の状態変数
+    let activeNearMarker = null; // 現在接近中の目的地マーカー
+    let minDistanceToActive = Infinity; // activeNearMarker への最接近距離 (メートル)
+    let lastNearMarker = null; // 前回の接近中マーカー（切り替わり検知用）
+
+    const currentLocationIcon = L.divIcon({
+      className: '',
+      html: '<div class="current-location-marker" aria-label="現在地"></div>',
+      iconSize: [28, 28],
+      iconAnchor: [14, 14]
+    });
+    const destinationIcon = L.divIcon({
+      className: '',
+      html: '<div class="destination-marker" aria-label="目的地"></div>',
+      iconSize: [30, 30],
+      iconAnchor: [15, 28],
+      popupAnchor: [0, -28],
+      tooltipAnchor: [0, -30]
+    });
+
+    /**
+     * 目的地アイコンを特定の色で作成する。
+     * @param {string} color - カラーコード
+     * @returns {L.DivIcon} Leaflet DivIcon オブジェクト
+     */
+    function createDestinationIcon(color) {
+      const bgColor = color || '#ff4d4d';
+      return L.divIcon({
+        className: '',
+        html: `<div class="destination-marker" style="background: ${bgColor};" aria-label="目的地"></div>`,
+        iconSize: [30, 30],
+        iconAnchor: [15, 28],
+        popupAnchor: [0, -28],
+        tooltipAnchor: [0, -30]
+      });
+    }
+
+    /**
+     * マーカーにラベルをバインドする。
+     * @param {L.Marker} marker - マーカー
+     * @param {string} title - 表示テキスト
+     * @returns {L.Marker} マーカー
+     */
+    function labelMarker(marker, title) {
+      if (labelMode === 'permanent') {
+        marker.bindTooltip(title, {
+          permanent: true,
+          direction: 'top',
+          offset: [0, -10],
+          className: 'map-label'
+        });
+      } else if (labelMode === 'hover') {
+        marker.bindTooltip(title, {
+          permanent: false,
+          direction: 'top',
+          offset: [0, -10],
+          className: 'map-label'
+        });
+      }
+      marker.bindPopup(title);
+      return marker;
+    }
+
+    /**
+     * マップの表示範囲をマーカー群（現在地・目的地など）に合わせて調整する。
+     * ズームレベルが変わる必要がある場合、または現在地が画面外に出そうな場合のみ再描画する。
+     * @param {boolean} force - 真の場合、ズーム等の変化の有無に関わらず強制的に即座に（アニメーションなしで）調整する。
+     */
+    function adjustMapView(force = false) {
+      if (markers.length === 0) {
+        return;
+      }
+
+      // 目的地マーカー（現在地以外のマーカー）を抽出
+      const destinationMarkers = markers.filter(m => m !== currentMarker);
+      if (destinationMarkers.length === 0) {
+        if (currentMarker) {
+          map.setView(currentMarker.getLatLng(), parseInt(params.get('zoom')) || 13);
+        }
+        return;
+      }
+
+      let nearMarker = null;
+      if (currentMarker) {
+        const curLatLng = currentMarker.getLatLng();
+
+        // 各目的地への距離を計算
+        const dists = destinationMarkers.map(m => {
+          return { marker: m, distance: curLatLng.distanceTo(m.getLatLng()) };
+        });
+        dists.sort((a, b) => a.distance - b.distance);
+        const closest = dists[0];
+
+        // すでに接近中の目的地がある場合の離脱判定
+        if (activeNearMarker) {
+          const currentDist = curLatLng.distanceTo(activeNearMarker.getLatLng());
+
+          // 最接近距離を更新
+          if (currentDist < minDistanceToActive) {
+            minDistanceToActive = currentDist;
+          }
+
+          // 最接近地点から farOffset 以上離れたら離脱（全体表示へ戻す ＆ マーカー削除）
+          if (currentDist > minDistanceToActive + farOffset) {
+            activeNearMarker.unbindTooltip();
+            map.removeLayer(activeNearMarker);
+
+            // markers配列から削除
+            const idx = markers.indexOf(activeNearMarker);
+            if (idx > -1) {
+              markers.splice(idx, 1);
+            }
+
+            activeNearMarker = null;
+            minDistanceToActive = Infinity;
+          } else {
+            nearMarker = activeNearMarker;
+          }
+        }
+
+        // 新たに接近判定 (nearThreshold 以内に入った場合)
+        if (!activeNearMarker && closest && closest.distance <= nearThreshold) {
+          activeNearMarker = closest.marker;
+          minDistanceToActive = closest.distance;
+          nearMarker = closest.marker;
+        }
+      } else {
+        activeNearMarker = null;
+        minDistanceToActive = Infinity;
+      }
+
+      // ズーム対象とするマーカーを選定
+      let targetMarkers = [];
+      if (nearMarker && currentMarker) {
+        // 接近中の目的地がある場合は、その目的地と現在地だけをズーム対象にする
+        targetMarkers = [currentMarker, nearMarker];
+      } else {
+        // そうでない場合はすべてのマーカー（現在地＋すべての目的地）をズーム対象にする
+        targetMarkers = markers;
+      }
+
+      const group = new L.featureGroup(targetMarkers);
+      if (targetMarkers.length === 1) {
+        map.setView(targetMarkers[0].getLatLng(), parseInt(params.get('zoom')) || 13);
+      } else {
+        const targetBounds = group.getBounds().pad(0.15);
+
+        // 接近状態が変化した瞬間（クローズアップに入った、あるいは全体に戻った時）は強制的に再描画する
+        const stateChanged = (nearMarker !== lastNearMarker);
+
+        if (force || stateChanged) {
+          map.fitBounds(targetBounds, { animate: !force });
+          const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
+          if (zoomOffset !== 0) {
+            map.setZoom(map.getZoom() + zoomOffset, { animate: !force });
+          }
+          lastNearMarker = nearMarker;
+          return;
+        }
+
+        // 全マーカーが収まる最適なズームレベルを取得
+        const idealZoom = map.getBoundsZoom(targetBounds);
+        const currentZoom = map.getZoom();
+
+        // 現在地が現在の表示範囲（マージン付き）からはみ出ているかチェック
+        let isOutOfFrame = false;
+        if (currentMarker) {
+          const currentBounds = map.getBounds();
+          const innerBounds = currentBounds.pad(-0.1);
+          if (!innerBounds.contains(currentMarker.getLatLng())) {
+            isOutOfFrame = true;
+          }
+        }
+
+        // ズームが変わるか、現在地が範囲外にはみ出たときだけ再描画
+        if (idealZoom !== currentZoom || isOutOfFrame) {
+          map.fitBounds(targetBounds);
+          const zoomOffset = parseInt(params.get('zoom_offset')) || 0;
+          if (zoomOffset !== 0) {
+            map.setZoom(map.getZoom() + zoomOffset);
+          }
+        }
+      }
+      lastNearMarker = nearMarker;
+    }
+
+    /**
+     * 現在地をマップ上に追加、または更新する。
+     * @param {number} lat - 緯度
+     * @param {number} lng - 経度
+     */
+    function upsertCurrentLocation(lat, lng) {
+      if (isNaN(lat) || isNaN(lng)) {
+        return;
+      }
+      const latLng = [lat, lng];
+      if (!currentCircle) {
+        currentCircle = L.circle(latLng, {
+          color: '#69b7e4',
+          fillColor: '#69b7e4',
+          fillOpacity: 0.2,
+          radius: 400
+        }).addTo(map);
+      } else {
+        currentCircle.setLatLng(latLng);
+      }
+      if (!currentMarker) {
+        currentMarker = labelMarker(
+          L.marker(latLng, { icon: currentLocationIcon }).addTo(map),
+          "現在地"
+        );
+        markers.push(currentMarker);
+        dynamicMarkers.push(currentMarker);
+      } else {
+        currentMarker.setLatLng(latLng);
+      }
+
+      // 追従モードの場合は、現在地更新時に必要に応じて表示範囲を調整
+      if (followCurrentLocation) {
+        adjustMapView(false);
+      }
+      if (routeParam) {
+        fetchAndDrawRoute();
+      }
+    }
+
+    /**
+     * 現在地追従のループを開始する。
+     */
+    function startCurrentLocationFollow() {
+      async function updateLocation() {
+        try {
+          const response = await fetch('/api/location', { cache: 'no-store' });
+          if (!response.ok) {
+            return;
+          }
+          const location = await response.json();
+          if (location.available) {
+            upsertCurrentLocation(location.lat, location.lng);
+          }
+        } catch (error) {
+          console.warn('現在地の更新に失敗しました', error);
+        }
+      }
+      updateLocation();
+      setInterval(updateLocation, 2000);
+    }
+
+    // 現在地の描画
+    if (!isNaN(curLat) && !isNaN(curLng)) {
+      upsertCurrentLocation(curLat, curLng);
+    }
+
+    // 複数目的地の描画 (points=lat,lng,title,color|lat,lng,title,color...)
+    const pointsParam = params.get('points');
+    if (pointsParam) {
+      const pointStrings = pointsParam.split('|');
+      pointStrings.forEach(pStr => {
+        const parts = pStr.split(',');
+        if (parts.length >= 2) {
+          const lat = parseFloat(parts[0]);
+          const lng = parseFloat(parts[1]);
+          const title = parts[2] || "目的地";
+          const color = parts[3] || "";
+          if (!isNaN(lat) && !isNaN(lng)) {
+            const icon = color ? createDestinationIcon(color) : destinationIcon;
+            const marker = labelMarker(L.marker([lat, lng], { icon: icon }).addTo(map), title);
+            markers.push(marker);
+          }
+        }
+      });
+    } else {
+      // 従来の単一目的地 (lat, lng, title, color)
+      const lat = parseFloat(params.get('lat')) || 35.6895;
+      const lng = parseFloat(params.get('lng')) || 139.6917;
+      const title = params.get('title') || "目的地";
+      const color = params.get('color') || "";
+      if (!isNaN(lat) && !isNaN(lng)) {
+        const icon = color ? createDestinationIcon(color) : destinationIcon;
+        const marker = labelMarker(L.marker([lat, lng], { icon: icon }).addTo(map), title);
+        markers.push(marker);
+      }
+    }
+
+
+    // 地図範囲の自動調整
+    adjustMapView(true);
+
+    if (routeParam) {
+      fetchAndDrawRoute();
+    }
+
+    if (followCurrentLocation) {
+      startCurrentLocationFollow();
+    }
+  </script>
+</body>
+</html>

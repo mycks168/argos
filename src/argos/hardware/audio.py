@@ -9,14 +9,286 @@ import signal
 import struct
 import subprocess
 import threading
+import time
+import uuid
 import wave
 import logging
 from pathlib import Path
 from collections.abc import Iterable
+import queue
 
 
 WAV_PATH = "/tmp/argos/utterance.wav"
+WAV_PREFIX = "utterance-"
+STALE_RECORDING_SECONDS = 60 * 60
+STT_LEADING_SILENCE_SECONDS = 0.2
+STT_TRAILING_SILENCE_SECONDS = 0.5
 log = logging.getLogger(__name__)
+
+
+class AudioInputSubscription:
+    """共有マイク入力から音声チャンクを受け取る購読ハンドル。"""
+
+    def __init__(self, source: "AudioInputStream", subscriber_id: int, frames: "queue.Queue[bytes]") -> None:
+        """購読元とキューを保持する。"""
+        self._source = source
+        self._subscriber_id = subscriber_id
+        self._frames = frames
+        self._closed = False
+
+    def read(self, timeout: float = 1.0) -> bytes:
+        """次のPCM16 monoチャンクを返す。タイムアウト時は空bytesを返す。"""
+        if self._closed:
+            return b""
+        try:
+            return self._frames.get(timeout=timeout)
+        except queue.Empty:
+            return b""
+
+    def close(self) -> None:
+        """購読を解除する。"""
+        if self._closed:
+            return
+        self._closed = True
+        self._source.unsubscribe(self._subscriber_id)
+
+
+class AudioInputStream:
+    """1つのarecord入力を複数処理へ配信する共有マイクストリーム。"""
+
+    def __init__(
+        self,
+        devices: str | Iterable[str],
+        capture_sample_rate: int,
+        output_sample_rate: int,
+        *,
+        chunk_ms: int = 80,
+        subscriber_queue_chunks: int = 256,
+    ) -> None:
+        """入力デバイス候補と配信サンプルレートを保持する。"""
+        self._devices = (devices,) if isinstance(devices, str) else tuple(devices)
+        if not self._devices:
+            raise ValueError("共有マイク入力デバイス候補が空です")
+        self._device = self._devices[0]
+        self._capture_sample_rate = max(1, int(capture_sample_rate))
+        self._output_sample_rate = max(1, int(output_sample_rate))
+        self._chunk_ms = max(10, int(chunk_ms))
+        self._subscriber_queue_chunks = max(1, int(subscriber_queue_chunks))
+        self._stop = threading.Event()
+        self._lock = threading.Lock()
+        self._subscribers: dict[int, queue.Queue[bytes]] = {}
+        self._next_subscriber_id = 1
+        self._proc: subprocess.Popen | None = None
+        self._thread: threading.Thread | None = None
+
+    @property
+    def output_sample_rate(self) -> int:
+        """購読者へ配信するサンプルレートを返す。"""
+        return self._output_sample_rate
+
+    def start(self) -> None:
+        """共有マイク入力を開始する。"""
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        """共有マイク入力を停止する。"""
+        self._stop.set()
+        self._stop_process()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=3)
+        with self._lock:
+            self._subscribers.clear()
+
+    def subscribe(self) -> AudioInputSubscription:
+        """音声チャンク購読を作成する。"""
+        self.start()
+        frames: queue.Queue[bytes] = queue.Queue(maxsize=self._subscriber_queue_chunks)
+        with self._lock:
+            subscriber_id = self._next_subscriber_id
+            self._next_subscriber_id += 1
+            self._subscribers[subscriber_id] = frames
+        return AudioInputSubscription(self, subscriber_id, frames)
+
+    def unsubscribe(self, subscriber_id: int) -> None:
+        """指定購読者を解除する。"""
+        with self._lock:
+            self._subscribers.pop(subscriber_id, None)
+
+    def _run(self) -> None:
+        """arecord raw入力を読み、購読者へ配信し続ける。"""
+        while not self._stop.is_set():
+            try:
+                self._run_process()
+            except Exception:
+                log.exception("共有マイク入力が失敗しました。再試行します")
+                if self._stop.wait(2.0):
+                    return
+
+    def _run_process(self) -> None:
+        """arecordプロセスを開いて音声を配信する。"""
+        proc = self._open_arecord()
+        self._proc = proc
+        chunk_size = max(1, int(self._capture_sample_rate * self._chunk_ms / 1000))
+        bytes_per_chunk = chunk_size * 2
+        try:
+            while not self._stop.is_set():
+                data = proc.stdout.read(bytes_per_chunk) if proc.stdout else b""
+                if not data:
+                    raise RuntimeError("共有マイク入力の音声ストリームが終了しました")
+                model_data = _resample_pcm16(data, self._capture_sample_rate, self._output_sample_rate)
+                self._publish(model_data)
+        finally:
+            self._stop_process()
+
+    def _open_arecord(self) -> subprocess.Popen:
+        """候補デバイスからarecord raw入力を開始する。"""
+        self._device = select_available_input_device((self._device, *self._devices))
+        cmd = [
+            "arecord",
+            "-D",
+            self._device,
+            "-f",
+            "S16_LE",
+            "-r",
+            str(self._capture_sample_rate),
+            "-c",
+            "1",
+            "-t",
+            "raw",
+            "-",
+        ]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        time.sleep(0.1)
+        if proc.poll() is None:
+            log.info("共有マイク入力開始: %s", " ".join(cmd))
+            return proc
+        stderr = proc.stderr.read().decode(errors="replace").strip() if proc.stderr else ""
+        raise RuntimeError(f"共有マイク入力デバイスを開けません: {stderr}")
+
+    def _publish(self, data: bytes) -> None:
+        """購読者キューへ音声を配信する。"""
+        with self._lock:
+            subscribers = tuple(self._subscribers.values())
+        for frames in subscribers:
+            if frames.full():
+                try:
+                    frames.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                frames.put_nowait(data)
+            except queue.Full:
+                pass
+
+    def _stop_process(self) -> None:
+        """arecordプロセスを停止する。"""
+        proc = self._proc
+        self._proc = None
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            proc.send_signal(signal.SIGINT)
+            proc.wait(timeout=1)
+        except (OSError, subprocess.TimeoutExpired):
+            proc.kill()
+            proc.wait(timeout=1)
+
+
+class StreamRecorder:
+    """共有マイクストリームからPTT録音用WAVを切り出す。"""
+
+    def __init__(self, source: AudioInputStream, sample_rate: int) -> None:
+        """共有入力とWAVサンプルレートを保持する。"""
+        self._source = source
+        self._sample_rate = sample_rate
+        self._wav_path = WAV_PATH
+        self._subscription: AudioInputSubscription | None = None
+        self._frames: list[bytes] = []
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._recording = False
+        self._lock = threading.Lock()
+
+    @property
+    def is_recording(self) -> bool:
+        """共有ストリームから録音中か返す。"""
+        with self._lock:
+            return self._recording
+
+    def start(self) -> None:
+        """共有ストリームから録音を開始する。"""
+        with self._lock:
+            if self._recording:
+                log.warning("録音開始をスキップしました: 既に共有ストリーム録音中です")
+                return
+            recording_dir = Path(WAV_PATH).parent
+            recording_dir.mkdir(parents=True, exist_ok=True)
+            self._wav_path = str(recording_dir / f"{WAV_PREFIX}{time.time_ns()}-{uuid.uuid4().hex}.wav")
+            self._frames = []
+            self._stop.clear()
+            self._subscription = self._source.subscribe()
+            self._recording = True
+            self._thread = threading.Thread(target=self._record_loop, daemon=True)
+            self._thread.start()
+        log.info("共有ストリーム録音開始: %s", self._wav_path)
+
+    def stop(self) -> str:
+        """録音を停止し、WAVパスを返す。"""
+        with self._lock:
+            if not self._recording:
+                return self._wav_path
+            self._recording = False
+            thread = self._thread
+            subscription = self._subscription
+        self._stop.set()
+        if thread is not None:
+            thread.join(timeout=3)
+        if subscription is not None:
+            subscription.close()
+        frames = self._frames
+        if not frames:
+            raise RuntimeError("共有ストリーム録音データが空です")
+        _write_pcm16_wav(Path(self._wav_path), frames, self._sample_rate)
+        _pad_wav_silence(self._wav_path, STT_LEADING_SILENCE_SECONDS, STT_TRAILING_SILENCE_SECONDS)
+        with self._lock:
+            self._subscription = None
+            self._thread = None
+        return self._wav_path
+
+    def cancel(self) -> None:
+        """録音を破棄して停止する。"""
+        with self._lock:
+            was_recording = self._recording
+            self._recording = False
+            thread = self._thread
+            subscription = self._subscription
+        if not was_recording:
+            log.info("録音キャンセル: 共有ストリーム録音はありません")
+            return
+        self._stop.set()
+        if thread is not None:
+            thread.join(timeout=2)
+        if subscription is not None:
+            subscription.close()
+        with self._lock:
+            self._subscription = None
+            self._thread = None
+            self._frames = []
+        _remove_file_quietly(self._wav_path)
+
+    def _record_loop(self) -> None:
+        """購読した音声チャンクをWAV用フレームへ蓄積する。"""
+        subscription = self._subscription
+        if subscription is None:
+            return
+        while not self._stop.is_set():
+            data = subscription.read(timeout=0.2)
+            if data:
+                self._frames.append(data)
 
 
 def check_audio_level(wav_path: str) -> float:
@@ -44,6 +316,7 @@ class Recorder:
         self._device = self._devices[0]
         self._sample_rate = sample_rate
         self._proc: subprocess.Popen | None = None
+        self._wav_path = WAV_PATH
 
     @property
     def is_recording(self) -> bool:
@@ -55,11 +328,9 @@ class Recorder:
         if self.is_recording:
             log.warning("録音開始をスキップしました: 既に arecord が動作中です")
             return
-        Path(WAV_PATH).parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.remove(WAV_PATH)
-        except FileNotFoundError:
-            pass
+        recording_dir = Path(WAV_PATH).parent
+        recording_dir.mkdir(parents=True, exist_ok=True)
+        self._wav_path = str(recording_dir / f"{WAV_PREFIX}{time.time_ns()}-{uuid.uuid4().hex}.wav")
         self._device = select_available_input_device((self._device, *self._devices))
         cmd = [
             "arecord",
@@ -73,7 +344,7 @@ class Recorder:
             "1",
             "-t",
             "wav",
-            WAV_PATH,
+            self._wav_path,
         ]
         log.info("録音開始: %s", " ".join(cmd))
         self._proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -82,7 +353,8 @@ class Recorder:
         """録音を停止し、WAV パスを返す。"""
         proc = self._proc
         if proc is None:
-            return WAV_PATH
+            return self._wav_path
+        wav_path = self._wav_path
         try:
             proc.send_signal(signal.SIGINT)
             proc.wait(timeout=3)
@@ -94,9 +366,9 @@ class Recorder:
         stderr = ""
         if proc.stderr:
             stderr = proc.stderr.read().decode(errors="replace").strip()
-        if not os.path.exists(WAV_PATH):
+        if not os.path.exists(wav_path):
             raise RuntimeError(f"録音ファイルが作成されませんでした。device={self._device}, stderr={stderr}")
-        file_size = os.path.getsize(WAV_PATH)
+        file_size = os.path.getsize(wav_path)
         if file_size < 100:
             raise RuntimeError(f"録音ファイルが小さすぎます。size={file_size}, device={self._device}, stderr={stderr}")
         if proc.returncode not in (0, -signal.SIGINT):
@@ -104,8 +376,9 @@ class Recorder:
                 log.debug("arecord は SIGINT 停止時に code=%s を返しましたが、WAV は作成済みです", proc.returncode)
             else:
                 raise RuntimeError(f"arecord が失敗しました。device={self._device}, code={proc.returncode}, stderr={stderr}")
-        _repair_wav_header(WAV_PATH)
-        return WAV_PATH
+        _repair_wav_header(wav_path)
+        _pad_wav_silence(wav_path, STT_LEADING_SILENCE_SECONDS, STT_TRAILING_SILENCE_SECONDS)
+        return wav_path
 
     def cancel(self) -> None:
         """録音を破棄して停止する。"""
@@ -120,6 +393,57 @@ class Recorder:
         except OSError:
             pass
         self._proc = None
+        _remove_file_quietly(self._wav_path)
+
+
+def cleanup_stale_recordings(max_age_seconds: int = STALE_RECORDING_SECONDS) -> int:
+    """古い録音一時ファイルを削除し、削除数を返す。"""
+    recording_dir = Path(WAV_PATH).parent
+    if not recording_dir.exists():
+        return 0
+    threshold = time.time() - max_age_seconds
+    removed = 0
+    for path in recording_dir.glob(f"{WAV_PREFIX}*.wav"):
+        try:
+            if path.stat().st_mtime < threshold:
+                path.unlink()
+                removed += 1
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            log.warning("古い録音ファイルを削除できませんでした: %s: %s", path, exc)
+    return removed
+
+
+def _remove_file_quietly(path: str) -> None:
+    """不要になった録音ファイルを存在する場合だけ削除する。"""
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("録音ファイルを削除できませんでした: %s: %s", path, exc)
+
+
+def _pad_wav_silence(wav_path: str, leading_seconds: float, trailing_seconds: float) -> None:
+    """短い発話でもSTTが扱いやすいよう、WAVの前後へ無音を追加する。"""
+    try:
+        with wave.open(wav_path, "rb") as wav_file:
+            params = wav_file.getparams()
+            frames = wav_file.readframes(wav_file.getnframes())
+        if params.comptype != "NONE":
+            return
+        frame_size = params.nchannels * params.sampwidth
+        leading_frames = max(0, int(params.framerate * leading_seconds))
+        trailing_frames = max(0, int(params.framerate * trailing_seconds))
+        silence = b"\x00" * frame_size
+        padded = silence * leading_frames + frames + silence * trailing_frames
+        with wave.open(wav_path, "wb") as wav_file:
+            wav_file.setparams(params)
+            wav_file.writeframes(padded)
+        log.debug("STT向けにWAVへ無音を追加しました: %s leading=%.2f trailing=%.2f", wav_path, leading_seconds, trailing_seconds)
+    except (wave.Error, OSError) as exc:
+        log.debug("WAV無音追加をスキップしました: %s: %s", wav_path, exc)
 
 
 class AudioPlayer:
@@ -139,6 +463,12 @@ class AudioPlayer:
         """現在の再生音量を返す。"""
         with self._volume_lock:
             return self._volume
+
+    @property
+    def is_playing(self) -> bool:
+        """現在再生プロセスが動いている場合はTrueを返す。"""
+        proc = self._proc
+        return proc is not None and proc.poll() is None
 
     def set_volume(self, volume: int) -> int:
         """再生音量を0から100の範囲に丸めて反映し、反映後の値を返す。"""
@@ -418,3 +748,37 @@ def _repair_wav_header(wav_path: str) -> None:
         repaired.writeframes(raw[: actual_frames * bytes_per_frame])
     os.replace(tmp_path, wav_path)
     log.info("WAVヘッダを修復しました: declared=%s actual=%s", declared_frames, actual_frames)
+
+
+def _resample_pcm16(data: bytes, from_rate: int, to_rate: int) -> bytes:
+    """PCM16音声を指定サンプルレートへ変換する。"""
+    if from_rate == to_rate:
+        return data
+    import numpy as np
+
+    samples = np.frombuffer(data[: len(data) - (len(data) % 2)], dtype="<i2")
+    if samples.size == 0:
+        return b""
+    if from_rate > to_rate and from_rate % to_rate == 0:
+        ratio = from_rate // to_rate
+        usable = (samples.size // ratio) * ratio
+        if usable <= 0:
+            return b""
+        downsampled = samples[:usable].reshape(-1, ratio).mean(axis=1)
+        return np.clip(downsampled, -32768, 32767).astype("<i2").tobytes()
+    duration = samples.size / float(from_rate)
+    target_size = max(1, int(round(duration * to_rate)))
+    source_index = np.linspace(0, samples.size - 1, num=samples.size, dtype=np.float32)
+    target_index = np.linspace(0, samples.size - 1, num=target_size, dtype=np.float32)
+    converted = np.interp(target_index, source_index, samples.astype(np.float32))
+    return np.clip(converted, -32768, 32767).astype("<i2").tobytes()
+
+
+def _write_pcm16_wav(path: Path, frames: list[bytes], sample_rate: int) -> None:
+    """PCM16 monoフレームをWAVファイルへ書き込む。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(b"".join(frames))

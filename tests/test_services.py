@@ -35,12 +35,16 @@ def test_check_audio_level(tmp_path):
 
 
 def test_stt_gateway_transcribe(monkeypatch, tmp_path):
-    wav_path = tmp_path / "sample.wav"
+    wav_path = tmp_path / "utterance-1234abcd.wav"
     wav_path.write_bytes(b"RIFFdata")
     client = SttGatewayClient("http://stt", "ja", "token")
 
     def fake_post(url, files, data, headers, timeout):
         assert url == "http://stt/transcribe"
+        filename, file_obj, content_type = files["file"]
+        assert filename == "utterance-1234abcd.wav"
+        assert file_obj.read() == b"RIFFdata"
+        assert content_type == "audio/wav"
         assert data == {"language": "ja"}
         assert headers == {"Authorization": "Bearer token"}
         return Response(payload={"ok": True, "text": "こんにちは"})
@@ -81,13 +85,17 @@ def test_tts_filter_normalize(monkeypatch):
 
     def fake_post(url, json, headers, timeout):
         calls.append((url, json, headers))
-        return Response(payload={"normalized": "リードミー"})
+        text = json["text"]
+        if text == "README":
+            return Response(payload={"normalized": "リードミー"})
+        return Response(payload={"normalized": text})
 
     monkeypatch.setattr("argos.services.tts.filter.requests.post", fake_post)
     client = TtsFilterClient("http://filter", "token")
 
     assert client.normalize("README") == "リードミー"
     assert calls[0][2]["Authorization"] == "Bearer token"
+    assert client.normalize("5タップされた") == "5タップされた"
 
 
 def test_voicevox_synthesize(monkeypatch):
@@ -104,8 +112,47 @@ def test_voicevox_synthesize(monkeypatch):
 
     assert client.synthesize("こんにちは") == b"wave-bytes"
     assert calls[0][0] == "http://voicevox/audio_query"
+    assert calls[0][1]["params"]["speaker"] == 2
+    assert calls[1][1]["params"]["speaker"] == 2
     assert calls[1][1]["json"]["outputSamplingRate"] == 48000
     assert calls[1][1]["json"]["speedScale"] == 1.1
+
+
+def test_voicevox_synthesize_accepts_speaker_override(monkeypatch):
+    """合成ごとにVOICEVOX話者IDを上書きできる。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"wave-bytes")
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1)
+
+    assert client.synthesize("こんにちは", speaker=8) == b"wave-bytes"
+    assert calls[0][1]["params"]["speaker"] == 8
+    assert calls[1][1]["params"]["speaker"] == 8
+
+
+def test_voicevox_synthesize_uses_bearer_token(monkeypatch):
+    """VOICEVOXへの各リクエストにBearer認証を付ける。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"wave-bytes")
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1, bearer_token="voice-token")
+
+    assert client.synthesize("こんにちは") == b"wave-bytes"
+    assert calls[0][1]["headers"]["Authorization"] == "Bearer voice-token"
+    assert calls[1][1]["headers"]["Authorization"] == "Bearer voice-token"
+    assert calls[1][1]["headers"]["Content-Type"] == "application/json"
 
 
 def test_kokoro_synthesize_uses_japanese_pipeline(monkeypatch):

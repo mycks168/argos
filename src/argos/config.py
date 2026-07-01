@@ -27,6 +27,15 @@ class AgentSlot:
     name: str
     provider: str
     cwd: str
+    voicevox_speaker: int | None = None
+
+
+@dataclass(frozen=True)
+class AgentUsageCommand:
+    """LLMエージェント利用枠を取得する外部コマンド設定。"""
+
+    provider: str
+    command: str
 
 
 @dataclass(frozen=True)
@@ -66,7 +75,7 @@ class Settings:
     dashboard_host: str
     dashboard_port: int
     dashboard_token: str
-    ptt_gpio: int
+    ptt_gpio: int | None
     silence_rms_threshold: float
     dry_run: bool
     codex_home: str
@@ -78,12 +87,14 @@ class Settings:
     antigravity_command: str
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
-    antigravity_skip_permissions: bool = False
+    antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
     antigravity_print_timeout: str = "5m0s"
     antigravity_continue_session: bool = False
     antigravity_resume_saved: bool = False
     antigravity_prompt_prefix: str = ""
+    acknowledgement_url: str = ""
+    acknowledgement_token: str = ""
     hermes_command: str = "hermes"
     hermes_model: str = ""
     hermes_provider: str = ""
@@ -96,6 +107,7 @@ class Settings:
     codex_progress_voice: bool = True
     codex_progress_first_delay_seconds: float = 8.0
     codex_progress_interval_seconds: float = 20.0
+    codex_stream_mode: str = "stream"
     greeting_enabled: bool = True
     greeting_state_path: str = "~/.local/state/argos/greeting-state.json"
     startup_splash_enabled: bool = True
@@ -132,25 +144,69 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    dashboard_default_font_size: str = "medium"
+    location_provider: str = "local"
+    remote_location_url: str = ""
+    remote_location_timeout_seconds: float = 2.0
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
+    agent_runner_url: str = ""
+    agent_runner_token: str = ""
+    agent_runner_host: str = "127.0.0.1"
+    agent_runner_port: int = 28765
+    agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    voicevox_volume_scale: float = 1.0
+    voicevox_bearer_token: str = ""
+    tts_cache_enabled: bool = True
+    tts_cache_max_chars: int = 30
+    tts_cache_max_size_mb: int = 200
+    tts_cache_dir: str = "cache/tts"
+    agent_usage_commands: tuple[AgentUsageCommand, ...] = ()
+    agent_usage_refresh_seconds: float = 300.0
+    agent_usage_command_timeout_seconds: float = 5.0
+    wifi_status_refresh_seconds: float = 10.0
+    wakeword_enabled: bool = False
+    wakeword_model_dir: str = "models/wakeword"
+    wakeword_threshold: float = 0.5
+    wakeword_capture_sample_rate: int = 16000
+    wakeword_window_seconds: float = 2.0
+    wakeword_interval_seconds: float = 0.25
+    wakeword_chunk_ms: int = 80
+    wakeword_record_min_seconds: float = 1.0
+    wakeword_record_max_seconds: float = 12.0
+    wakeword_record_silence_seconds: float = 1.0
+    wakeword_pre_roll_seconds: float = 3.0
+    wakeword_min_actual_seconds: float = 0.2
+    wakeword_endpoint_mode: str = "vad"
+    wakeword_vad_model_path: str = ""
+    wakeword_vad_threshold: float = 0.35
+    wakeword_vad_min_silence_seconds: float = 1.5
+    wakeword_vad_check_seconds: float = 0.32
+    wakeword_tts_cooldown_seconds: float = 2.0
+    wakeword_score_log_path: str = ""
+    wakeword_require_stt_wakeword: bool = False
+    agent_system_prompt: str = ""
+    agent_system_prompt_file: str = ""
+    agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
+    agent_skills_dir: str = "/opt/argos/skills"
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
     slots: list[AgentSlot] = []
-    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/home/pi"))
+    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
     index = 1
     while True:
         raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
         if not raw:
             break
-        parts = [part.strip() for part in raw.split(",", 2)]
+        parts = [part.strip() for part in raw.split(",", 3)]
         if parts and parts[0]:
             slots.append(
                 AgentSlot(
                     name=parts[0],
                     provider=parts[1] if len(parts) > 1 and parts[1] else default_provider,
                     cwd=parts[2] if len(parts) > 2 and parts[2] else default_cwd,
+                    voicevox_speaker=_optional_int(parts[3]) if len(parts) > 3 else None,
                 )
             )
         index += 1
@@ -164,6 +220,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
             name=os.environ.get("ARGOS_AGENT_SLOT_NAME", os.environ.get("ARGOS_CODEX_SLOT_NAME", "デフォルト")),
             provider=default_provider,
             cwd=default_cwd,
+            voicevox_speaker=_optional_int(os.environ.get("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER")),
         ),
     )
 
@@ -204,6 +261,26 @@ def _split_device_env(name: str) -> tuple[str, ...]:
     return (raw.strip(),)
 
 
+def _optional_int(raw: str | None) -> int | None:
+    """空文字をNoneとして扱い、値があれば整数へ変換する。"""
+    if raw is None or not raw.strip():
+        return None
+    return int(raw.strip())
+
+
+def _load_agent_usage_commands() -> tuple[AgentUsageCommand, ...]:
+    """環境変数からエージェント別の利用枠取得コマンドを読み込む。"""
+    commands: list[AgentUsageCommand] = []
+    prefix = "ARGOS_AGENT_USAGE_COMMAND_"
+    for name, value in sorted(os.environ.items()):
+        if not name.startswith(prefix) or not value.strip():
+            continue
+        provider = name[len(prefix) :].strip().lower()
+        if provider and provider not in {"timeout_seconds"}:
+            commands.append(AgentUsageCommand(provider=provider, command=value.strip()))
+    return tuple(commands)
+
+
 def _load_audio_input_devices() -> tuple[str, ...]:
     """互換の環境変数名から録音デバイス候補を読み込む。"""
     for name in ("AUDIO_INPUT_DEVICES", "ARGOS_AUDIO_INPUT_DEVICES", "ARGOS_INPUT_DEVICES", "ARGOS_INPUT_DEVICE"):
@@ -223,6 +300,42 @@ def load_settings() -> Settings:
         agent_provider=agent_provider,
         agent_state_path=os.environ.get("ARGOS_AGENT_STATE_PATH", "~/.argos/agent-sessions.json"),
         agent_slots=_load_agent_slots(agent_provider),
+        agent_system_prompt=os.environ.get("ARGOS_AGENT_SYSTEM_PROMPT", ""),
+        agent_system_prompt_file=os.environ.get("ARGOS_AGENT_SYSTEM_PROMPT_FILE", ""),
+        agent_system_prompt_state_path=os.environ.get(
+            "ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH",
+            "~/.argos/agent-system-prompts.json",
+        ),
+        agent_skills_dir=os.environ.get("ARGOS_AGENT_SKILLS_DIR", "/opt/argos/skills"),
+        agent_usage_commands=_load_agent_usage_commands(),
+        agent_usage_refresh_seconds=float(os.environ.get("ARGOS_AGENT_USAGE_REFRESH_SECONDS", "300")),
+        agent_usage_command_timeout_seconds=float(
+            os.environ.get(
+                "ARGOS_AGENT_USAGE_TIMEOUT_SECONDS",
+                os.environ.get("ARGOS_AGENT_USAGE_COMMAND_TIMEOUT_SECONDS", "5"),
+            )
+        ),
+        wifi_status_refresh_seconds=float(os.environ.get("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "10")),
+        wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
+        wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
+        wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),
+        wakeword_capture_sample_rate=int(os.environ.get("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "16000")),
+        wakeword_window_seconds=float(os.environ.get("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.0")),
+        wakeword_interval_seconds=float(os.environ.get("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.25")),
+        wakeword_chunk_ms=int(os.environ.get("ARGOS_WAKEWORD_CHUNK_MS", "80")),
+        wakeword_record_min_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.0")),
+        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "12.0")),
+        wakeword_record_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "1.0")),
+        wakeword_pre_roll_seconds=float(os.environ.get("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "3.0")),
+        wakeword_min_actual_seconds=float(os.environ.get("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.2")),
+        wakeword_endpoint_mode=os.environ.get("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad"),
+        wakeword_vad_model_path=os.environ.get("ARGOS_WAKEWORD_VAD_MODEL", ""),
+        wakeword_vad_threshold=float(os.environ.get("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.35")),
+        wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
+        wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
+        wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
+        wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
+        wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
@@ -239,6 +352,11 @@ def load_settings() -> Settings:
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
         audio_state_path=os.environ.get("ARGOS_AUDIO_STATE_PATH", "~/.local/state/argos/audio-state.json"),
+        agent_runner_url=os.environ.get("ARGOS_AGENT_RUNNER_URL", ""),
+        agent_runner_token=os.environ.get("ARGOS_AGENT_RUNNER_TOKEN", ""),
+        agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
+        agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
+        agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),
@@ -256,7 +374,11 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
-        ptt_gpio=int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", "17"))),
+        dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
+        location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
+        remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
+        remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
+        ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),
@@ -265,10 +387,10 @@ def load_settings() -> Settings:
         codex_bypass_sandbox=_bool_env("ARGOS_CODEX_BYPASS_SANDBOX", False),
         codex_approval_policy=os.environ.get("ARGOS_CODEX_APPROVAL", "on-request"),
         codex_extra_args=extra_args,
-        antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "/home/yuki/.local/bin/agy"),
+        antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "agy"),
         antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
         antigravity_extra_args=antigravity_extra_args,
-        antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", False),
+        antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", True),
         antigravity_sandbox=_bool_env("ARGOS_ANTIGRAVITY_SANDBOX", False),
         antigravity_print_timeout=os.environ.get("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "5m0s"),
         antigravity_continue_session=_bool_env("ARGOS_ANTIGRAVITY_CONTINUE_SESSION", False),
@@ -277,6 +399,8 @@ def load_settings() -> Settings:
             "ARGOS_ANTIGRAVITY_PROMPT_PREFIX",
             "",
         ),
+        acknowledgement_url=os.environ.get("ARGOS_ACKNOWLEDGEMENT_URL", ""),
+        acknowledgement_token=os.environ.get("ARGOS_ACKNOWLEDGEMENT_TOKEN", ""),
         hermes_command=os.environ.get("ARGOS_HERMES_COMMAND", "hermes"),
         hermes_model=os.environ.get("ARGOS_HERMES_MODEL", ""),
         hermes_provider=os.environ.get("ARGOS_HERMES_PROVIDER", ""),
@@ -286,6 +410,10 @@ def load_settings() -> Settings:
         hermes_pass_session_id=_bool_env("ARGOS_HERMES_PASS_SESSION_ID", True),
         hermes_resume_saved=_bool_env("ARGOS_HERMES_RESUME_SAVED", True),
         hermes_extra_args=hermes_extra_args,
+        tts_cache_enabled=_bool_env("ARGOS_TTS_CACHE_ENABLED", True),
+        tts_cache_max_chars=int(os.environ.get("ARGOS_TTS_CACHE_MAX_CHARS", "30")),
+        tts_cache_max_size_mb=int(os.environ.get("ARGOS_TTS_CACHE_MAX_SIZE_MB", "200")),
+        tts_cache_dir=os.environ.get("ARGOS_TTS_CACHE_DIR", "cache/tts"),
         codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
         codex_progress_first_delay_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")
@@ -293,6 +421,7 @@ def load_settings() -> Settings:
         codex_progress_interval_seconds=float(
             os.environ.get("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "20")
         ),
+        codex_stream_mode=os.environ.get("ARGOS_CODEX_STREAM_MODE", "stream").strip().lower(),
         greeting_enabled=_bool_env("ARGOS_GREETING_ENABLED", True),
         greeting_state_path=os.environ.get(
             "ARGOS_GREETING_STATE_PATH",
@@ -339,6 +468,8 @@ def load_settings() -> Settings:
         whisper_model_size=os.environ.get("ARGOS_WHISPER_MODEL_SIZE", "small"),
         whisper_device=os.environ.get("ARGOS_WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
+        voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
+        voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
     )
 
 

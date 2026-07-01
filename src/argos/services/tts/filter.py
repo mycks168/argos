@@ -29,4 +29,3 @@ class TtsFilterClient:
         if response.status_code != 200:
             return text
         return str(response.json().get("normalized", text))
-
