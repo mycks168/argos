@@ -18,10 +18,16 @@ from typing import Any, Callable
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
+    "build-essential",
     "chromium-browser|chromium",
     "cron",
     "curl",
+    "fonts-ipafont-gothic",
+    "fonts-ipafont-mincho",
     "git",
+    "liblgpio-dev",
+    "python3-dev",
+    "swig",
     "tmux",
     "x11-xserver-utils",
 )
@@ -129,12 +135,15 @@ def build_install_plan(
             InstallStep("user", service_user, "ARGOS専用ユーザーを作成する"),
             InstallStep("group", service_user, "audio/video/input/render/gpio/i2c/spiグループへ追加する"),
             InstallStep("apt", " ".join(packages), "ARGOS実行に必要なOSパッケージを導入する"),
+            InstallStep("uv", service_user, "ARGOS実行ユーザーの~/.local/binへuvを導入する"),
             InstallStep("linger", service_user, "user systemdを起動時から使えるようにする"),
             InstallStep("chown", str(project_dir), "ARGOSプロジェクトを専用ユーザー所有にする"),
             *steps,
         ]
     if any(service.name == "argos-dashboard-kiosk" for service in services):
         steps.append(InstallStep("policy", "chromium", "Chromium kiosk向け管理ポリシーを配置する"))
+    if any(service.kind == "user" for service in services):
+        steps.append(InstallStep("home", service_user, "user serviceが使うホーム内設定ディレクトリの所有者を補正する"))
     for service in services:
         steps.extend(_service_steps(service, project_dir=project_dir, system_unit_dir=system_unit_dir, user_unit_dir=user_unit_dir))
     return InstallPlan(
@@ -251,16 +260,18 @@ def apply_plan(
     _ensure_core_env_defaults(project_dir / ".env")
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
-    _uv_sync(project_dir, runner=runner)
+    _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home)
     if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
         _install_chromium_policy(project_dir, runner=runner)
+    if any(service.kind == "user" for service in plan.services):
+        _ensure_service_home_dirs(plan, runner=runner)
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
         if any(service.name == "agent-limit" for service in plan.services):
-            _ensure_agent_limit_cron(plan, runner=runner)
+            _try_ensure_agent_limit_cron(plan, runner=runner, output_func=output_func)
         _reload_systemd(plan, runner=runner)
         for service in plan.services:
             _enable_service(service, plan, runner=runner)
@@ -518,6 +529,7 @@ def _bootstrap_host(plan: InstallPlan, *, runner=subprocess.run) -> None:
     """ARGOS専用機として使うためのOS側初期設定を行う。"""
     _ensure_service_user(plan, runner=runner)
     _install_os_packages(plan.os_packages, runner=runner)
+    _ensure_uv_for_user(plan.service_user, plan.service_home, runner=runner)
     _add_service_groups(plan.service_user, runner=runner)
     _enable_linger(plan.service_user, runner=runner)
 
@@ -553,6 +565,35 @@ def _install_os_packages(packages: list[str], *, runner=subprocess.run) -> None:
     resolved = _resolve_os_packages(packages, runner=runner)
     if resolved:
         runner(["sudo", "apt-get", "install", "-y", *resolved], check=True)
+
+
+def _ensure_uv_for_user(user: str, home: str, *, runner=subprocess.run) -> None:
+    """ARGOS実行ユーザーのPATH上にuvがなければ導入する。"""
+    env_args = [
+        f"HOME={home}",
+        f"PATH={home}/.local/bin:{home}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+    ]
+    check = runner(
+        ["sudo", "-u", user, "env", *env_args, "sh", "-lc", "command -v uv"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if getattr(check, "returncode", 1) == 0:
+        return
+    runner(
+        [
+            "sudo",
+            "-u",
+            user,
+            "env",
+            *env_args,
+            "sh",
+            "-lc",
+            "curl -LsSf https://astral.sh/uv/install.sh | sh",
+        ],
+        check=True,
+    )
 
 
 def _resolve_os_packages(packages: list[str], *, runner=subprocess.run) -> list[str]:
@@ -609,6 +650,14 @@ def _ensure_project_owner(project_dir: Path, user: str, group: str, *, runner=su
     runner(["sudo", "chown", "-R", f"{user}:{group}", str(project_dir)], check=True)
 
 
+def _ensure_service_home_dirs(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """user serviceやChromiumが使うホーム配下ディレクトリの所有者を揃える。"""
+    home = Path(plan.service_home)
+    for path in (home / ".config", home / ".local", home / ".cache"):
+        runner(["sudo", "install", "-d", "-o", plan.service_user, "-g", plan.service_group, "-m", "700", str(path)], check=True)
+        runner(["sudo", "chown", "-R", f"{plan.service_user}:{plan.service_group}", str(path)], check=True)
+
+
 def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None, home: str | None = None) -> None:
     """指定ディレクトリでuv syncを実行する。"""
     if not (directory / "pyproject.toml").exists():
@@ -619,7 +668,16 @@ def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None,
         env["HOME"] = home
     command = ["uv", "sync"]
     if user:
-        command = ["sudo", "-u", user, *command]
+        home_value = home or str(Path("/home") / user)
+        command = [
+            "sudo",
+            "-u",
+            user,
+            "env",
+            f"HOME={home_value}",
+            f"PATH={home_value}/.local/bin:{home_value}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+            *command,
+        ]
     runner(command, cwd=directory, check=True, env=env)
 
 
@@ -634,7 +692,7 @@ def _apply_service(service: BundledService, plan: InstallPlan, *, runner=subproc
             raise FileNotFoundError(f"サービスソースが見つかりません: {source_path}")
         _copy_env_example(source_path, runner=runner)
         if service.kind not in ("data", "external"):
-            _uv_sync(source_path, runner=runner)
+            _uv_sync(source_path, runner=runner, user=plan.service_user, home=plan.service_home)
     if service.unit:
         target_dir = Path(plan.user_unit_dir) if service.kind == "user" else Path(plan.system_unit_dir)
         target_path = target_dir / Path(service.unit).name
@@ -745,13 +803,20 @@ def _ensure_agent_limit_cron(plan: InstallPlan, *, runner=subprocess.run) -> Non
     if content:
         content += "\n"
     content += f"{AGENT_LIMIT_CRON_MARKER}\n{command}\n"
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as fp:
-        fp.write(content)
-        temp_path = fp.name
+    runner(["sudo", "-u", plan.service_user, "crontab", "-"], check=True, input=content, text=True)
+
+
+def _try_ensure_agent_limit_cron(
+    plan: InstallPlan,
+    *,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """cron登録に失敗しても残りのインストール処理は継続する。"""
     try:
-        runner(["sudo", "-u", plan.service_user, "crontab", temp_path], check=True)
-    finally:
-        Path(temp_path).unlink(missing_ok=True)
+        _ensure_agent_limit_cron(plan, runner=runner)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        output_func(f"警告: agent-limitのcron登録に失敗しました。後で手動確認してください: {exc}")
 
 
 def _install_chromium_policy(project_dir: Path, *, runner=subprocess.run) -> None:

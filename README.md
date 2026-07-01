@@ -60,7 +60,7 @@ uv run argos-install --json
 uv run argos-install --apply
 ```
 
-別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
+別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、`uv` 導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
 
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
@@ -68,7 +68,7 @@ cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も `argos:argos` に揃えます。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。CodexやAntigravityなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
 
 ```bash
 sudo -iu argos

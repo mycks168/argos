@@ -84,8 +84,9 @@ uv run argos-install --json
 uv run argos-install --apply
 ```
 
-別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils` などのOSパッケージ導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
-OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。
+別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、ChromiumなどのOSパッケージ導入、`uv` のARGOS実行ユーザー向け導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
+user serviceが含まれる場合は、Chromiumやデスクトップセッションが使う `~/.config`、`~/.local`、`~/.cache` をARGOS実行ユーザー所有へ補正する。既存環境でこれらがrootや別ユーザー所有になっている場合も、`--apply` または `--update` で再補正する。
+OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体とサブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
 
 ```bash
 sudo git clone -b feature/bundled-installer https://github.com/mycks168/argos.git /opt/argos
@@ -116,9 +117,9 @@ hermes
 
 外部依存として残すSTTゲートウェイ、VOICEVOX、OSRM、Slack Webhookなどは `/opt/argos/.env` で指定する。
 
-`agent-limit` は systemd 常駐サービスではなく補助ツールとして同梱する。インストーラーは `/opt/argos/services/agent-limit/update_limits.py` が存在する場合、ARGOS実行ユーザーのcrontabへ5分おきの更新ジョブを重複なしで登録する。登録済み判定には `# ARGOS agent-limit updater` のマーカーを使う。
+`agent-limit` は systemd 常駐サービスではなく補助ツールとして同梱する。インストーラーは `/opt/argos/services/agent-limit/update_limits.py` が存在する場合、ARGOS実行ユーザーのcrontabへ5分おきの更新ジョブを重複なしで登録する。登録済み判定には `# ARGOS agent-limit updater` のマーカーを使う。cron登録は一時ファイルをARGOS実行ユーザーに読ませず、`crontab -` の標準入力へ内容を渡す。
 
-cronはログインシェルのPATHを引き継がないため、更新ジョブには `HOME` と `PATH` を明示する。`uv` は `~/.local/bin`、`~/.cargo/bin`、`/usr/local/bin`、`/usr/bin`、`/bin`、`/snap/bin` から探索する。
+cronはログインシェルのPATHを引き継がないため、更新ジョブには `HOME` と `PATH` を明示する。`uv` は `~/.local/bin`、`~/.cargo/bin`、`/usr/local/bin`、`/usr/bin`、`/bin`、`/snap/bin` から探索する。cron登録に失敗した場合は警告を出し、systemd unit生成、daemon-reload、ダッシュボードkioskのenable/startなど残りのインストール処理は継続する。
 
 ウェイクワードを標準機能として扱うため、ARGOS本体の通常依存に `onnxruntime` と `numpy` を含める。これにより、`--extra wakeword` を指定しなくてもONNXモデルの実行に必要なランタイムが入る。
 

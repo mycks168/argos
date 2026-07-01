@@ -1,6 +1,7 @@
 import json
 
 from argos.installer import (
+    DEFAULT_OS_PACKAGES,
     DEFAULT_MANIFEST,
     apply_plan,
     build_install_plan,
@@ -12,6 +13,7 @@ from argos.installer import (
     update_project,
     AGENT_LIMIT_CRON_MARKER,
     CHROMIUM_POLICY_TARGETS,
+    _ensure_uv_for_user,
     _resolve_os_packages,
     _ensure_agent_limit_cron,
     _ensure_core_env_defaults,
@@ -51,6 +53,7 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert ("tts-filter", "render-unit") in actions
     assert ("agent-limit", "cron") in actions
     assert ("", "policy") in actions
+    assert ("", "home") in actions
     assert ("wakeword-models", "check") in actions
     assert ("stt-gateway", "configure") in actions
     assert plan.service_user == "argos"
@@ -124,8 +127,31 @@ def test_build_install_plan_bootstrap_includes_dedicated_user_steps(tmp_path):
     assert plan.service_home == "/home/argos"
     assert "user" in actions
     assert "apt" in actions
+    assert "uv" in actions
     assert "linger" in actions
     assert "chown" in actions
+    assert "swig" in plan.os_packages
+    assert "python3-dev" in plan.os_packages
+    assert "build-essential" in plan.os_packages
+    assert "liblgpio-dev" in plan.os_packages
+    assert "chromium-browser|chromium" in plan.os_packages
+
+
+def test_default_os_packages_include_runtime_and_build_dependencies():
+    """標準OSパッケージに実機で必要な依存を含める。"""
+    packages = set(DEFAULT_OS_PACKAGES)
+
+    assert {
+        "swig",
+        "python3-dev",
+        "build-essential",
+        "liblgpio-dev",
+        "cron",
+        "curl",
+        "fonts-ipafont-gothic",
+        "fonts-ipafont-mincho",
+    }.issubset(packages)
+    assert "chromium-browser|chromium" in packages
 
 
 def test_main_prints_json_plan(capsys, tmp_path):
@@ -199,8 +225,62 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
     assert "ARGOS_DASHBOARD_TOKEN=" in env_text
     assert "ARGOS_DASHBOARD_TOKEN=\n" not in env_text
     assert (tmp_path / "system-units" / "argos.service").exists()
-    assert any(command[0] == ["uv", "sync"] for command in commands)
+    assert any(
+        command[0]
+        == [
+            "sudo",
+            "-u",
+            "argos",
+            "env",
+            "HOME=/home/argos",
+            "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+            "uv",
+            "sync",
+        ]
+        for command in commands
+    )
     assert not any("enable" in command[0] for command in commands)
+
+
+def test_apply_plan_syncs_subprojects_as_service_user(tmp_path):
+    """サブプロジェクトのvenvもARGOS実行ユーザーのuvで作成する。"""
+    project = tmp_path / "argos"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
+    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    service_dir = project / "services" / "agent-limit"
+    service_dir.mkdir(parents=True)
+    (service_dir / "pyproject.toml").write_text("[project]\nname='agent-limit'\nversion='0.1.0'\n", encoding="utf-8")
+    services = [service for service in load_manifest() if service.name == "agent-limit"]
+    plan = build_install_plan(
+        services,
+        project_dir=project,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append((command, kwargs.get("cwd")))
+
+    apply_plan(plan, enable=False, runner=fake_runner)
+
+    assert (
+        [
+            "sudo",
+            "-u",
+            "argos",
+            "env",
+            "HOME=/home/argos",
+            "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+            "uv",
+            "sync",
+        ],
+        service_dir,
+    ) in commands
 
 
 def test_update_project_pulls_as_service_user(tmp_path, monkeypatch):
@@ -270,8 +350,51 @@ def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
 
     assert ["sudo", "useradd", "--create-home", "--home-dir", "/home/argos-test", "--shell", "/bin/bash", "--user-group", "argos-test"] in commands
     assert ["sudo", "apt-get", "install", "-y", "alsa-utils"] in commands
+    assert ["sudo", "-u", "argos-test", "env", "HOME=/home/argos-test", "PATH=/home/argos-test/.local/bin:/home/argos-test/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin", "sh", "-lc", "command -v uv"] in commands
+    assert [
+        "sudo",
+        "-u",
+        "argos-test",
+        "env",
+        "HOME=/home/argos-test",
+        "PATH=/home/argos-test/.local/bin:/home/argos-test/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+        "sh",
+        "-lc",
+        "curl -LsSf https://astral.sh/uv/install.sh | sh",
+    ] in commands
     assert ["sudo", "loginctl", "enable-linger", "argos-test"] in commands
     assert ["sudo", "chown", "-R", "argos-test:argos-test", str(project)] in commands
+
+
+def test_ensure_uv_for_user_skips_when_available():
+    """uvが既に見つかる場合はインストールを省略する。"""
+    commands = []
+
+    class Result:
+        """command -v uvの結果を表す。"""
+
+        returncode = 0
+
+    def fake_runner(command, **kwargs):
+        """uv確認コマンドを記録する。"""
+        commands.append(command)
+        return Result()
+
+    _ensure_uv_for_user("argos", "/home/argos", runner=fake_runner)
+
+    assert commands == [
+        [
+            "sudo",
+            "-u",
+            "argos",
+            "env",
+            "HOME=/home/argos",
+            "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
+            "sh",
+            "-lc",
+            "command -v uv",
+        ]
+    ]
 
 
 def test_apply_plan_update_restarts_enabled_services(tmp_path, monkeypatch):
@@ -315,6 +438,39 @@ def test_apply_plan_update_restarts_enabled_services(tmp_path, monkeypatch):
         "restart",
         "argos-dashboard-kiosk.service",
     ] in commands
+
+
+def test_apply_plan_repairs_home_dirs_for_user_services(tmp_path, monkeypatch):
+    """user serviceがある場合はChromiumなどが使うホーム内ディレクトリ所有者を補正する。"""
+    project = tmp_path / "argos"
+    project.mkdir()
+    (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
+    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    systemd_dir = project / "systemd"
+    systemd_dir.mkdir()
+    (systemd_dir / "argos-dashboard-kiosk.service").write_text("ExecStart=@PROJECT_DIR@/run\n", encoding="utf-8")
+    services = [service for service in load_manifest() if service.name == "argos-dashboard-kiosk"]
+    plan = build_install_plan(
+        services,
+        project_dir=project,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos",
+        service_group="argos",
+        service_home=tmp_path / "home" / "argos",
+    )
+    commands = []
+
+    def fake_runner(command, **kwargs):
+        """外部コマンドを記録する。"""
+        commands.append(command)
+
+    apply_plan(plan, enable=False, runner=fake_runner)
+
+    for dirname in (".config", ".local", ".cache"):
+        path = str(tmp_path / "home" / "argos" / dirname)
+        assert ["sudo", "install", "-d", "-o", "argos", "-g", "argos", "-m", "700", path] in commands
+        assert ["sudo", "chown", "-R", "argos:argos", path] in commands
 
 
 def test_reload_systemd_uses_service_user_bus(tmp_path, monkeypatch):
@@ -377,8 +533,8 @@ def test_ensure_agent_limit_cron_adds_missing_entry(tmp_path):
         commands.append((command, kwargs))
         if command == ["sudo", "-u", "argos", "crontab", "-l"]:
             return Result()
-        if command[:4] == ["sudo", "-u", "argos", "crontab"]:
-            installed_cron["content"] = open(command[4], encoding="utf-8").read()
+        if command == ["sudo", "-u", "argos", "crontab", "-"]:
+            installed_cron["content"] = kwargs["input"]
         return Result()
 
     _ensure_agent_limit_cron(plan, runner=fake_runner)
@@ -389,6 +545,8 @@ def test_ensure_agent_limit_cron_adds_missing_entry(tmp_path):
     assert "uv run python update_limits.py" in installed_cron["content"]
     assert "*/5 * * * *" in installed_cron["content"]
     assert commands[0][1]["capture_output"] is True
+    assert commands[1][0] == ["sudo", "-u", "argos", "crontab", "-"]
+    assert commands[1][1]["text"] is True
 
 
 def test_ensure_agent_limit_cron_skips_existing_entry(tmp_path):
