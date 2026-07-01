@@ -227,6 +227,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "state.agent?.provider" in html
         assert 'class="brand-row"' in html
         assert 'class="brand-controls"' in html
+        assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html
+        assert "@media (min-width: 761px) and (max-width: 900px)" in html
+        assert ".notifications-panel { grid-column: auto; min-height: 0; }" in html
         assert '.network-status[data-connected="false"]' in html
         assert "display: none;" in html
         assert 'id="mute-button"' in html
