@@ -2,41 +2,81 @@
 
 ARGOS（Autonomous Road Guardian & Observation System）は、Raspberry Pi の PTT スイッチで録音し、stt-gateway、Codex CLI、tts-filter、VOICEVOX をつないで音声で Codex を操作するエージェントです。
 
-## 使い方
+## 事前準備
+
+ARGOSのインストーラ自体を実行する端末には、先に `uv` を入れておきます。macOS/Linux では公式のスタンドアロンインストーラを使えます。
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+uv --version
+```
+
+`--bootstrap` はARGOS実行ユーザーにも `uv` を導入しますが、`uv run argos-install ...` を起動する現在のユーザーには事前に `uv` が必要です。
+
+Codex、Antigravity、Claude を使う場合、各CLIの導入とログインはインストーラでは自動化しません。`argos-install --bootstrap` 後に、ARGOS実行ユーザーで必要なCLIを入れて、初回ログインまで済ませてください。
+
+```bash
+sudo -iu argos
+
+# Codex CLI
+curl -fsSL https://chatgpt.com/codex/install.sh | sh
+codex
+
+# Antigravity CLI
+curl -fsSL https://antigravity.google/cli/install.sh | bash
+agy
+
+# Claude Code
+curl -fsSL https://claude.ai/install.sh | bash
+claude
+```
+
+インストール後は `command -v codex`、`command -v agy`、`command -v claude` で、ARGOS実行ユーザーのPATHから見えることを確認します。
+
+公式手順:
+
+- uv: <https://docs.astral.sh/uv/getting-started/installation/>
+- Codex CLI: <https://developers.openai.com/codex/cli>
+- Antigravity CLI: <https://github.com/google-antigravity/antigravity-cli>
+- Claude Code: <https://code.claude.com/docs/en/quickstart>
+
+## ARGOS専用機として初期化する場合
+
+別PCやRaspberry PiをARGOS専用機として初期化する場合は、リポジトリを `/opt/argos` に配置して、一式インストーラを `--bootstrap --configure --apply` で実行します。`argos` ユーザー作成、OSパッケージ導入、ARGOS実行ユーザー向け `uv` 導入、デバイス権限付与、systemd unit生成、enable/startまでまとめて行います。
+
+```bash
+sudo git clone https://github.com/mycks168/argos.git /opt/argos
 cd /opt/argos
-uv sync --extra dev
-cp .env.example .env
-uv run argos
+sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
-テキストだけで確認する場合:
+`develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
+
+インストール後はARGOS実行ユーザーで、利用するエージェントCLIの初回ログインを済ませます。
 
 ```bash
-DRY_RUN=true uv run argos
+sudo -iu argos
+codex
+agy
+claude
+hermes
 ```
-
-DRY_RUN では `/next` で Codex スロット切替、`/reset` で現在スロットを新規会話扱いにします。
-
-## systemd での起動
-
-サービスとして常駐させる場合:
-
-```bash
-cd /opt/argos
-uv sync
-ARGOS_PROJECT_DIR=/opt/argos ARGOS_SERVICE_USER=argos ARGOS_SERVICE_GROUP=argos ./scripts/install-systemd-services.sh
-sudo systemctl enable --now argos.service
-```
-
-ARGOSは `network-online.target` と `tailscale-online.target` の後に起動します。Tailscale越しの VOICEVOX や周辺サービスを使う場合、追加の依存サービスは実機側のsystemd drop-inで指定してください。
 
 状態確認とログ確認:
 
 ```bash
 systemctl status argos.service
 journalctl -u argos.service -f
+```
+
+## 更新する場合
+
+更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
+
+```bash
+cd /opt/argos
+sudo env "PATH=$PATH" uv run argos-install --update
 ```
 
 設定を変更した場合は `.env` を更新してから再起動します。tts-filter を使う場合は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` が一致している必要があります。`argos-install --apply` または `--update` はこの値を自動で揃えます。
@@ -47,46 +87,22 @@ sudo systemctl restart argos.service
 
 ## ARGOS一式インストーラ
 
-ARGOS本体、TTSフィルター、相槌API、リマインダー、スキルなどをまとめて導入するためのインストーラがあります。まずdry-runで計画を確認します。
+ARGOS本体、Agent Runner、TTSフィルター、相槌API、リマインダー、スキルなどをまとめて導入するためのインストーラです。まず計画だけ確認する場合は、引数なしまたは `--json` で実行します。
 
 ```bash
 uv run argos-install
 uv run argos-install --json
 ```
 
-実際に `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
+既存環境で `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
 
 ```bash
-uv run argos-install --apply
+uv run argos-install --configure --apply
 ```
 
-別PCをARGOS専用機として初期化する場合は、`argos` ユーザー作成、OSパッケージ導入、`uv` 導入、デバイス権限付与、user service用linger設定もまとめて実行できます。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
 
-```bash
-sudo git clone https://github.com/mycks168/argos.git /opt/argos
-cd /opt/argos
-sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
-```
-
-`develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
-
-`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化せず、ARGOS実行ユーザーで対話的に行います。
-`--configure` では、利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。空入力の場合は既存設定を維持します。
-
-```bash
-sudo -iu argos
-codex
-agy
-claude
-hermes
-```
-
-更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
-
-```bash
-cd /opt/argos
-sudo env "PATH=$PATH" uv run argos-install --update
-```
+`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
 
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
 ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
