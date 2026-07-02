@@ -407,6 +407,97 @@ def test_system_prompt_agent_client_injects_per_slot(tmp_path):
     assert fake.prompts[2] == "作業2"
 
 
+def test_system_prompt_agent_client_delegates_runner_delivery_methods(tmp_path):
+    """Runner用の未配信回収メソッドはラップ後も実クライアントへ委譲する。"""
+
+    class FakeRunnerAgent:
+        """Runner固有メソッドを持つ偽エージェント。"""
+
+        current_name = "作業"
+        current_provider = "codex"
+
+        def __init__(self):
+            """配信済みにしたジョブIDを記録する。"""
+            self.delivered = []
+
+        def next_slot(self):
+            """スロット名を返す。"""
+            return self.current_name
+
+        def reset_current(self):
+            """何もしない。"""
+            return None
+
+        def ask(self, prompt):
+            """応答を返す。"""
+            return prompt
+
+        def ask_stream(self, prompt):
+            """応答差分を返す。"""
+            yield prompt
+
+        def list_undelivered(self):
+            """未配信ジョブ一覧を返す。"""
+            return [{"job_id": "job-1", "status": "completed"}]
+
+        def mark_delivered(self, job_id):
+            """配信済みジョブIDを記録する。"""
+            self.delivered.append(job_id)
+
+    fake = FakeRunnerAgent()
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_system_prompt_state_path": str(tmp_path / "prompt-state.json"),
+        }
+    )
+    client = SystemPromptAgentClient(fake, settings)
+
+    assert hasattr(client, "list_undelivered") is True
+    assert client.list_undelivered() == [{"job_id": "job-1", "status": "completed"}]
+
+    client.mark_delivered("job-1")
+
+    assert fake.delivered == ["job-1"]
+
+
+def test_system_prompt_agent_client_does_not_fake_runner_delivery_methods(tmp_path):
+    """実クライアントにないRunner用メソッドはラップ後も見せない。"""
+
+    class FakeAgent:
+        """Runner固有メソッドを持たない偽エージェント。"""
+
+        current_name = "作業"
+        current_provider = "codex"
+
+        def next_slot(self):
+            """スロット名を返す。"""
+            return self.current_name
+
+        def reset_current(self):
+            """何もしない。"""
+            return None
+
+        def ask(self, prompt):
+            """応答を返す。"""
+            return prompt
+
+        def ask_stream(self, prompt):
+            """応答差分を返す。"""
+            yield prompt
+
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_system_prompt_state_path": str(tmp_path / "prompt-state.json"),
+        }
+    )
+    client = SystemPromptAgentClient(FakeAgent(), settings)
+
+    assert hasattr(client, "list_undelivered") is False
+    assert hasattr(client, "mark_delivered") is False
+
+
 def test_system_prompt_state_store_ignores_broken_files(tmp_path):
     """状態ファイルが壊れていても未注入として扱い、再保存できる。"""
     path = tmp_path / "prompt-state.json"
