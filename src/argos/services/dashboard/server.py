@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hmac
 import json
 import logging
 import queue
@@ -16,6 +15,7 @@ from urllib.parse import urlparse
 
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
+from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 
 
 log = logging.getLogger(__name__)
@@ -120,7 +120,7 @@ def _create_handler(
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
-    class DashboardHandler(BaseHTTPRequestHandler):
+    class DashboardHandler(JsonRequestHandler):
         """ダッシュボードHTTPリクエストを処理する。"""
 
         def do_GET(self) -> None:
@@ -159,7 +159,7 @@ def _create_handler(
             if not self._require_token():
                 return
             try:
-                payload = self._read_json()
+                payload = self._read_json(MAX_BODY_BYTES)
                 if path == "/api/events":
                     response = _apply_event(state, payload)
                     if event_handler is not None:
@@ -177,30 +177,12 @@ def _create_handler(
             """標準HTTPログをアプリログへ流す。"""
             log.info("dashboard http: " + format, *args)
 
-        def _read_json(self) -> dict[str, Any]:
-            """リクエストボディをJSONオブジェクトとして読む。"""
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError as exc:
-                raise ValueError("Content-Length が不正です") from exc
-            if length <= 0 or length > MAX_BODY_BYTES:
-                raise ValueError("リクエストサイズが不正です")
-            try:
-                payload = json.loads(self.rfile.read(length))
-            except json.JSONDecodeError as exc:
-                raise ValueError("JSONが不正です") from exc
-            if not isinstance(payload, dict):
-                raise ValueError("JSONオブジェクトを送信してください")
-            return payload
-
         def _require_token(self) -> bool:
             """更新系APIのBearer認証を検証する。"""
             if not token:
                 self._send_json({"error": "ARGOS_DASHBOARD_TOKEN が未設定です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return False
-            # タイミング攻撃でトークンを推測されないよう定数時間で比較する
-            header = self.headers.get("Authorization", "")
-            if not hmac.compare_digest(header.encode("utf-8"), f"Bearer {token}".encode("utf-8")):
+            if not bearer_header_matches(self.headers.get("Authorization", ""), token):
                 self._send_json({"error": "認証に失敗しました"}, HTTPStatus.UNAUTHORIZED)
                 return False
             return True
@@ -254,15 +236,6 @@ def _create_handler(
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
-
-        def _send_json(self, payload: dict[str, Any], status: HTTPStatus = HTTPStatus.OK) -> None:
-            """JSONレスポンスを返す。"""
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
 
         def _send_camera_snapshot(self) -> None:
             """最新のカメラ静止画を返す。"""
