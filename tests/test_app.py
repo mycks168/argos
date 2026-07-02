@@ -288,17 +288,37 @@ def test_dashboard_shows_current_agent_slot(monkeypatch):
     assert snapshot["agent"]["provider"] == "codex"
 
 
-def test_deliver_runner_result_adds_slot_message_and_notification(monkeypatch):
-    """Runnerで完了した未配信応答をスロット履歴へ反映する。"""
+def test_deliver_runner_result_speaks_current_slot_response(monkeypatch, capsys):
+    """Runnerで完了した現在スロットの未配信応答は自動で読み上げる。"""
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
 
     app._deliver_runner_result("job-1", "作業", "codex", "Runner応答")
+    assert app._pending_speech_thread is not None
+    app._pending_speech_thread.join(timeout=1)
 
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["messages"][-1]["text"] == "Runner応答"
     assert snapshot["notifications"][-1]["title"] == "作業 応答完了"
-    assert app._pending_slot_speech["codex\0作業"] == "Runner応答"
+    assert "codex\0作業" not in app._pending_slot_speech
+    assert "Runner応答" in capsys.readouterr().out
+
+
+def test_deliver_runner_result_keeps_other_slot_unread(monkeypatch):
+    """Runnerで完了した別スロットの未配信応答は未読として保持する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._deliver_runner_result("job-1", "調査", "antigravity", "Runner応答")
+
+    snapshot = app._dashboard_state.snapshot()
+    slots = {(slot["provider"], slot["name"]): slot for slot in snapshot["slots"]}
+    assert snapshot["notifications"][-1]["title"] == "調査 応答完了"
+    assert slots[("antigravity", "調査")]["unread"] is True
+    assert app._pending_slot_speech["antigravity\0調査"] == "Runner応答"
+
+    app._dashboard_state.set_agent("調査", "antigravity")
+    assert app._dashboard_state.snapshot()["messages"][-1]["text"] == "Runner応答"
 
 
 def test_deliver_runner_error_adds_notification(monkeypatch):
