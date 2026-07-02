@@ -60,6 +60,10 @@ class SystemPromptAgentClient:
         self._index = 0
         self._store = SystemPromptStateStore(Path(settings.agent_system_prompt_state_path).expanduser())
 
+    def __getattr__(self, name: str) -> object:
+        """共通インターフェース外の機能は実クライアントへ委譲する。"""
+        return getattr(self._client, name)
+
     @property
     def current_name(self) -> str:
         """現在の会話スロット名を返す。"""
