@@ -18,6 +18,7 @@ from argos.config import (
     Settings,
 )
 from argos.core.auth_coordinator import AuthCoordinator
+from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
 from argos.hardware.audio import AudioInputStream, AudioPlayer, Recorder, StreamRecorder, check_audio_level, cleanup_stale_recordings
@@ -240,8 +241,8 @@ class ArgosApp:
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
         self._agent_delivery_thread: threading.Thread | None = None
-        self._agent_usage_thread: threading.Thread | None = None
-        self._wifi_status_thread: threading.Thread | None = None
+        self._agent_usage_monitor: PeriodicMonitor | None = None
+        self._wifi_status_monitor: PeriodicMonitor | None = None
         self._worker: threading.Thread | None = None
         self._wakeword_listener: WakeWordListener | None = None
         self._wakeword_recording = threading.Event()
@@ -432,16 +433,13 @@ class ArgosApp:
         """現在エージェントの利用枠を定期的に取得する。"""
         if not self._agent_usage.providers:
             return
-        self._agent_usage_thread = threading.Thread(target=self._run_agent_usage_monitor, daemon=True)
-        self._agent_usage_thread.start()
-
-    def _run_agent_usage_monitor(self) -> None:
-        """利用枠取得コマンドを一定間隔で実行する。"""
-        while not self._shutdown.is_set():
-            self._refresh_current_agent_usage()
-            interval = max(10.0, self._settings.agent_usage_refresh_seconds)
-            if self._shutdown.wait(interval):
-                return
+        self._agent_usage_monitor = PeriodicMonitor(
+            "agent-usage",
+            max(10.0, self._settings.agent_usage_refresh_seconds),
+            self._refresh_current_agent_usage,
+            self._shutdown,
+        )
+        self._agent_usage_monitor.start()
 
     def _publish_agent_usage_pending(self) -> None:
         """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
@@ -473,16 +471,13 @@ class ArgosApp:
         """Wi-Fi接続状態を定期的にダッシュボードへ反映する。"""
         if self._dashboard_server is None:
             return
-        self._wifi_status_thread = threading.Thread(target=self._run_wifi_status_monitor, daemon=True)
-        self._wifi_status_thread.start()
-
-    def _run_wifi_status_monitor(self) -> None:
-        """Wi-Fi接続状態を一定間隔で取得する。"""
-        while not self._shutdown.is_set():
-            self._refresh_wifi_status()
-            interval = max(2.0, self._settings.wifi_status_refresh_seconds)
-            if self._shutdown.wait(interval):
-                return
+        self._wifi_status_monitor = PeriodicMonitor(
+            "wifi-status",
+            max(2.0, self._settings.wifi_status_refresh_seconds),
+            self._refresh_wifi_status,
+            self._shutdown,
+        )
+        self._wifi_status_monitor.start()
 
     def _refresh_wifi_status(self) -> None:
         """現在のWi-Fi状態をダッシュボード状態へ反映する。"""
