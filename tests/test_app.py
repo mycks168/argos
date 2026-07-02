@@ -367,6 +367,18 @@ def test_cancel_clears_listening_status(monkeypatch):
     assert snapshot["status"]["code"] == "ready"
 
 
+def test_pending_slot_response_resets_status(monkeypatch):
+    """未読応答の読み上げ後は読み上げ中のまま残さず待機中へ戻す（症状②）。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    token = app._status.current_generation()
+    app._status.set(token, "speaking", "読み上げ中")
+
+    app._speak_pending_slot_response("応答本文", "codex\0作業")
+
+    assert app._dashboard_state.snapshot()["status"]["code"] == "ready"
+
+
 def test_locked_ptt_shows_auth_recording_status(monkeypatch):
     """ロック中のPTT録音は本人確認用の録音表示にする。"""
     _patch_app(monkeypatch)
