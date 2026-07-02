@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 from pathlib import Path
 from typing import Literal
@@ -50,7 +51,8 @@ def require_bearer(authorization: str | None = Header(default=None)) -> None:
     if not BEARER_TOKEN:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="TTS_FILTER_BEARER_TOKEN is not set")
     expected = f"Bearer {BEARER_TOKEN}"
-    if authorization != expected:
+    # タイミング攻撃でトークンを推測されないよう定数時間で比較する
+    if not hmac.compare_digest((authorization or "").encode("utf-8"), expected.encode("utf-8")):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid bearer token")
 
 

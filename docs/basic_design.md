@@ -52,7 +52,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 ```
 
 ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
-`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。
+`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む `.env` は、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
 
 ### VOICEVOX
 
@@ -154,6 +154,8 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 `ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。800x600程度の画面では左側操作を圧縮した3列表示を維持し、さらに狭い場合だけ通知欄を下へ回り込ませる。
 
+待ち受けアドレスは `ARGOS_DASHBOARD_HOST` で指定する。kioskブラウザは同一機からアクセスするため既定は `127.0.0.1`（localhostのみ）とし、状態・会話履歴・カメラ画像などGET系APIを認証なしでLANへ露出しない。LAN内の別端末から表示させる場合だけ `0.0.0.0` などへ明示的に広げる。
+
 画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
@@ -228,7 +230,7 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
-Codex 呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
+エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 
 ### 発話時の挨拶
 
@@ -300,6 +302,8 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 
 Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
+`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `.env` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
+
 実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 
 ## 音声入力の設定
@@ -333,7 +337,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - ウェイクワード有効時は共有マイク入力を使い、PTT録音とウェイクワード監視が別々に `arecord` を起動しない
 - 推論窓は無音で前詰めして、起動直後でも `ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS` 秒ぶんの実音声が入った時点から判定する
 - 検知後は同じ音声ストリームから発話をWAV化し、既存のSTT、本人確認、エージェント処理へ渡す
-- ウェイクワード経由のSTT結果は、先頭に混ざった `アルゴス`、`アルコス`、`argos` などの呼びかけだけを除去してから本人確認と通常会話へ渡す。文中の同語は削除しない
+- ウェイクワード経由のSTT結果は、先頭に混ざった `アルゴス`、`アルコス`、`argos` などの呼びかけだけを除去してから本人確認と通常会話へ渡す。文中の同語は削除しない。呼びかけの表記ゆれは `ARGOS_WAKEWORD_ALIASES`（カンマ/全角読点/改行区切り）で上書きでき、別名のアシスタントにも転用できる。未設定なら組み込みの既定（アルゴス等）を使う
 - ウェイクワードは `ready` または `locked` の時だけ受け付ける。考え中、文字起こし中、録音中、読み上げ中の検知は処理中タスクやTTSをキャンセルせず無視する
 - ウェイクワード検知後の録音中にPTTを押した場合は、別録音を開始せず、そのウェイクワード発話をPTT解放まで継続する
 - 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
@@ -393,7 +397,7 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
-ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。
+ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
 
 Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
 

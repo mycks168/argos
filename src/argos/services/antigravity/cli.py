@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from argos.config import AgentSlot, Settings
+from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
 log = logging.getLogger(__name__)
@@ -37,63 +38,17 @@ class AntigravityTranscriptSnapshot:
     line_count: int
 
 
-class AntigravitySessionStore:
+class AntigravitySessionStore(SlotSessionStore):
     """Antigravity の会話IDをArgos管理ファイルに保存する。"""
 
     def __init__(self, path: Path) -> None:
         """保存先ファイルを初期化する。"""
-        self._path = path
-
-    def load(self, key: str) -> str:
-        """指定スロットの保存済み会話IDを返す。"""
-        value = self._read().get(key, "")
-        return value if isinstance(value, str) else ""
-
-    def save(self, key: str, conversation_id: str) -> None:
-        """指定スロットの会話IDを保存する。"""
-        if not conversation_id:
-            return
-        data = self._read()
-        if data.get(key) == conversation_id:
-            return
-        data[key] = conversation_id
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def clear(self, key: str) -> None:
-        """指定スロットの保存済み会話IDを削除する。"""
-        data = self._read()
-        if key not in data:
-            return
-        del data[key]
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _read(self) -> dict[str, str]:
-        """保存ファイルをJSONとして読み込む。"""
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
-        except OSError:
-            log.exception("Antigravity 会話IDの読み込みに失敗しました: %s", self._path)
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("Antigravity 会話ID保存ファイルが壊れています: %s", self._path)
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(key): value for key, value in data.items() if isinstance(value, str)}
+        super().__init__(path, label="Antigravity 会話ID")
 
 
 def _slot_key(slot: AgentSlot) -> str:
     """保存用にスロット設定から安定したキーを作る。"""
-    import hashlib
-
-    raw = "\0".join((slot.name, slot.provider, slot.cwd))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return slot_key(slot)
 
 
 class AntigravityCliClient:

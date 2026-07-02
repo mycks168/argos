@@ -84,6 +84,11 @@ class DashboardState:
             self._status = {"code": code, "label": label, "updated_at": _now_iso()}
             self._publish_locked()
 
+    def status_code(self) -> str:
+        """現在の動作状態コードを返す。"""
+        with self._lock:
+            return str(self._status["code"])
+
     def set_agent(self, name: str, provider: str) -> None:
         """現在のエージェントスロット表示を更新する。"""
         with self._lock:

@@ -337,8 +337,10 @@ def _copy_env_example(
         if home:
             env["HOME"] = home
         runner(["sudo", "-u", user, "cp", str(example_path), str(env_path)], check=True, env=env)
+        runner(["sudo", "-u", user, "chmod", "600", str(env_path)], check=True, env=env)
         return
     shutil.copyfile(example_path, env_path)
+    _restrict_env_permissions(env_path)
 
 
 def configure_env(
@@ -372,8 +374,10 @@ def _ensure_core_env_defaults(env_path: Path) -> None:
     """既存.envに不足しているARGOS本体の必須既定値を補完する。"""
     values = _read_env_values(env_path)
     changed = _ensure_dashboard_token(values)
+    changed = _ensure_agent_runner_token(values) or changed
     if changed:
         _write_env_values(env_path, values)
+    _restrict_env_permissions(env_path)
 
 
 def _ensure_dashboard_token(values: dict[str, str]) -> bool:
@@ -382,6 +386,27 @@ def _ensure_dashboard_token(values: dict[str, str]) -> bool:
         return False
     values["ARGOS_DASHBOARD_TOKEN"] = secrets.token_urlsafe(32)
     return True
+
+
+def _ensure_agent_runner_token(values: dict[str, str]) -> bool:
+    """Agent Runner API用Bearerトークンが空なら生成する。
+
+    トークンが空のままだとRunner APIは認証なしで全リクエストを受け付ける。
+    ARGOS本体とRunnerは同じ.envを読むため、生成するだけで両者に共有される。
+    """
+    if values.get("ARGOS_AGENT_RUNNER_TOKEN", "").strip():
+        return False
+    values["ARGOS_AGENT_RUNNER_TOKEN"] = secrets.token_urlsafe(32)
+    return True
+
+
+def _restrict_env_permissions(env_path: Path) -> None:
+    """Bearerトークンを含む.envを所有者のみ読み書き可能にする。"""
+    try:
+        env_path.chmod(0o600)
+    except OSError:
+        # 所有者以外が実行した場合などは権限変更をあきらめ、インストールは続行する
+        pass
 
 
 def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
@@ -406,6 +431,8 @@ def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
         filter_values["TTS_FILTER_BEARER_TOKEN"] = token
         _write_env_values(filter_env, filter_values)
         changed = True
+    _restrict_env_permissions(app_env)
+    _restrict_env_permissions(filter_env)
     return changed
 
 

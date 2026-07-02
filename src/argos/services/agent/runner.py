@@ -16,9 +16,11 @@ from urllib.parse import urlparse
 
 from argos.config import AgentSlot, Settings
 from argos.services.agent.client import AgentClient, create_provider_client
+from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 
 
 log = logging.getLogger(__name__)
+MAX_BODY_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -287,91 +289,75 @@ class AgentRunnerServer:
         runner = self._runner
         token = self._token
 
-        class Handler(BaseHTTPRequestHandler):
+        class Handler(JsonRequestHandler):
             """Agent Runner HTTPハンドラー。"""
 
             def do_GET(self) -> None:
                 """ジョブ状態や未配信ジョブを返す。"""
                 if not _is_authorized(self.headers.get("Authorization", ""), token):
-                    self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                    self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                     return
                 parsed = urlparse(self.path)
                 if parsed.path == "/api/jobs":
-                    self._send_json(HTTPStatus.OK, {"jobs": [_job_payload(job) for job in runner.list_undelivered()]})
+                    self._send_json({"jobs": [_job_payload(job) for job in runner.list_undelivered()]}, HTTPStatus.OK)
                     return
                 prefix = "/api/jobs/"
                 if parsed.path.startswith(prefix):
                     job = runner.get_job(parsed.path.removeprefix(prefix).strip("/"))
                     if job is None:
-                        self._send_json(HTTPStatus.NOT_FOUND, {"error": "job not found"})
+                        self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
                         return
-                    self._send_json(HTTPStatus.OK, _job_payload(job))
+                    self._send_json(_job_payload(job), HTTPStatus.OK)
                     return
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
             def do_POST(self) -> None:
                 """ジョブ作成や配信済み更新を受け付ける。"""
                 if not _is_authorized(self.headers.get("Authorization", ""), token):
-                    self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unauthorized"})
+                    self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                     return
                 parsed = urlparse(self.path)
                 if parsed.path == "/api/jobs":
-                    payload = self._read_json()
                     try:
+                        payload = self._read_json(MAX_BODY_BYTES, allow_empty=True)
                         job = runner.start_job(
                             str(payload.get("slot_name", "")),
                             str(payload.get("provider", "")),
                             str(payload.get("prompt", "")),
                         )
                     except ValueError as exc:
-                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                        self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                         return
                     except AgentSlotBusyError as exc:
                         self._send_json(
-                            HTTPStatus.CONFLICT,
                             {
                                 "error": str(exc),
                                 "active_job_id": exc.job.job_id,
                             },
+                            HTTPStatus.CONFLICT,
                         )
                         return
-                    self._send_json(HTTPStatus.ACCEPTED, _job_payload(job))
+                    self._send_json(_job_payload(job), HTTPStatus.ACCEPTED)
                     return
                 suffix = "/deliver"
                 if parsed.path.startswith("/api/jobs/") and parsed.path.endswith(suffix):
                     job_id = parsed.path.removeprefix("/api/jobs/")[: -len(suffix)].strip("/")
                     job = runner.mark_delivered(job_id)
                     if job is None:
-                        self._send_json(HTTPStatus.NOT_FOUND, {"error": "job not found"})
+                        self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
                         return
-                    self._send_json(HTTPStatus.OK, _job_payload(job))
+                    self._send_json(_job_payload(job), HTTPStatus.OK)
                     return
                 if parsed.path == "/api/slots/reset":
-                    payload = self._read_json()
                     try:
+                        payload = self._read_json(MAX_BODY_BYTES, allow_empty=True)
                         runner.reset_slot(str(payload.get("slot_name", "")), str(payload.get("provider", "")))
                     except ValueError as exc:
-                        self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
+                        self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                         return
-                    self._send_json(HTTPStatus.OK, {"ok": True})
+                    self._send_json({"ok": True}, HTTPStatus.OK)
                     return
-                self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-
-            def _read_json(self) -> dict[str, object]:
-                """リクエスト本文JSONを読み込む。"""
-                length = int(self.headers.get("Content-Length", "0"))
-                raw = self.rfile.read(length) if length else b"{}"
-                data = json.loads(raw.decode("utf-8"))
-                return data if isinstance(data, dict) else {}
-
-            def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
-                """JSONレスポンスを返す。"""
-                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-                self.send_response(int(status))
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                self._send_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 
             def log_message(self, format: str, *args: object) -> None:
                 """標準エラーではなくloggingへHTTPアクセスログを出す。"""
@@ -398,10 +384,10 @@ def _slot_key_values(name: str, provider: str) -> str:
 
 
 def _is_authorized(header: str, token: str) -> bool:
-    """Bearer認証が有効ならヘッダーを検証する。"""
+    """Bearer認証が有効ならヘッダーを検証する。トークン未設定なら無認証で通す。"""
     if not token:
         return True
-    return header == f"Bearer {token}"
+    return bearer_header_matches(header, token)
 
 
 def _job_payload(job: AgentJob) -> dict[str, object]:
