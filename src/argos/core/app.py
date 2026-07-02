@@ -351,7 +351,9 @@ class ArgosApp:
         slot_key = _app_slot_key(slot_name, provider)
         self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
         self._pending_slot_speech[slot_key] = result
-        if not self._is_current_slot_key(slot_key):
+        if self._is_current_slot_key(slot_key):
+            self._start_pending_slot_response()
+        else:
             self._dashboard_state.set_slot_unread(slot_name, provider, True)
         self._dashboard_state.add_notification(
             f"{slot_name} 応答完了",
