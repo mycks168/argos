@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import queue
@@ -197,7 +198,9 @@ def _create_handler(
             if not token:
                 self._send_json({"error": "ARGOS_DASHBOARD_TOKEN が未設定です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return False
-            if self.headers.get("Authorization", "") != f"Bearer {token}":
+            # タイミング攻撃でトークンを推測されないよう定数時間で比較する
+            header = self.headers.get("Authorization", "")
+            if not hmac.compare_digest(header.encode("utf-8"), f"Bearer {token}".encode("utf-8")):
                 self._send_json({"error": "認証に失敗しました"}, HTTPStatus.UNAUTHORIZED)
                 return False
             return True

@@ -14,6 +14,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
+from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
 log = logging.getLogger(__name__)
@@ -28,70 +29,12 @@ class CodexConversation:
     session_id: str = ""
 
 
-class CodexSessionStore:
+class CodexSessionStore(SlotSessionStore):
     """Codex セッションIDをArgos管理ファイルに保存する。"""
 
     def __init__(self, path: Path, fallback_paths: tuple[Path, ...] = ()) -> None:
         """保存先ファイルを初期化する。"""
-        self._path = path
-        self._fallback_paths = fallback_paths
-
-    def load(self, key: str) -> str:
-        """指定スロットの保存済みセッションIDを返す。"""
-        value = self._read().get(key, "")
-        return value if isinstance(value, str) else ""
-
-    def save(self, key: str, session_id: str) -> None:
-        """指定スロットのセッションIDを保存する。"""
-        if not session_id:
-            return
-        data = self._read()
-        if data.get(key) == session_id:
-            return
-        data[key] = session_id
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            log.exception("Codex セッションIDの保存に失敗しました: %s", self._path)
-
-    def clear(self, key: str) -> None:
-        """指定スロットの保存済みセッションIDを削除する。"""
-        data = self._read()
-        if key not in data:
-            return
-        del data[key]
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            log.exception("Codex セッションIDの削除に失敗しました: %s", self._path)
-
-    def _read(self) -> dict[str, str]:
-        """保存ファイルをJSONとして読み込む。"""
-        for path in (self._path, *self._fallback_paths):
-            data = self._read_path(path)
-            if data:
-                return data
-        return {}
-
-    def _read_path(self, path: Path) -> dict[str, str]:
-        """指定ファイルをJSONとして読み込む。"""
-        try:
-            raw = path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
-        except OSError:
-            log.exception("Codex セッションIDの読み込みに失敗しました: %s", path)
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("Codex セッションID保存ファイルが壊れています: %s", path)
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(key): value for key, value in data.items() if isinstance(value, str)}
+        super().__init__(path, label="Codex セッションID", fallback_paths=fallback_paths)
 
 
 def _session_store_path(settings: Settings) -> Path:
@@ -117,8 +60,7 @@ def _legacy_session_store_paths(settings: Settings) -> tuple[Path, ...]:
 
 def _slot_key(slot: AgentSlot) -> str:
     """保存用にスロット設定から安定したキーを作る。"""
-    raw = "\0".join((slot.name, slot.provider, slot.cwd))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return slot_key(slot)
 
 
 def _legacy_slot_key(slot: AgentSlot, settings: Settings) -> str:

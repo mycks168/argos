@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
 import re
@@ -13,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
+from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
 log = logging.getLogger(__name__)
@@ -29,61 +28,17 @@ class HermesConversation:
     session_id: str = ""
 
 
-class HermesSessionStore:
+class HermesSessionStore(SlotSessionStore):
     """Hermesのsession IDをArgos管理ファイルに保存する。"""
 
     def __init__(self, path: Path) -> None:
         """保存先ファイルを保持する。"""
-        self._path = path
-
-    def load(self, key: str) -> str:
-        """指定スロットの保存済みsession IDを返す。"""
-        value = self._read().get(key, "")
-        return value if isinstance(value, str) else ""
-
-    def save(self, key: str, session_id: str) -> None:
-        """指定スロットのsession IDを保存する。"""
-        if not session_id:
-            return
-        data = self._read()
-        if data.get(key) == session_id:
-            return
-        data[key] = session_id
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def clear(self, key: str) -> None:
-        """指定スロットの保存済みsession IDを削除する。"""
-        data = self._read()
-        if key not in data:
-            return
-        del data[key]
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _read(self) -> dict[str, str]:
-        """保存ファイルをJSONとして読み込む。"""
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
-        except OSError:
-            log.exception("Hermes session IDの読み込みに失敗しました: %s", self._path)
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("Hermes session ID保存ファイルが壊れています: %s", self._path)
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(key): value for key, value in data.items() if isinstance(value, str)}
+        super().__init__(path, label="Hermes session ID")
 
 
 def _slot_key(slot: AgentSlot) -> str:
     """保存用にスロット設定から安定したキーを作る。"""
-    raw = "\0".join((slot.name, slot.provider, slot.cwd))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return slot_key(slot)
 
 
 class HermesCliClient:

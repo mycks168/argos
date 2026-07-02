@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import threading
@@ -19,6 +20,7 @@ from argos.services.agent.client import AgentClient, create_provider_client
 
 
 log = logging.getLogger(__name__)
+MAX_BODY_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -316,8 +318,8 @@ class AgentRunnerServer:
                     return
                 parsed = urlparse(self.path)
                 if parsed.path == "/api/jobs":
-                    payload = self._read_json()
                     try:
+                        payload = self._read_json()
                         job = runner.start_job(
                             str(payload.get("slot_name", "")),
                             str(payload.get("provider", "")),
@@ -347,8 +349,8 @@ class AgentRunnerServer:
                     self._send_json(HTTPStatus.OK, _job_payload(job))
                     return
                 if parsed.path == "/api/slots/reset":
-                    payload = self._read_json()
                     try:
+                        payload = self._read_json()
                         runner.reset_slot(str(payload.get("slot_name", "")), str(payload.get("provider", "")))
                     except ValueError as exc:
                         self._send_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
@@ -359,9 +361,17 @@ class AgentRunnerServer:
 
             def _read_json(self) -> dict[str, object]:
                 """リクエスト本文JSONを読み込む。"""
-                length = int(self.headers.get("Content-Length", "0"))
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError as exc:
+                    raise ValueError("Content-Length が不正です") from exc
+                if length < 0 or length > MAX_BODY_BYTES:
+                    raise ValueError("リクエストサイズが不正です")
                 raw = self.rfile.read(length) if length else b"{}"
-                data = json.loads(raw.decode("utf-8"))
+                try:
+                    data = json.loads(raw.decode("utf-8"))
+                except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                    raise ValueError("JSONが不正です") from exc
                 return data if isinstance(data, dict) else {}
 
             def _send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
@@ -401,7 +411,8 @@ def _is_authorized(header: str, token: str) -> bool:
     """Bearer認証が有効ならヘッダーを検証する。"""
     if not token:
         return True
-    return header == f"Bearer {token}"
+    # タイミング攻撃でトークンを推測されないよう定数時間で比較する
+    return hmac.compare_digest(header.encode("utf-8"), f"Bearer {token}".encode("utf-8"))
 
 
 def _job_payload(job: AgentJob) -> dict[str, object]:

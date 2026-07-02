@@ -777,6 +777,28 @@ def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):
     assert values["ARGOS_DASHBOARD_TOKEN"]
 
 
+def test_ensure_core_env_defaults_generates_agent_runner_token(tmp_path):
+    """既存.envのAgent Runnerトークンが空なら自動生成する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_AGENT_RUNNER_TOKEN=\nARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
+
+    _ensure_core_env_defaults(env_path)
+
+    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert values["ARGOS_AGENT_RUNNER_TOKEN"]
+
+
+def test_ensure_core_env_defaults_restricts_env_permissions(tmp_path):
+    """トークンを含む.envは所有者のみ読める権限へ変更する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
+    env_path.chmod(0o644)
+
+    _ensure_core_env_defaults(env_path)
+
+    assert env_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_ensure_tts_filter_shared_token_generates_and_syncs(tmp_path):
     """本体とtts-filterのBearerトークンを同じ値に揃える。"""
     project = tmp_path / "argos"

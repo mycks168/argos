@@ -1,3 +1,4 @@
+import hmac
 import os
 import random
 import yaml
@@ -39,7 +40,8 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) 
     例外:
         HTTPException: トークンが無効な場合。
     """
-    if credentials.credentials != API_TOKEN:
+    # タイミング攻撃でトークンを推測されないよう定数時間で比較する
+    if not hmac.compare_digest(credentials.credentials.encode("utf-8"), API_TOKEN.encode("utf-8")):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token",

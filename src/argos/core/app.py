@@ -13,7 +13,12 @@ import time
 from collections.abc import Iterable
 from pathlib import Path
 
-from argos.config import Settings
+from argos.config import (
+    DEFAULT_AGENT_PROGRESS_START_PHRASES,
+    DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
+    DEFAULT_WAKEWORD_ALIASES,
+    Settings,
+)
 from argos.hardware.audio import AudioInputStream, AudioPlayer, Recorder, StreamRecorder, check_audio_level, cleanup_stale_recordings
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
@@ -42,28 +47,15 @@ from argos.services.wakeword import WakeWordListener
 
 
 log = logging.getLogger(__name__)
-FACE_AUTH_FAILURE_IMAGE_PATH = Path("/tmp/argos/camera-latest.jpg")
 FACE_AUTH_FAILURE_IMAGE_URL = "/camera/latest.jpg"
 
 
-CODEX_PROGRESS_START_PHRASES = (
-    "わかった。少し待ってね。",
-    "了解。やってみるね。",
-    "確認するね。",
-    "ちょっと待ってて。",
-    "今見てみるね。",
-    "すぐ調べるね。",
-)
-
-CODEX_PROGRESS_WAIT_PHRASES = (
-    "ちょっと時間かかってるけど、もう少し待ってね。",
-    "もう少しだけ待ってね。まだ確認中だよ。",
-    "まだ確認してる途中だよ。少し待ってね。",
-    "時間かかってるけど、もうちょっと待ってね。",
-)
+# 旧名の後方互換エイリアス。既定フレーズは config 側に集約した。
+CODEX_PROGRESS_START_PHRASES = DEFAULT_AGENT_PROGRESS_START_PHRASES
+CODEX_PROGRESS_WAIT_PHRASES = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
 
 
-class CodexProgressAnnouncer:
+class AgentProgressAnnouncer:
     """LLMエージェント待機中の進捗音声を管理する。"""
 
     def __init__(
@@ -73,23 +65,27 @@ class CodexProgressAnnouncer:
         interval_seconds: float,
         user_text: str = "",
         acknowledgement_client: AcknowledgementClient | None = None,
+        start_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_START_PHRASES,
+        wait_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
     ) -> None:
-        """読み上げ関数と通知間隔を初期化する。"""
+        """読み上げ関数と通知間隔、進捗フレーズを初期化する。"""
         self._speak_status = speak_status
         self._first_delay_seconds = first_delay_seconds
         self._interval_seconds = interval_seconds
         self._user_text = user_text
         self._acknowledgement_client = acknowledgement_client
+        self._start_phrases = start_phrases or DEFAULT_AGENT_PROGRESS_START_PHRASES
+        self._wait_phrases = wait_phrases or DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
         if self._acknowledgement_client is not None and self._user_text:
-            phrase = self._acknowledgement_client.select_phrase(self._user_text, CODEX_PROGRESS_START_PHRASES)
+            phrase = self._acknowledgement_client.select_phrase(self._user_text, self._start_phrases)
             self._speak_status(phrase)
         else:
-            self._speak_random(CODEX_PROGRESS_START_PHRASES)
+            self._speak_random(self._start_phrases)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -104,13 +100,17 @@ class CodexProgressAnnouncer:
         if self._stop.wait(self._first_delay_seconds):
             return
         while not self._stop.is_set():
-            self._speak_random(CODEX_PROGRESS_WAIT_PHRASES)
+            self._speak_random(self._wait_phrases)
             if self._stop.wait(self._interval_seconds):
                 return
 
     def _speak_random(self, phrases: tuple[str, ...]) -> None:
         """候補からランダムに1つ読み上げる。"""
         self._speak_status(random.choice(phrases))
+
+
+# 旧名の後方互換エイリアス。
+CodexProgressAnnouncer = AgentProgressAnnouncer
 
 
 class ArgosApp:
@@ -223,6 +223,7 @@ class ArgosApp:
         self._wakeword_ptt_hold = threading.Event()
         self._last_tts_finished_at = 0.0
         self._gpio: GpioPttInput | None = None
+        self._wakeword_pattern = build_wakeword_pattern(settings.wakeword_aliases)
         self._dashboard_state.set_audio_muted(self._muted)
 
     def _create_audio_input_stream(self, settings: Settings, audio_devices: Iterable[str]) -> AudioInputStream | None:
@@ -255,6 +256,7 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
             default_font_size=settings.dashboard_default_font_size,
             location_provider=settings.location_provider,
@@ -541,8 +543,9 @@ class ArgosApp:
             try:
                 source_path = Path(image_path)
                 if source_path.exists():
-                    FACE_AUTH_FAILURE_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source_path, FACE_AUTH_FAILURE_IMAGE_PATH)
+                    snapshot_path = Path(self._settings.camera_snapshot_path).expanduser()
+                    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source_path, snapshot_path)
                     image_url = f"{FACE_AUTH_FAILURE_IMAGE_URL}?t={int(time.time() * 1000)}"
             except OSError:
                 log.exception("顔認証失敗画像の通知コピーに失敗しました")
@@ -784,11 +787,11 @@ class ArgosApp:
                 log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
-            if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript):
+            if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
                 log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
                 self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
                 return
-            transcript = _strip_leading_wakeword(transcript)
+            transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
             if not transcript:
                 log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
@@ -962,7 +965,7 @@ class ArgosApp:
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._dashboard_state.set_status("thinking", "考え中")
-        announcer = self._start_codex_progress(text, slot_key)
+        announcer = self._start_agent_progress(text, slot_key)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speak_response_stream(
@@ -1069,28 +1072,33 @@ class ArgosApp:
         worker.join(timeout=300)
         return full_response
 
-    def _start_codex_progress(self, user_text: str = "", slot_key: str = "") -> CodexProgressAnnouncer | None:
+    def _start_agent_progress(self, user_text: str = "", slot_key: str = "") -> AgentProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
-        if not self._settings.codex_progress_voice:
+        if not self._settings.agent_progress_voice:
             return None
         def speak_if_current(text: str) -> None:
             """現在スロットの待機通知だけ読み上げる。"""
             if not slot_key or self._is_current_slot_key(slot_key):
                 self._speak_status(text)
-        announcer = CodexProgressAnnouncer(
+        announcer = AgentProgressAnnouncer(
             speak_status=speak_if_current,
-            first_delay_seconds=self._settings.codex_progress_first_delay_seconds,
-            interval_seconds=self._settings.codex_progress_interval_seconds,
+            first_delay_seconds=self._settings.agent_progress_first_delay_seconds,
+            interval_seconds=self._settings.agent_progress_interval_seconds,
             user_text=user_text,
             acknowledgement_client=self._acknowledgement,
+            start_phrases=self._settings.agent_progress_start_phrases,
+            wait_phrases=self._settings.agent_progress_wait_phrases,
         )
         announcer.start()
         return announcer
 
+    # 旧名の後方互換エイリアス。
+    _start_codex_progress = _start_agent_progress
+
     def _stop_progress_on_first_delta(
         self,
         deltas: Iterable[str],
-        announcer: CodexProgressAnnouncer | None,
+        announcer: AgentProgressAnnouncer | None,
     ) -> Iterable[str]:
         """エージェント本文が届いた時点で進捗音声を止める。"""
         stopped = False
@@ -1342,16 +1350,21 @@ def _app_slot_key(name: str, provider: str) -> str:
     return f"{provider}\0{name}"
 
 
-_LEADING_WAKEWORD_PATTERN = re.compile(
-    r"^\s*(?:アルゴス|あるごす|アルコス|あるこす|ARGOS|Argos|argos)[\s、。,.，．:：!！?？-]*"
-)
+def build_wakeword_pattern(aliases: tuple[str, ...]) -> re.Pattern[str]:
+    """設定されたウェイクワード別名から、先頭の呼びかけを検出する正規表現を作る。"""
+    alternatives = "|".join(re.escape(alias) for alias in aliases if alias) or "(?!)"
+    return re.compile(rf"^\s*(?:{alternatives})[\s、。,.，．:：!！?？-]*")
 
 
-def _strip_leading_wakeword(text: str) -> str:
+# 既定別名から作った後方互換用のモジュールパターン。
+_LEADING_WAKEWORD_PATTERN = build_wakeword_pattern(DEFAULT_WAKEWORD_ALIASES)
+
+
+def _strip_leading_wakeword(text: str, pattern: re.Pattern[str] = _LEADING_WAKEWORD_PATTERN) -> str:
     """ウェイクワード経由STTの先頭に混ざった呼びかけだけを除去する。"""
-    return _LEADING_WAKEWORD_PATTERN.sub("", text, count=1).strip()
+    return pattern.sub("", text, count=1).strip()
 
 
-def _has_leading_wakeword(text: str) -> bool:
+def _has_leading_wakeword(text: str, pattern: re.Pattern[str] = _LEADING_WAKEWORD_PATTERN) -> bool:
     """STT結果が呼びかけから始まるかを判定する。"""
-    return bool(_LEADING_WAKEWORD_PATTERN.match(text))
+    return bool(pattern.match(text))

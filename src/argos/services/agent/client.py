@@ -266,7 +266,7 @@ def _load_system_prompt(settings: Settings) -> str:
 
 
 def _default_system_prompt(settings: Settings) -> str:
-    """車載ARGOS向けの既定システム指示を返す。"""
+    """既定システム指示を返す。ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT で全文を差し替えられる。"""
     skills_dir = settings.agent_skills_dir.strip()
     skill_lines = ""
     if skills_dir:
@@ -274,6 +274,9 @@ def _default_system_prompt(settings: Settings) -> str:
             f"\n- 最初に利用可能なスキル一覧として `{skills_dir}` に目を通す。"
             "依頼がスキルに該当する場合は、該当する `SKILL.md` を読んで従う。"
         )
+    override = settings.agent_default_system_prompt.strip()
+    if override:
+        return f"{override}{skill_lines}"
     return (
         "システム指示:\n"
         "- あなたは車載音声アシスタントARGOSとして応答する。\n"

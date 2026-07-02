@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import os
 import json
-import hashlib
 import logging
 import shutil
 import subprocess
@@ -18,6 +17,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
+from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 log = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class ClaudeConversation:
     session_id: str = ""
 
 
-class ClaudeSessionStore:
+class ClaudeSessionStore(SlotSessionStore):
     """Claude セッションIDをArgosの管理ファイルに保存・管理するクラス。"""
 
     def __init__(self, path: Path) -> None:
@@ -39,75 +39,7 @@ class ClaudeSessionStore:
         Args:
             path: セッションIDを保存するJSONファイルのパス
         """
-        self._path = path
-
-    def load(self, key: str) -> str:
-        """指定スロットの保存済みセッションIDを取得する。
-
-        Args:
-            key: スロット識別キー
-        Returns:
-            セッションID（存在しない場合は空文字）
-        """
-        value = self._read().get(key, "")
-        return value if isinstance(value, str) else ""
-
-    def save(self, key: str, session_id: str) -> None:
-        """指定スロットのセッションIDを保存する。
-
-        Args:
-            key: スロット識別キー
-            session_id: 保存するセッションID
-        """
-        if not session_id:
-            return
-        data = self._read()
-        if data.get(key) == session_id:
-            return
-        data[key] = session_id
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            log.exception("Claude セッションIDの保存に失敗しました: %s", self._path)
-
-    def clear(self, key: str) -> None:
-        """指定スロットの保存済みセッションIDを削除する。
-
-        Args:
-            key: スロット識別キー
-        """
-        data = self._read()
-        if key not in data:
-            return
-        del data[key]
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            log.exception("Claude セッションIDの削除に失敗しました: %s", self._path)
-
-    def _read(self) -> dict[str, str]:
-        """保存ファイルをJSONとして読み込む。
-
-        Returns:
-            セッションID辞書
-        """
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
-        except OSError:
-            log.exception("Claude セッションIDの読み込みに失敗しました: %s", self._path)
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            log.warning("Claude セッションID保存ファイルが壊れています: %s", self._path)
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(key): value for key, value in data.items() if isinstance(value, str)}
+        super().__init__(path, label="Claude セッションID")
 
 
 def _session_store_path(settings: Settings) -> Path:
@@ -129,8 +61,7 @@ def _slot_key(slot: AgentSlot) -> str:
     Returns:
         ハッシュ化されたキー文字列
     """
-    raw = "\0".join((slot.name, slot.provider, slot.cwd))
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return slot_key(slot)
 
 
 class ClaudeCliClient:

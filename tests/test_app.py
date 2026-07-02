@@ -2,7 +2,13 @@ import json
 import logging
 
 from argos.config import AgentSlot, Settings
-from argos.core.app import ArgosApp, CodexProgressAnnouncer, _strip_leading_wakeword
+from argos.core.app import (
+    ArgosApp,
+    CodexProgressAnnouncer,
+    _has_leading_wakeword,
+    _strip_leading_wakeword,
+    build_wakeword_pattern,
+)
 from argos.services.auth import hash_keyword
 
 
@@ -938,13 +944,13 @@ def test_face_auth_failure_notification_has_image(monkeypatch, tmp_path):
     latest_path = tmp_path / "camera-latest.jpg"
     captured_path = tmp_path / "auth-face.jpg"
     captured_path.write_bytes(b"jpg")
-    monkeypatch.setattr("argos.core.app.FACE_AUTH_FAILURE_IMAGE_PATH", latest_path)
     settings = Settings(
         **{
             **_settings().__dict__,
             "auth_enabled": True,
             "auth_keyword_hash": hash_keyword("解除"),
             "auth_face_enabled": True,
+            "camera_snapshot_path": str(latest_path),
         }
     )
     app = ArgosApp(settings)
@@ -1051,10 +1057,10 @@ def test_codex_progress_stop_waits_for_current_status(monkeypatch):
 
 def test_codex_progress_can_be_disabled(monkeypatch):
     _patch_app(monkeypatch)
-    settings = Settings(**{**_settings().__dict__, "codex_progress_voice": False})
+    settings = Settings(**{**_settings().__dict__, "agent_progress_voice": False})
     app = ArgosApp(settings)
 
-    assert app._start_codex_progress() is None
+    assert app._start_agent_progress() is None
 
 
 def test_ptt_and_status_methods(monkeypatch, capsys):
@@ -1221,6 +1227,15 @@ def test_strip_leading_wakeword_keeps_middle_word():
     assert _strip_leading_wakeword("アルゴス、唐揚げ") == "唐揚げ"
     assert _strip_leading_wakeword("アルコス 今日の天気は") == "今日の天気は"
     assert _strip_leading_wakeword("今日はアルゴスの話") == "今日はアルゴスの話"
+
+
+def test_build_wakeword_pattern_uses_configured_aliases():
+    """設定した別名で先頭の呼びかけを検出・除去できる。"""
+    pattern = build_wakeword_pattern(("ジャービス", "jarvis"))
+    assert _strip_leading_wakeword("ジャービス、天気は", pattern) == "天気は"
+    assert _has_leading_wakeword("jarvis こんにちは", pattern) is True
+    # 既定別名「アルゴス」は設定外なので呼びかけ扱いしない
+    assert _has_leading_wakeword("アルゴス こんにちは", pattern) is False
 
 
 def test_wakeword_recording_ignores_empty_transcript(monkeypatch, tmp_path):
