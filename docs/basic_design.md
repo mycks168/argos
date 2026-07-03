@@ -249,7 +249,7 @@ ARGOS は最初の発話処理時と正常終了時に最終利用時刻を `ARG
 
 `ARGOS_AUTH_FACE_ENABLED=true` の場合、起動時とロック中の発話時にカメラ照合を試す。照合に成功した場合は音声キーワード解除と同じく認証済み状態へ遷移し、その発話をCodexへ送る。照合に失敗した場合は、同じ発話を音声キーワードとして検証する。
 
-顔検出確認は `uv run scripts/check-face-detection.py` で行う。撮影画像は `/tmp/argos/camera-latest.jpg` にもコピーする。顔サンプル登録は `uv run scripts/enroll-face-auth.py --count 5` で行う。撮影は `ARGOS_AUTH_FACE_CAPTURE_COMMAND` を使い、登録サンプルは `ARGOS_AUTH_FACE_SAMPLES_DIR` に保存する。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存する。顔検出にはOpenCVを使う。OpenCVが未導入、顔が検出できない、または複数の顔が検出された場合は顔認証を失敗扱いにして音声キーワードへフォールバックする。現段階の顔照合はローカル顔画像指紋の簡易比較で、しきい値は `ARGOS_AUTH_FACE_THRESHOLD`、必要一致数は `ARGOS_AUTH_FACE_MIN_MATCHES` で調整する。
+顔検出確認は `uv run scripts/check-face-detection.py` で行う。撮影画像は `/tmp/argos/camera-latest.jpg` にもコピーする。顔サンプル登録は `uv run scripts/enroll-face-auth.py --count 5` で行う。撮影は `ARGOS_AUTH_FACE_CAPTURE_COMMAND` を使い、登録サンプルは `ARGOS_AUTH_FACE_SAMPLES_DIR` に保存する。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存する。顔検出にはOpenCVを使う。インストーラーはARGOS本体を `uv sync --extra face` で同期し、OpenCVを標準導入する。OpenCVが未導入、顔が検出できない、または複数の顔が検出された場合は顔認証を失敗扱いにして音声キーワードへフォールバックする。現段階の顔照合はローカル顔画像指紋の簡易比較で、しきい値は `ARGOS_AUTH_FACE_THRESHOLD`、必要一致数は `ARGOS_AUTH_FACE_MIN_MATCHES` で調整する。
 
 顔認証に失敗し、撮影画像が残っている場合は、画像を `/tmp/argos/camera-latest.jpg` へコピーし、ダッシュボードの通知に `/camera/latest.jpg` として表示する。
 
