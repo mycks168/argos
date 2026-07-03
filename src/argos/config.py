@@ -258,6 +258,7 @@ class Settings:
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
     wakeword_followup_seconds: float = 3.0
+    wakeword_bargein_enabled: bool = False
     wakeword_score_log_path: str = ""
     wakeword_require_stt_wakeword: bool = False
     wakeword_aliases: tuple[str, ...] = DEFAULT_WAKEWORD_ALIASES
@@ -413,6 +414,7 @@ def load_settings() -> Settings:
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
         wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
         wakeword_followup_seconds=float(os.environ.get("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", "3.0")),
+        wakeword_bargein_enabled=_bool_env("ARGOS_WAKEWORD_BARGEIN_ENABLED", False),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
         wakeword_aliases=_split_aliases("ARGOS_WAKEWORD_ALIASES", DEFAULT_WAKEWORD_ALIASES),

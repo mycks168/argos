@@ -23,6 +23,15 @@ def test_load_wakeword_followup_seconds(monkeypatch):
     assert load_settings().wakeword_followup_seconds == 5.5
 
 
+def test_load_wakeword_bargein_enabled(monkeypatch):
+    """バージイン有効フラグを読み込む。既定は無効。"""
+    monkeypatch.delenv("ARGOS_WAKEWORD_BARGEIN_ENABLED", raising=False)
+    assert load_settings().wakeword_bargein_enabled is False
+
+    monkeypatch.setenv("ARGOS_WAKEWORD_BARGEIN_ENABLED", "true")
+    assert load_settings().wakeword_bargein_enabled is True
+
+
 def test_load_agent_provider(monkeypatch):
     """LLMエージェントプロバイダーを読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_PROVIDER", "codex")

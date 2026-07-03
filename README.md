@@ -136,6 +136,8 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 
 応答の読み上げが終わったあと、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけウェイクワードを言い直さずに続けて話せます。この間に話しかけると、そのまま次の発話として受け付け、応答のたびに窓が開き直すので会話が続きます。この追いかけ受付は本人確認済みのときだけ有効で、無音のまま数秒たつと通常の待機に戻ります。
 
+`ARGOS_WAKEWORD_BARGEIN_ENABLED=true` にすると、読み上げ中でもウェイクワードで割り込んで（バージイン）、進行中の読み上げを止めて次の発話を受け付けられます。ウェイクワードonly運用でTTSを止める手段が無い問題への対策です。ただし自分の声に反応しないよう、マイク入力を音響エコーキャンセル(AEC)済みの経路にすることが前提です。`scripts/setup-echo-cancel.sh`（Raspberry Pi OS / Ubuntu 共通、`--install-deps`で依存導入、`--revert`で撤去）でPipeWireのエコーキャンセルとALSAブリッジを設定します（詳細は `docs/basic_design.md`）。既定は無効です。
+
 モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
 
 ```text

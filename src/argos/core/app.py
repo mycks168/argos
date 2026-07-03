@@ -602,15 +602,26 @@ class ArgosApp:
         if self._recorder.is_recording:
             log.info("PTT録音中のためウェイクワード検知を無視します")
             return False
-        acceptable_status = ("ready", "locked", "followup") if followup else ("ready", "locked")
+        # バージイン: AEC前提でTTS読み上げ中でも割り込みを許可する（追いかけ受付は対象外）。
+        bargein = self._settings.wakeword_bargein_enabled and not followup
+        acceptable_status = ["ready", "locked"]
+        if followup:
+            acceptable_status.append("followup")
+        if bargein:
+            acceptable_status.append("speaking")
         status_code = self._dashboard_state.snapshot().get("status", {}).get("code")
         if status_code not in acceptable_status:
             log.info("受付可能状態ではないためウェイクワード検知を無視します: status=%s", status_code)
             return False
         if getattr(self._audio, "is_playing", False) or status_code == "speaking":
-            log.info("読み上げ中のためウェイクワード検知を無視します")
-            return False
-        if not followup and self._speech.is_tts_cooldown_active():
+            if not bargein:
+                log.info("読み上げ中のためウェイクワード検知を無視します")
+                return False
+            if self._speech.is_speaking_wakeword():
+                log.info("自己ウェイクワード読み上げ中のためバージインを抑止します")
+                return False
+            log.info("バージイン: 読み上げを止めて録音へ切り替えます")
+        if not followup and not bargein and self._speech.is_tts_cooldown_active():
             log.info("読み上げ直後のためウェイクワード検知を無視します")
             return False
         log.info("追いかけ受付の発話を受け取りました" if followup else "ウェイクワード検知を受け取りました")
