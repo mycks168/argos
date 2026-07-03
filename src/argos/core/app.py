@@ -768,6 +768,7 @@ class ArgosApp:
             if not transcript:
                 log.info("文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                return
             if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
                 self._handle_text(transcript)

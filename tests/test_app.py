@@ -631,7 +631,7 @@ def test_locked_recording_does_not_reach_codex(monkeypatch):
 
 
 def test_empty_transcript_adds_notification(monkeypatch):
-    """文字起こし結果が空の場合はログ確認用に通知を残す。"""
+    """文字起こし結果が空の場合はログ確認用に通知を残し、エージェントへ送らない。"""
     _patch_app(monkeypatch)
     app = ArgosApp(_settings())
     monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
@@ -643,6 +643,9 @@ def test_empty_transcript_adds_notification(monkeypatch):
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["notifications"][0]["title"] == "文字起こし エラー"
     assert snapshot["notifications"][0]["text"] == "音声を認識できませんでした。"
+    # 認証済みでも空文字はエージェントへ送らず、空の会話も残さない
+    assert app._agent.asked == []
+    assert snapshot["messages"] == []
 
 
 def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
