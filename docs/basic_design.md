@@ -348,6 +348,8 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - ウェイクワード検知後の録音中にPTTを押した場合は、別録音を開始せず、そのウェイクワード発話をPTT解放まで継続する
 - 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
 - 読み上げ終了後も `ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS` 秒間はウェイクワード検知を無視し、検知バッファをクリアする。これはウェイクワードだけの自己音声対策で、PTT録音には影響しない
+- 応答の読み上げが終わったら、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけ「追いかけ受付窓」を開き、ウェイクワードを言い直さなくても続けて話せるようにする。窓の中で発話（RMSが `SILENCE_RMS_THRESHOLD` 以上）を検知したら、ウェイクワード無しでそのまま録音・処理する。追いかけ受付の録音は呼びかけを含まないため、STTの呼びかけ必須判定（`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD`）と先頭呼びかけ除去はスキップする
+- 追いかけ受付は本人確認済みのときだけ開く。ロック中は従来どおりウェイクワードと本人確認を求める。窓を開いている間はダッシュボード状態を `followup`（継続受付中）にして画面を起こしたままにし、無音のまま窓が締め切られたら待機表示へ戻す。窓の中で発話に応答したら、その応答のあとに再び窓を開き、会話が続く限り連続で受け付ける。PTT押下時は窓を閉じる。自己音声対策のクールダウンは追いかけ受付には適用しない
 - `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` の場合、ウェイクワード後録音のSTT結果が「アルゴス」などの呼びかけから始まる時だけ本文処理へ進む。自宅など通信遅延が小さく誤検知を強く抑えたい環境向けの設定とする
 - 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
 - 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う

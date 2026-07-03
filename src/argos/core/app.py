@@ -495,6 +495,8 @@ class ArgosApp:
             log.info("マイクOFFのためPTT押下を無視します")
             return
         log.info("PTT ON: 録音開始")
+        if self._wakeword_listener is not None:
+            self._wakeword_listener.disarm_followup()
         if self._wakeword_recording.is_set():
             log.info("ウェイクワード録音中のPTT押下を発話継続として扱います")
             self._wakeword_ptt_hold.set()
@@ -577,6 +579,8 @@ class ArgosApp:
                 score_log_path=self._settings.wakeword_score_log_path,
                 on_detected=self._on_wakeword_detected,
                 on_recording_ready=self._on_wakeword_recording_ready,
+                on_followup_expired=self._on_wakeword_followup_expired,
+                followup_seconds=self._settings.wakeword_followup_seconds,
             )
             self._wakeword_listener.start()
             self._dashboard_state.add_notification("ウェイクワード", "ウェイクワード監視を開始しました。", source="ARGOS")
@@ -584,8 +588,12 @@ class ArgosApp:
             log.exception("ウェイクワード監視を開始できません")
             self._report_error("ウェイクワード", exc)
 
-    def _on_wakeword_detected(self) -> bool:
-        """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。"""
+    def _on_wakeword_detected(self, followup: bool = False) -> bool:
+        """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。
+
+        followup=True は追いかけ受付窓の中でウェイクワード無しに検知した発話を表す。
+        この場合は継続受付状態からの遷移を許し、TTS直後のクールダウンも無視する。
+        """
         if self._shutdown.is_set():
             return False
         if not self._is_microphone_enabled():
@@ -594,17 +602,18 @@ class ArgosApp:
         if self._recorder.is_recording:
             log.info("PTT録音中のためウェイクワード検知を無視します")
             return False
+        acceptable_status = ("ready", "locked", "followup") if followup else ("ready", "locked")
         status_code = self._dashboard_state.snapshot().get("status", {}).get("code")
-        if status_code not in ("ready", "locked"):
+        if status_code not in acceptable_status:
             log.info("受付可能状態ではないためウェイクワード検知を無視します: status=%s", status_code)
             return False
         if getattr(self._audio, "is_playing", False) or status_code == "speaking":
             log.info("読み上げ中のためウェイクワード検知を無視します")
             return False
-        if self._speech.is_tts_cooldown_active():
+        if not followup and self._speech.is_tts_cooldown_active():
             log.info("読み上げ直後のためウェイクワード検知を無視します")
             return False
-        log.info("ウェイクワード検知を受け取りました")
+        log.info("追いかけ受付の発話を受け取りました" if followup else "ウェイクワード検知を受け取りました")
         self._wakeword_recording.set()
         self._wakeword_ptt_hold.clear()
         generation = self._cancel_active_audio()
@@ -614,7 +623,7 @@ class ArgosApp:
             self._status.set(generation, "listening", "録音中")
         return True
 
-    def _on_wakeword_recording_ready(self, wav_path: str) -> None:
+    def _on_wakeword_recording_ready(self, wav_path: str, followup: bool = False) -> None:
         """ウェイクワード後に録音されたWAVを処理スレッドへ渡す。"""
         self._wakeword_recording.clear()
         self._wakeword_ptt_hold.clear()
@@ -626,12 +635,34 @@ class ArgosApp:
             self._status.set(generation, "authenticating", "本人確認中")
         else:
             self._status.set(generation, "transcribing", "文字起こし中")
-        self._worker = threading.Thread(target=self._process_wakeword_recording, args=(wav_path,), daemon=True)
+        self._worker = threading.Thread(
+            target=self._process_wakeword_recording, args=(wav_path, followup), daemon=True
+        )
         self._worker.start()
 
-    def _process_wakeword_recording(self, wav_path: str) -> None:
+    def _on_wakeword_followup_expired(self) -> None:
+        """追いかけ受付窓が無音のまま締め切られたら通常の待機表示へ戻す。"""
+        if self._shutdown.is_set():
+            return
+        if self._dashboard_state.status_code() == "followup":
+            self._set_ready_or_locked()
+
+    def _arm_followup_window(self) -> None:
+        """応答のTTS後、認証済みなら追いかけ受付窓を開いて継続受付表示にする。"""
+        if self._wakeword_listener is None or self._settings.wakeword_followup_seconds <= 0:
+            return
+        if self._shutdown.is_set() or not self._is_microphone_enabled() or self._is_auth_locked():
+            return
+        # 直後に別の録音が始まっていたら継続受付窓は開かない
+        if self._recorder.is_recording or self._wakeword_recording.is_set():
+            return
+        self._wakeword_listener.arm_followup()
+        self._status.set(self._status.current_generation(), "followup", "継続受付中")
+
+    def _process_wakeword_recording(self, wav_path: str, followup: bool = False) -> None:
         """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。"""
         token = self._status.current_generation()
+        handled = False
         try:
             level = check_audio_level(wav_path)
             log.info("ウェイクワード後録音音量: RMS=%.1f", level)
@@ -645,18 +676,21 @@ class ArgosApp:
                 log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
-            if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
-                log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
-                self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
-                return
-            transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
-            if not transcript:
-                log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
-                self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
-                return
+            # 追いかけ受付ではウェイクワードを言っていないため、呼びかけ必須/除去は行わない
+            if not followup:
+                if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
+                    log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
+                    self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
+                    return
+                transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
+                if not transcript:
+                    log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                    self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
+                    return
             if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
                 self._handle_text(transcript)
+                handled = True
         except Exception as exc:
             log.exception("ウェイクワード後の音声処理に失敗しました")
             self._report_error("録音", exc)
@@ -666,6 +700,9 @@ class ArgosApp:
             self._wakeword_ptt_hold.clear()
             self._remove_recording_file(wav_path)
             self._status.finish(token)
+        # 応答が完了したら、次の発話を待つ追いかけ受付窓を開く（継続会話）
+        if handled:
+            self._arm_followup_window()
 
     def _should_continue_wakeword_recording(self) -> bool:
         """PTT押下でウェイクワード後録音を継続するか返す。"""

@@ -1,5 +1,7 @@
 import json
+import time
 import wave
+from collections import deque
 
 import numpy as np
 
@@ -268,6 +270,104 @@ def test_wakeword_listener_records_with_vad(monkeypatch):
     assert ready
     with wave.open(ready[0], "rb") as wav_file:
         assert wav_file.getnframes() >= 1280 * 2
+
+
+def test_wakeword_listener_records_on_followup(monkeypatch):
+    """追いかけ受付窓の中では、ウェイクワード無しで発話を録音する。"""
+    loud = (b"\x00\x40" * 1280)
+    silence = (b"\x00\x00" * 1280)
+    reads = [loud, silence]
+    ready = []
+    detected = []
+
+    class FakeStdout:
+        def read(self, _size):
+            return reads.pop(0) if reads else b""
+
+    class FakeProc:
+        stdout = FakeStdout()
+
+        def poll(self):
+            return None
+
+        def send_signal(self, _signum):
+            return None
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            return None
+
+    class FakeModel:
+        def predict_score(self, _waveform):
+            return 0.0  # ウェイクワードは検知させない
+
+    def on_ready(path, followup=False):
+        ready.append((path, followup))
+        listener.stop()
+
+    def on_detected(followup=False):
+        detected.append(followup)
+        return True
+
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        window_seconds=0.08,
+        interval_seconds=0.0,
+        record_min_seconds=0.0,
+        record_silence_seconds=0.0,
+        min_actual_seconds=0.0,
+        endpoint_mode="rms",
+        followup_seconds=5.0,
+        on_detected=on_detected,
+        on_recording_ready=on_ready,
+    )
+    monkeypatch.setattr(listener, "_open_arecord", lambda: FakeProc())
+    listener.arm_followup()
+
+    listener._run_stream(FakeModel(), 0.5)
+
+    assert detected == [True]
+    assert ready and ready[0][1] is True
+    assert ready[0][0].endswith(".wav")
+
+
+def test_wakeword_followup_expires_calls_callback():
+    """締め切りを過ぎた追いかけ受付窓は on_followup_expired を呼んで閉じる。"""
+    expired = []
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        on_recording_ready=lambda *a, **k: None,
+        on_followup_expired=lambda: expired.append(True),
+        followup_seconds=3.0,
+    )
+    listener._followup_deadline = time.monotonic() - 1.0
+
+    consumed = listener._handle_followup(b"\x00\x00" * 1280, None, deque(), deque())
+
+    assert consumed is True
+    assert expired == [True]
+    assert listener._followup_deadline == 0.0
+
+
+def test_arm_followup_noop_when_disabled():
+    """followup_seconds が0なら arm_followup は窓を開かない。"""
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        on_recording_ready=lambda *a, **k: None,
+        followup_seconds=0.0,
+    )
+
+    listener.arm_followup()
+
+    assert listener._followup_deadline == 0.0
 
 
 def test_wakeword_listener_reports_open_failure(monkeypatch):

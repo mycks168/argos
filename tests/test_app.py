@@ -648,6 +648,93 @@ def test_empty_transcript_adds_notification(monkeypatch):
     assert snapshot["messages"] == []
 
 
+class _FakeWakeWordListener:
+    """arm/disarm 呼び出しを記録する追いかけ受付用のダミーlistener。"""
+
+    def __init__(self):
+        self.armed = 0
+        self.disarmed = 0
+
+    def arm_followup(self):
+        self.armed += 1
+
+    def disarm_followup(self):
+        self.disarmed += 1
+
+
+def test_wakeword_followup_skips_wakeword_requirement(monkeypatch):
+    """追いかけ受付の録音は呼びかけ必須設定でもエージェントへ送る。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_require_stt_wakeword": True})
+    app = ArgosApp(settings)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "今日の天気は"
+    app._local_stt.transcribe = lambda _wav: "今日の天気は"
+
+    app._process_wakeword_recording("/tmp/argos-followup-test.wav", followup=True)
+
+    assert app._agent.asked == ["今日の天気は"]
+
+
+def test_wakeword_requirement_discards_without_wakeword(monkeypatch):
+    """通常のウェイクワード経路では呼びかけが無いとエージェントへ送らない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_require_stt_wakeword": True})
+    app = ArgosApp(settings)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "今日の天気は"
+    app._local_stt.transcribe = lambda _wav: "今日の天気は"
+
+    app._process_wakeword_recording("/tmp/argos-followup-test.wav", followup=False)
+
+    assert app._agent.asked == []
+
+
+def test_wakeword_turn_arms_followup_window(monkeypatch):
+    """応答が完了したら追いかけ受付窓を開き、継続受付表示にする。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "こんにちは"
+    app._local_stt.transcribe = lambda _wav: "こんにちは"
+    fake = _FakeWakeWordListener()
+    app._wakeword_listener = fake
+
+    app._process_wakeword_recording("/tmp/argos-followup-test.wav", followup=False)
+
+    assert app._agent.asked == ["こんにちは"]
+    assert fake.armed == 1
+    assert app._dashboard_state.status_code() == "followup"
+
+
+def test_followup_window_not_armed_when_disabled(monkeypatch):
+    """followup秒数が0なら窓を開かない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_followup_seconds": 0.0})
+    app = ArgosApp(settings)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "こんにちは"
+    app._local_stt.transcribe = lambda _wav: "こんにちは"
+    fake = _FakeWakeWordListener()
+    app._wakeword_listener = fake
+
+    app._process_wakeword_recording("/tmp/argos-followup-test.wav", followup=False)
+
+    assert fake.armed == 0
+    assert app._dashboard_state.status_code() == "ready"
+
+
+def test_followup_expired_reverts_status(monkeypatch):
+    """追いかけ受付窓が締め切られたら待機表示へ戻す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._status.set_display("followup", "継続受付中")
+
+    app._on_wakeword_followup_expired()
+
+    assert app._dashboard_state.status_code() == "ready"
+
+
 def test_startup_auth_prompt_is_spoken_when_locked(monkeypatch, capsys):
     """起動後に未認証なら本人確認を促す。"""
     _patch_app(monkeypatch)
@@ -1386,7 +1473,7 @@ def test_wakeword_recording_ready_sets_transcribing_status(monkeypatch, tmp_path
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["status"]["code"] == "transcribing"
     assert snapshot["status"]["label"] == "文字起こし中"
-    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path),))]
+    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path), False))]
 
 
 def test_status_message_is_shown_on_lcd(monkeypatch, capsys):
