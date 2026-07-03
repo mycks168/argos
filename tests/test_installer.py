@@ -237,6 +237,8 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
             "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
             "uv",
             "sync",
+            "--extra",
+            "face",
         ]
         for command in commands
     )

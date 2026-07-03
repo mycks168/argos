@@ -31,6 +31,7 @@ DEFAULT_OS_PACKAGES = (
     "tmux",
     "x11-xserver-utils",
 )
+DEFAULT_PROJECT_EXTRAS = ("face",)
 
 AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
 PLACEHOLDER_TOKENS = {"", "change-me", "changeme", "change_me"}
@@ -141,7 +142,7 @@ def build_install_plan(
     packages = list(os_packages or DEFAULT_OS_PACKAGES)
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
-        InstallStep("sync", str(project_dir), "uv syncでARGOS本体の仮想環境を作成する"),
+        InstallStep("sync", str(project_dir), "uv sync --extra faceでARGOS本体の仮想環境を作成する"),
         InstallStep("env", str(project_dir / ".env"), ".envがなければ.env.exampleから作成する"),
     ]
     if bootstrap:
@@ -274,7 +275,7 @@ def apply_plan(
     _ensure_core_env_defaults(project_dir / ".env")
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
-    _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home)
+    _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home, extras=DEFAULT_PROJECT_EXTRAS)
     if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
         _install_chromium_policy(project_dir, runner=runner)
     if any(service.kind == "user" for service in plan.services):
@@ -845,7 +846,14 @@ def _ensure_service_home_dirs(plan: InstallPlan, *, runner=subprocess.run) -> No
         runner(["sudo", "chown", "-R", f"{plan.service_user}:{plan.service_group}", str(path)], check=True)
 
 
-def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None, home: str | None = None) -> None:
+def _uv_sync(
+    directory: Path,
+    *,
+    runner=subprocess.run,
+    user: str | None = None,
+    home: str | None = None,
+    extras: tuple[str, ...] = (),
+) -> None:
     """指定ディレクトリでuv syncを実行する。"""
     if not (directory / "pyproject.toml").exists():
         return
@@ -854,6 +862,8 @@ def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None,
     if home:
         env["HOME"] = home
     command = ["uv", "sync"]
+    for extra in extras:
+        command.extend(("--extra", extra))
     if user:
         home_value = home or str(Path("/home") / user)
         command = [

@@ -86,7 +86,7 @@ uv run argos-install --apply
 
 別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、ChromiumなどのOSパッケージ導入、`uv` のARGOS実行ユーザー向け導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
 user serviceが含まれる場合は、Chromiumやデスクトップセッションが使う `~/.config`、`~/.local`、`~/.cache` をARGOS実行ユーザー所有へ補正する。既存環境でこれらがrootや別ユーザー所有になっている場合も、`--apply` または `--update` で再補正する。
-OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体とサブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
+OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体の `uv sync` は `--extra face` を付け、顔認証用のOpenCVを標準で入れる。サブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
 
 ```bash
 sudo git clone https://github.com/mycks168/argos.git /opt/argos
