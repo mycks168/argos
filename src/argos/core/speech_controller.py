@@ -63,6 +63,9 @@ class SpeechController:
         self._mute_condition = threading.Condition()
         self._muted = muted
         self._last_tts_finished_at = 0.0
+        # バージイン抑止用: 自分がウェイクワードを含むチャンクを読み上げている最中か。
+        self._speaking_wakeword = False
+        self._wakeword_aliases = tuple(alias.lower() for alias in settings.wakeword_aliases if alias)
 
     def is_muted(self) -> bool:
         """読み上げミュート中ならTrueを返す。"""
@@ -78,6 +81,19 @@ class SpeechController:
         if muted:
             self._audio.cancel()
         return changed
+
+    def is_speaking_wakeword(self) -> bool:
+        """今まさに読み上げているチャンクがウェイクワードを含むか返す。
+
+        バージイン運用でARGOS自身が「アルゴス」等と発話している最中は、
+        AECで消し切れない残響が自己検知を起こしうるため割り込みを抑止する。
+        """
+        return self._speaking_wakeword
+
+    def _chunk_contains_wakeword(self, text: str) -> bool:
+        """読み上げテキストにウェイクワード別名が含まれるか判定する。"""
+        lowered = text.lower()
+        return any(alias in lowered for alias in self._wakeword_aliases)
 
     def is_tts_cooldown_active(self) -> bool:
         """TTS終了直後の自己音声対策クールダウン中か返す。"""
@@ -199,6 +215,7 @@ class SpeechController:
                 return
             try:
                 self._wake_dashboard_display()
+                self._speaking_wakeword = self._chunk_contains_wakeword(normalized)
                 self._audio.play_wav(wav_data)
                 self._mark_tts_finished()
             except Exception as exc:
@@ -206,6 +223,8 @@ class SpeechController:
                 self._report_error("音声再生", exc)
                 self._drain_tts_queue(tts_queue)
                 return
+            finally:
+                self._speaking_wakeword = False
             if self._current_generation() != generation:
                 self._drain_tts_queue(tts_queue)
                 return

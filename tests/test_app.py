@@ -1412,6 +1412,67 @@ def test_wakeword_detected_is_ignored_after_tts_cooldown(monkeypatch):
     assert app._dashboard_state.snapshot()["status"]["code"] == "ready"
 
 
+def test_wakeword_bargein_interrupts_tts(monkeypatch):
+    """バージイン有効時は読み上げ中のウェイクワードで録音へ割り込める。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_bargein_enabled": True})
+    app = ArgosApp(settings)
+    app._audio.playing = True
+    app._dashboard_state.set_status("speaking", "読み上げ中")
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is True
+    assert app._audio.cancelled is True
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+
+def test_wakeword_bargein_suppressed_while_speaking_own_wakeword(monkeypatch):
+    """バージイン有効でもARGOS自身がウェイクワードを読み上げ中なら割り込まない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "wakeword_bargein_enabled": True})
+    app = ArgosApp(settings)
+    app._audio.playing = True
+    app._dashboard_state.set_status("speaking", "読み上げ中")
+    app._speech._speaking_wakeword = True
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._audio.cancelled is False
+    assert app._dashboard_state.snapshot()["status"]["code"] == "speaking"
+
+
+def test_wakeword_bargein_ignores_tts_cooldown(monkeypatch):
+    """バージイン有効時はTTS直後のクールダウンも無視して受け付ける。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{
+        **_settings().__dict__,
+        "wakeword_bargein_enabled": True,
+        "wakeword_tts_cooldown_seconds": 2.0,
+    })
+    app = ArgosApp(settings)
+    app._speech._mark_tts_finished()
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is True
+    assert app._dashboard_state.snapshot()["status"]["code"] == "listening"
+
+
+def test_wakeword_bargein_disabled_ignores_speech(monkeypatch):
+    """バージイン無効(既定)なら読み上げ中のウェイクワードは従来どおり無視する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._audio.playing = True
+    app._dashboard_state.set_status("speaking", "読み上げ中")
+
+    accepted = app._on_wakeword_detected()
+
+    assert accepted is False
+    assert app._dashboard_state.snapshot()["status"]["code"] == "speaking"
+
+
 def test_ptt_still_records_during_wakeword_cooldown(monkeypatch):
     """ウェイクワードのクールダウン中でもPTT録音は開始できる。"""
     _patch_app(monkeypatch)
@@ -1474,6 +1535,16 @@ def test_wakeword_recording_ready_sets_transcribing_status(monkeypatch, tmp_path
     assert snapshot["status"]["code"] == "transcribing"
     assert snapshot["status"]["label"] == "文字起こし中"
     assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path), False))]
+
+
+def test_chunk_contains_wakeword_detects_alias(monkeypatch):
+    """読み上げチャンクにウェイクワード別名が含まれれば真を返す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    assert app._speech._chunk_contains_wakeword("はい、アルゴスです") is True
+    assert app._speech._chunk_contains_wakeword("こんにちは、天気は晴れです") is False
+    assert app._speech.is_speaking_wakeword() is False
 
 
 def test_status_message_is_shown_on_lcd(monkeypatch, capsys):
