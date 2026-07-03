@@ -14,6 +14,15 @@ def test_load_default_slot(monkeypatch):
     assert settings.agent_slots[0].cwd == "/tmp/work"
 
 
+def test_load_wakeword_followup_seconds(monkeypatch):
+    """追いかけ受付の秒数を読み込む。既定は3秒。"""
+    monkeypatch.delenv("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", raising=False)
+    assert load_settings().wakeword_followup_seconds == 3.0
+
+    monkeypatch.setenv("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", "5.5")
+    assert load_settings().wakeword_followup_seconds == 5.5
+
+
 def test_load_agent_provider(monkeypatch):
     """LLMエージェントプロバイダーを読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_PROVIDER", "codex")
