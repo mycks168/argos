@@ -156,7 +156,7 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 待ち受けアドレスは `ARGOS_DASHBOARD_HOST` で指定する。kioskブラウザは同一機からアクセスするため既定は `127.0.0.1`（localhostのみ）とし、状態・会話履歴・カメラ画像などGET系APIを認証なしでLANへ露出しない。LAN内の別端末から表示させる場合だけ `0.0.0.0` などへ明示的に広げる。
 
-画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
+画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。インストーラーはARGOS本体の `.env` と `services/argos-reminder/.env` の `ARGOS_DASHBOARD_TOKEN` を同じ値に揃え、リマインダー通知が401で失敗しないようにする。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。

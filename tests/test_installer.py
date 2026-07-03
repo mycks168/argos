@@ -17,6 +17,7 @@ from argos.installer import (
     _resolve_os_packages,
     _ensure_agent_limit_cron,
     _ensure_core_env_defaults,
+    _ensure_reminder_dashboard_token,
     _ensure_tts_filter_shared_token,
     _install_chromium_policy,
     _reload_systemd,
@@ -834,3 +835,40 @@ def test_ensure_tts_filter_shared_token_prefers_app_token(tmp_path):
 
     filter_values = dict(line.split("=", 1) for line in filter_env.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert filter_values["TTS_FILTER_BEARER_TOKEN"] == "app-token"
+
+
+def test_ensure_reminder_dashboard_token_syncs_from_app_env(tmp_path):
+    """本体のダッシュボードトークンをargos-reminder側へ反映する。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "argos-reminder"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    reminder_env = service_dir / ".env"
+    app_env.write_text("ARGOS_DASHBOARD_TOKEN=dashboard-token\n", encoding="utf-8")
+    reminder_env.write_text(
+        "ARGOS_DASHBOARD_URL=http://127.0.0.1:8765\nARGOS_DASHBOARD_TOKEN=\n",
+        encoding="utf-8",
+    )
+
+    assert _ensure_reminder_dashboard_token(project) is True
+
+    reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert reminder_values["ARGOS_DASHBOARD_TOKEN"] == "dashboard-token"
+
+
+def test_ensure_reminder_dashboard_token_generates_shared_token(tmp_path):
+    """本体とargos-reminderのトークンが空なら共有トークンを生成する。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "argos-reminder"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    reminder_env = service_dir / ".env"
+    app_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
+    reminder_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
+
+    assert _ensure_reminder_dashboard_token(project) is True
+
+    app_values = dict(line.split("=", 1) for line in app_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert app_values["ARGOS_DASHBOARD_TOKEN"]
+    assert app_values["ARGOS_DASHBOARD_TOKEN"] == reminder_values["ARGOS_DASHBOARD_TOKEN"]

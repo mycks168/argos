@@ -228,7 +228,7 @@ ARGOS_DASHBOARD_TOKEN=<ランダムなトークン>
 ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 ```
 
-`ARGOS_DASHBOARD_TOKEN` が空の場合、`argos-install --apply` または `--update` 実行時にランダムなトークンを自動生成します。ミュート、マイクOFF、音量変更などの画面操作は、このトークンで保護された `/api/control` を使います。
+`ARGOS_DASHBOARD_TOKEN` が空の場合、`argos-install --apply` または `--update` 実行時にランダムなトークンを自動生成します。インストーラーは同じ値を `services/argos-reminder/.env` にも反映し、リマインダー通知がダッシュボードAPIで401にならないようにします。ミュート、マイクOFF、音量変更などの画面操作は、このトークンで保護された `/api/control` を使います。
 
 ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、現在のエージェントスロット、Wi-Fi接続状態、会話履歴、外部通知を表示します。1920x440では3列、800x600程度では通知欄を右側に残すコンパクト3列、さらに狭い画面では通知欄を下へ回り込ませます。
 会話更新時は通知欄を再描画しないため、表示中の画像を安定して保持します。
