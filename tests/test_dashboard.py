@@ -1,4 +1,5 @@
 import json
+import os
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -642,3 +643,137 @@ def test_dashboard_server_serves_remote_location(monkeypatch):
     assert payload["available"] is True
     assert payload["lat"] == 35.0
     assert calls == [("remote", "http://example.test/gps", 1.5)]
+
+
+def test_dashboard_state_center_alert_for_center_display():
+    """display=center の通知は中央アラート状態を更新し、clearで消える。"""
+    state = DashboardState()
+    state.add_notification("ご飯だよ", "食卓へどうぞ", source="kitchen", display="center", duration_seconds=30)
+
+    snapshot = state.snapshot()
+    assert snapshot["center_alert"]["active"] is True
+    assert snapshot["center_alert"]["title"] == "ご飯だよ"
+    assert snapshot["center_alert"]["duration_seconds"] == 30
+    # 通知履歴にも display / duration_seconds が入る
+    assert snapshot["notifications"][0]["display"] == "center"
+
+    state.clear_center_alert()
+    assert state.snapshot()["center_alert"]["active"] is False
+
+
+def test_dashboard_state_toast_display_keeps_center_alert_inactive():
+    """既定の toast 通知では中央アラートは表示されない。"""
+    state = DashboardState()
+    state.add_notification("メール", "新着があります", source="mail")
+
+    snapshot = state.snapshot()
+    assert snapshot["center_alert"]["active"] is False
+    assert snapshot["notifications"][0]["display"] == "toast"
+
+
+def test_apply_event_notification_supports_center_and_clear():
+    """通知イベントの display=center と clear_center_alert を扱える。"""
+    state = DashboardState()
+    _apply_event(state, {
+        "type": "notification",
+        "title": "全員集合",
+        "text": "リビングへ",
+        "display": "center",
+        "duration_seconds": 15,
+        "target": "living",  # 宛先ラベルは受理して無視する
+    })
+    assert state.snapshot()["center_alert"]["active"] is True
+
+    _apply_event(state, {"type": "clear_center_alert"})
+    assert state.snapshot()["center_alert"]["active"] is False
+
+
+def test_apply_event_notification_rejects_invalid_display_and_duration():
+    """不正な display や負の duration_seconds は拒否する。"""
+    state = DashboardState()
+    with pytest.raises(ValueError):
+        _apply_event(state, {"type": "notification", "title": "x", "display": "banner"})
+    with pytest.raises(ValueError):
+        _apply_event(state, {"type": "notification", "title": "x", "duration_seconds": -1})
+    with pytest.raises(ValueError):
+        _apply_event(state, {"type": "notification", "title": "x", "duration_seconds": "soon"})
+
+
+def test_dashboard_upload_stores_and_serves_image(tmp_path):
+    """通知画像をアップロードして保存・配信できる。"""
+    upload_dir = tmp_path / "uploads"
+    server = DashboardServer(
+        DashboardState(), "127.0.0.1", 0, "secret", upload_dir=upload_dir, upload_keep=2
+    )
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        request = Request(
+            base_url + "/api/uploads",
+            data=b"\xff\xd8\xff\xd9",
+            headers={"Content-Type": "image/jpeg", "Authorization": "Bearer secret"},
+            method="POST",
+        )
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 201
+            url = json.loads(response.read())["url"]
+        assert url.startswith("/uploads/") and url.endswith(".jpg")
+
+        with urlopen(base_url + url, timeout=2) as response:
+            assert response.status == 200
+            assert response.read() == b"\xff\xd8\xff\xd9"
+
+        # パストラバーサルは拒否する
+        try:
+            urlopen(base_url + "/uploads/..%2Fsecret", timeout=2)
+        except HTTPError as exc:
+            assert exc.code in (403, 404)
+        else:
+            raise AssertionError("パストラバーサルを拒否しませんでした")
+    finally:
+        server.stop()
+
+
+def test_dashboard_upload_requires_token_and_valid_type(tmp_path):
+    """アップロードはBearer認証と画像MIMEを必須とする。"""
+    server = DashboardServer(
+        DashboardState(), "127.0.0.1", 0, "secret", upload_dir=tmp_path / "uploads"
+    )
+    server.start()
+    url = f"http://{server.address[0]}:{server.address[1]}/api/uploads"
+    try:
+        # 認証なし
+        request = Request(url, data=b"x", headers={"Content-Type": "image/png"}, method="POST")
+        try:
+            urlopen(request, timeout=2)
+        except HTTPError as exc:
+            assert exc.code == 401
+        else:
+            raise AssertionError("認証エラーになりませんでした")
+
+        # 非対応のContent-Type
+        request = Request(
+            url,
+            data=b"x",
+            headers={"Content-Type": "text/plain", "Authorization": "Bearer secret"},
+            method="POST",
+        )
+        try:
+            urlopen(request, timeout=2)
+        except HTTPError as exc:
+            assert exc.code == 400
+        else:
+            raise AssertionError("不正な形式を拒否しませんでした")
+    finally:
+        server.stop()
+
+
+def test_prune_uploads_keeps_newest(tmp_path):
+    """アップロード画像は新しい順に keep 件だけ残す。"""
+    for index in range(4):
+        path = tmp_path / f"{index}.jpg"
+        path.write_bytes(b"data")
+        os.utime(path, (index, index))
+    dashboard_server._prune_uploads(tmp_path, keep=2)
+    remaining = sorted(p.name for p in tmp_path.iterdir())
+    assert remaining == ["2.jpg", "3.jpg"]

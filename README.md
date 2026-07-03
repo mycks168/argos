@@ -270,6 +270,29 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 
 通知では `image_url` と `link_url` も指定できます。会話追加は `user_message` または `agent_message`、状態更新は `status`、通知削除は `clear_notifications` を `type` に指定します。
 通知イベントに `sound: true` や `speak: true` を付けると、ARGOS本体が画面を起こし、通知音または通知本文の読み上げを行います。
+
+`display:"center"` を付けると、右の通知欄だけでなく画面中央に大きなアラートを重ねて表示します。「ご飯だよ〜」のような全員へ強く見せたい連絡向けです。`duration_seconds` に秒数を指定すると自動で閉じ、未指定なら画面タップで閉じます。中央アラートは `{"type":"clear_center_alert"}` でも消せます。
+
+```bash
+curl -X POST http://<raspberry-pi>:8765/api/events \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"notification","source":"kitchen","title":"ご飯だよ〜","display":"center","duration_seconds":30,"speak":true}'
+```
+
+通知に画像を添付したい場合は、先に画像をアップロードして得たURLを `image_url` に指定します。
+
+```bash
+url=$(curl -s -X POST http://<raspberry-pi>:8765/api/uploads \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: image/jpeg" --data-binary @photo.jpg | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+curl -X POST http://<raspberry-pi>:8765/api/events \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"notification\",\"title\":\"写真が届いたよ\",\"display\":\"center\",\"image_url\":\"$url\"}"
+```
+
+アップロード画像は `ARGOS_DASHBOARD_UPLOAD_DIR`（既定 `/tmp/argos/uploads`）へ保存し、`ARGOS_DASHBOARD_UPLOAD_MAX_BYTES`（既定5MB）を超える画像は拒否、`ARGOS_DASHBOARD_UPLOAD_KEEP`（既定50件）を超えた古い画像は自動削除します。複数端末へ一斉通知したい場合は、当面は送信側で各端末の `/api/events` を順に叩いてください。
 ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。変更した音量とミュート状態は `ARGOS_AUDIO_STATE_PATH` に保存し、ARGOS再起動後も前回の状態を復元します。
 
 ttyd がインストール済みなら、tmux セッションを中央または右ペインへ表示できます。既定では `127.0.0.1:7681` に ttyd を起動し、`argos-terminal` セッションを iframe 表示します。Webターミナルはシェル操作権限を持つため、外部公開せずローカル表示に閉じてください。

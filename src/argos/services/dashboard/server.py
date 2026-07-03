@@ -6,6 +6,7 @@ import json
 import logging
 import queue
 import threading
+import uuid
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -21,7 +22,26 @@ from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
+DEFAULT_UPLOAD_DIR = Path("/tmp/argos/uploads")
+DEFAULT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
+DEFAULT_UPLOAD_KEEP = 50
 FONT_SIZE_OPTIONS = {"small", "medium", "large"}
+# アップロード画像のMIMEタイプと保存拡張子の対応。
+UPLOAD_MIME_EXTENSIONS = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+}
+# アップロード画像を配信するときの拡張子とMIMEタイプの対応。
+UPLOAD_EXTENSION_MIMES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
 
 
 def _normalize_font_size(value: str) -> str:
@@ -46,6 +66,9 @@ class DashboardServer:
         location_provider: str = "local",
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
+        upload_dir: Path = DEFAULT_UPLOAD_DIR,
+        upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
+        upload_keep: int = DEFAULT_UPLOAD_KEEP,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     ) -> None:
@@ -56,6 +79,9 @@ class DashboardServer:
         self._token = token
         self._camera_snapshot_path = camera_snapshot_path
         self._gps_device_path = gps_device_path
+        self._upload_dir = upload_dir
+        self._upload_max_bytes = upload_max_bytes
+        self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
         self._location_provider = location_provider
@@ -85,6 +111,9 @@ class DashboardServer:
             self._location_provider,
             self._remote_location_url,
             self._remote_location_timeout_seconds,
+            self._upload_dir,
+            self._upload_max_bytes,
+            self._upload_keep,
             self._control_handler,
             self._event_handler,
         )
@@ -115,6 +144,9 @@ def _create_handler(
     location_provider: str = "local",
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
+    upload_dir: Path = DEFAULT_UPLOAD_DIR,
+    upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
+    upload_keep: int = DEFAULT_UPLOAD_KEEP,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
 ) -> type[BaseHTTPRequestHandler]:
@@ -147,12 +179,19 @@ def _create_handler(
                 self._send_sse()
             elif path == "/camera/latest.jpg":
                 self._send_camera_snapshot()
+            elif path.startswith("/uploads/"):
+                self._send_upload(path)
             else:
                 self.send_error(HTTPStatus.NOT_FOUND)
 
         def do_POST(self) -> None:
             """Bearer認証付き更新APIを処理する。"""
             path = urlparse(self.path).path
+            if path == "/api/uploads":
+                if not self._require_token():
+                    return
+                self._handle_upload()
+                return
             if path not in {"/api/events", "/api/control"}:
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
@@ -251,6 +290,48 @@ def _create_handler(
             self.end_headers()
             self.wfile.write(image)
 
+        def _handle_upload(self) -> None:
+            """通知用画像を受け取り、保存してURLを返す。"""
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            extension = UPLOAD_MIME_EXTENSIONS.get(content_type)
+            if extension is None:
+                self._send_json({"error": "対応していない画像形式です"}, HTTPStatus.BAD_REQUEST)
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._send_json({"error": "Content-Length が不正です"}, HTTPStatus.BAD_REQUEST)
+                return
+            if length <= 0 or length > upload_max_bytes:
+                self._send_json({"error": "画像サイズが不正です"}, HTTPStatus.BAD_REQUEST)
+                return
+            data = self.rfile.read(length)
+            name = f"{uuid.uuid4().hex}{extension}"
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            (upload_dir / name).write_bytes(data)
+            _prune_uploads(upload_dir, upload_keep)
+            self._send_json({"url": f"/uploads/{name}"}, HTTPStatus.CREATED)
+
+        def _send_upload(self, path: str) -> None:
+            """アップロード済みの通知画像を配信する。"""
+            name = path.replace("/uploads/", "", 1)
+            if not name or "/" in name or ".." in name or name.startswith("."):
+                self.send_error(HTTPStatus.FORBIDDEN)
+                return
+            file_path = upload_dir / name
+            try:
+                content = file_path.read_bytes()
+            except (FileNotFoundError, IsADirectoryError, OSError):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            mime_type = UPLOAD_EXTENSION_MIMES.get(file_path.suffix.lower(), "application/octet-stream")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", mime_type)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+
         def _send_sse(self) -> None:
             """状態更新をServer-Sent Eventsで配信する。"""
             subscriber = state.subscribe()
@@ -282,6 +363,10 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
     """外部表示イベントを状態へ反映する。"""
     event_type = _required_text(payload, "type", 40)
     if event_type == "notification":
+        display = _optional_text(payload, "display", 20) or "toast"
+        if display not in {"toast", "center"}:
+            raise ValueError(f"無効な display です: {display}")
+        # target（宛先ラベル）は将来の一斉通知向け。本体は受理して無視する。
         notification_id = state.add_notification(
             title=_required_text(payload, "title", 120),
             text=_optional_text(payload, "text", 2000),
@@ -289,8 +374,13 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
             priority=_optional_text(payload, "priority", 20) or "normal",
             image_url=_optional_text(payload, "image_url", 2000),
             link_url=_optional_text(payload, "link_url", 2000),
+            display=display,
+            duration_seconds=_optional_number(payload, "duration_seconds"),
         )
         return {"id": notification_id}
+    if event_type == "clear_center_alert":
+        state.clear_center_alert()
+        return {"status": "cleared"}
     if event_type in {"user_message", "agent_message"}:
         role = "user" if event_type == "user_message" else "assistant"
         message_id = state.add_message(role, _required_text(payload, "text", 8000))
@@ -343,3 +433,31 @@ def _optional_text(payload: dict[str, Any], key: str, max_length: int) -> str:
     if len(value) > max_length:
         raise ValueError(f"{key} が長すぎます")
     return value
+
+
+def _optional_number(payload: dict[str, Any], key: str, default: float = 0.0) -> float:
+    """任意の非負数を検証して返す。"""
+    if key not in payload:
+        return default
+    value = payload[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} は数値で指定してください")
+    if value < 0:
+        raise ValueError(f"{key} は0以上で指定してください")
+    return float(value)
+
+
+def _prune_uploads(directory: Path, keep: int) -> None:
+    """アップロード画像を新しい順に keep 件だけ残し、古いものを削除する。"""
+    if keep <= 0:
+        return
+    try:
+        entries = [entry for entry in directory.iterdir() if entry.is_file()]
+    except OSError:
+        return
+    entries.sort(key=lambda entry: entry.stat().st_mtime, reverse=True)
+    for stale in entries[keep:]:
+        try:
+            stale.unlink()
+        except OSError:
+            continue

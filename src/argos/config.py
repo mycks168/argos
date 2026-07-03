@@ -217,6 +217,9 @@ class Settings:
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
     dashboard_default_font_size: str = "medium"
+    dashboard_upload_dir: str = "/tmp/argos/uploads"
+    dashboard_upload_max_bytes: int = 5 * 1024 * 1024
+    dashboard_upload_keep: int = 50
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
@@ -451,6 +454,9 @@ def load_settings() -> Settings:
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
+        dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),
+        dashboard_upload_max_bytes=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024))),
+        dashboard_upload_keep=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_KEEP", "50")),
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
