@@ -453,7 +453,8 @@ class AudioPlayer:
         """出力先デバイスと音量設定を保持する。"""
         self._output_device = output_device
         self._output_card = output_card
-        self._volume = volume
+        # 保存済み設定に範囲外値(例: 過去のゴミで180)が入っていても爆音にならないよう丸める。
+        self._volume = max(0, min(100, int(volume)))
         self._volume_lock = threading.Lock()
         self._volume_set = False
         self._proc: subprocess.Popen | None = None
@@ -519,9 +520,17 @@ class AudioPlayer:
         self._volume_set = True
 
     def _apply_volume(self) -> None:
-        """amixer で現在の音量を出力カードへ反映する。"""
+        """amixer で現在の音量を出力カードへ反映する。
+
+        AUDIO_OUTPUT_CARD 未設定時はHWミキサーを操作せず、WAVスケール
+        (_scale_wav_volume) のみで音量調整する。PipeWire仮想シンク(ec_sink)経由の
+        再生では amixer がデフォルトデバイスの音量を触ると WAVスケールと二重に効いて
+        しまうため、出力カードが明示された環境でのみHWミキサーを使う。
+        """
+        if not self._output_card:
+            return
         volume = f"{self.volume}%"
-        device_args = ["-D", f"hw:CARD={self._output_card}"] if self._output_card else []
+        device_args = ["-D", f"hw:CARD={self._output_card}"]
         for control in ("Master", "PCM", "Headphone", "Speaker"):
             subprocess.run(
                 ["amixer", "-q", *device_args, "set", control, volume],
