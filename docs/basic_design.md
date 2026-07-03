@@ -158,6 +158,12 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。インストーラーはARGOS本体の `.env` と `services/argos-reminder/.env` の `ARGOS_DASHBOARD_TOKEN` を同じ値に揃え、リマインダー通知が401で失敗しないようにする。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
+
+通知イベントには表示位置を指定する `display` を追加する。既定の `toast` は従来どおり右カラムの通知欄に積む。`center` を指定すると、右カラムの通知履歴に加えて画面中央へ大きなアラート（`center_alert`）を重ねて表示する。中央アラートは「ご飯だよ〜」のような全員へ強く見せたい一斉連絡を想定し、画像・大きなタイトル・本文をまとめて中央に出す。`duration_seconds` に正の秒数を指定すると、その秒数の経過後に中央アラートを自動で閉じる。0または未指定の場合は画面タップで閉じるまで残す。中央アラートは画面タップ、`duration_seconds` の経過、または `type:"clear_center_alert"` イベントで消去し、消去時はサーバー状態(`center_alert`)もクリアして再描画で復活しないようにする。中央アラートは iframe オーバーレイのスタックとは独立した専用レイヤで、`snapshot()` の `center_alert` を通じてSSEで配信する。
+
+通知画像は外部URL参照(`image_url`)に加えて、ARGOS本体へアップロードして配信できる。`POST /api/uploads` はBearer認証必須で、`Content-Type` に画像MIME（`image/png`、`image/jpeg`、`image/webp`、`image/gif`）を指定した生ボディを受け取り、`ARGOS_DASHBOARD_UPLOAD_DIR`（既定 `/tmp/argos/uploads`）へ `<UUID>.<拡張子>` として保存し、`{"url": "/uploads/<name>"}` を返す。受信サイズは `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES`（既定5MB）を上限とし、保存件数は `ARGOS_DASHBOARD_UPLOAD_KEEP`（既定50件）を超えた古い画像から削除する。`GET /uploads/<name>` は保存済み画像を配信し、パストラバーサルを防ぐためファイル名にディレクトリ区切りや `..` を含むリクエストは拒否する。送信側は「画像をアップロードして得たURLを通知の `image_url` に入れて `/api/events` へ送る」2段構成で画像付き通知を出す。将来、1リクエストで完結させるための `image_data`(base64) 埋め込みは拡張点として残す。
+
+複数端末への一斉通知は、当面は送信側が各端末の `/api/events` を順に叩くファンアウト方式とし、ARGOS本体には配信・中継機構を持たせない。通知イベントの任意項目 `target`（宛先ラベル）は将来の一斉通知向けに受理して無視するだけとし、バリデーションで弾かない。端末レジストリ（ホスト名・部屋・人）、死活監視、自動登録、宛先グループ、ブロードキャストAPIは今後の拡張点として別途設計する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
 動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` はオレンジの流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は緑系の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。

@@ -287,6 +287,9 @@ class ArgosApp:
             location_provider=settings.location_provider,
             remote_location_url=settings.remote_location_url,
             remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
+            upload_dir=Path(settings.dashboard_upload_dir).expanduser(),
+            upload_max_bytes=settings.dashboard_upload_max_bytes,
+            upload_keep=settings.dashboard_upload_keep,
             control_handler=self._handle_dashboard_control,
             event_handler=self._handle_dashboard_event,
         )
