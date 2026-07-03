@@ -24,7 +24,7 @@ ARGOS_DASHBOARD_TOKEN=
 ARGOS_REMINDER_POLL_SECONDS=10
 ```
 
-`ARGOS_DASHBOARD_TOKEN` はARGOS本体の `ARGOS_DASHBOARD_TOKEN` と同じ値を指定します。
+`ARGOS_DASHBOARD_TOKEN` はARGOS本体の `ARGOS_DASHBOARD_TOKEN` と同じ値を指定します。通常は `argos-install --apply` または `--update` が本体 `.env` の値を `services/argos-reminder/.env` へ同期します。
 
 ## systemd userサービス
 

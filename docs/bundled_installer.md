@@ -100,6 +100,8 @@ sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 
 `.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
+`argos-install --apply` と `--update` は、ARGOS本体の `ARGOS_DASHBOARD_TOKEN` を `services/argos-reminder/.env` にも反映する。両方が空の場合は共有トークンを生成する。これにより、argos-reminder が `POST /api/events` へ通知を送るときにBearer認証不一致で401になることを避ける。
+
 エージェントproviderは `codex`、`antigravity`、`claude`、`hermes` からカンマ区切りで選択し、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者IDを設定する。これにより、新規インストール時に不要なスロットが最初から表示されることを避ける。
 
 インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `.env` は保持したまま `uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。

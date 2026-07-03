@@ -283,6 +283,7 @@ def apply_plan(
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
     _ensure_tts_filter_shared_token(project_dir)
+    _ensure_reminder_dashboard_token(project_dir)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
@@ -434,6 +435,33 @@ def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
         changed = True
     _restrict_env_permissions(app_env)
     _restrict_env_permissions(filter_env)
+    return changed
+
+
+def _ensure_reminder_dashboard_token(project_dir: Path) -> bool:
+    """ARGOS本体とargos-reminderのダッシュボードBearerトークンを揃える。"""
+    app_env = project_dir / ".env"
+    reminder_env = project_dir / "services" / "argos-reminder" / ".env"
+    if not app_env.exists() or not reminder_env.exists():
+        return False
+
+    app_values = _read_env_values(app_env)
+    reminder_values = _read_env_values(reminder_env)
+    app_token = app_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
+    reminder_token = reminder_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
+    token = _select_shared_token(app_token, reminder_token)
+
+    changed = False
+    if app_token != token:
+        app_values["ARGOS_DASHBOARD_TOKEN"] = token
+        _write_env_values(app_env, app_values)
+        changed = True
+    if reminder_token != token:
+        reminder_values["ARGOS_DASHBOARD_TOKEN"] = token
+        _write_env_values(reminder_env, reminder_values)
+        changed = True
+    _restrict_env_permissions(app_env)
+    _restrict_env_permissions(reminder_env)
     return changed
 
 
