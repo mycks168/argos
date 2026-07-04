@@ -7,11 +7,12 @@ set -euo pipefail
 # ARGOSはTTSを aplay、ウェイクワード/STTを arecord で鳴らし、どちらもALSAを直接叩く
 # （PipeWireを経由しない）。そのため PipeWire の仮想ノード ec-sink/ec-source をそのまま
 # .env に書いても aplay/arecord は開けない。ALSA↔PipeWire を橋渡しする ALSA PCM
-# （ec_sink / ec_source）を ~/.asoundrc に定義し、その **ALSA名** を .env に指定する。
+# （ec_sink / ec_source）を /etc/asound.conf に定義し、その **ALSA名** を .env に指定する。
+# （~/.asoundrc は Raspberry Pi OS 等で再起動時に消えることがあるため、システム側に置く。sudo要）
 #
 # 構成:
 #   1. PipeWire ドロップイン設定  … 既定入出力に追従する ec-source / ec-sink ノードを作る
-#   2. ALSA ブリッジPCM (~/.asoundrc) … aplay/arecord から使える ec_sink / ec_source を定義
+#   2. ALSA ブリッジPCM (/etc/asound.conf) … aplay/arecord から使える ec_sink / ec_source を定義
 #   3. WirePlumber ドロップイン    … アイドルサスペンド無効化 + HDMI headroom増（プチプチ防止）
 #   4. 既定sink音量を100%に固定    … ec_sink経由でTTS音量がPipeWire既定sink音量に従うため
 #   5. .env（手動）        … AUDIO_OUTPUT_DEVICE=ec_sink / AUDIO_INPUT_DEVICES=ec_source
@@ -31,7 +32,10 @@ wp_conf_dir="${WIREPLUMBER_CONF_DIR:-${XDG_CONFIG_HOME:-${HOME}/.config}/wireplu
 wp_conf_path="${wp_conf_dir}/51-argos-echo-cancel.conf"
 # 旧バージョンが置いた可能性のあるファイル名（移行のため撤去対象に含める）。
 wp_conf_legacy="${wp_conf_dir}/51-argos-no-suspend.conf"
-asoundrc_path="${ASOUNDRC_PATH:-${HOME}/.asoundrc}"
+# ALSAブリッジPCMの置き場所。~/.asoundrc は環境により再起動で消えるためシステム側に置く。
+asound_path="${ASOUND_CONF_PATH:-/etc/asound.conf}"
+# システムファイルへの書き込み用。テスト時は SETUP_SUDO="" で無効化できる。
+sudo_cmd="${SETUP_SUDO-sudo}"
 marker_begin="# >>> argos-echo-cancel >>>"
 marker_end="# <<< argos-echo-cancel <<<"
 # HDMIのDMA枯渇(xrun)によるプチプチを防ぐための出力headroom（サンプル数）。Pi 5 の実測値。
@@ -125,18 +129,21 @@ EOF
   echo "installed: ${conf_path}"
 }
 
-# ~/.asoundrc のマーカー区間を除去する（既存の他設定は残す）。
-strip_asoundrc_block() {
-  [ -f "${asoundrc_path}" ] || return 0
-  sed -i "/${marker_begin}/,/${marker_end}/d" "${asoundrc_path}"
-  # 末尾に空行だけ残らないよう軽く整える。
-  [ -s "${asoundrc_path}" ] || rm -f "${asoundrc_path}"
+# /etc/asound.conf のマーカー区間を除去する（既存の他設定は残す）。
+strip_asound_block() {
+  ${sudo_cmd} test -f "${asound_path}" || return 0
+  ${sudo_cmd} sed -i "/${marker_begin}/,/${marker_end}/d" "${asound_path}"
+  # マーカー区間だけで中身が空になったらファイルごと削除（他設定があれば残す）。
+  if [ -z "$(${sudo_cmd} cat "${asound_path}" 2>/dev/null | tr -d '[:space:]')" ]; then
+    ${sudo_cmd} rm -f "${asound_path}"
+  fi
 }
 
-write_asoundrc_bridge() {
+write_asound_bridge() {
   # 既存のマーカー区間があれば一旦消してから追記（冪等）。default は変えず ec_ 名だけ足す。
-  strip_asoundrc_block
-  cat >> "${asoundrc_path}" <<EOF
+  # ~/.asoundrc は環境により再起動で消えるため、システムの /etc/asound.conf に置く（sudo）。
+  strip_asound_block
+  ${sudo_cmd} tee -a "${asound_path}" >/dev/null <<EOF
 ${marker_begin}
 # ARGOSのaplay/arecordからPipeWireのEC済みノードへ橋渡しするALSA PCM。default は変更しない。
 pcm.ec_sink {
@@ -151,7 +158,7 @@ pcm.ec_source {
 }
 ${marker_end}
 EOF
-  echo "updated:   ${asoundrc_path}（ec_sink / ec_source を定義）"
+  echo "updated:   ${asound_path}（ec_sink / ec_source を定義）"
 }
 
 write_wireplumber_conf() {
@@ -210,12 +217,14 @@ do_install() {
   fi
   echo
   write_pipewire_conf
-  write_asoundrc_bridge
+  write_asound_bridge
   write_wireplumber_conf
   set_default_sink_volume
   echo
   echo "次の手順:"
   echo "  1) systemctl --user restart pipewire pipewire-pulse wireplumber   # 設定を反映"
+  echo "       ※ 'Failed to connect to bus: No medium found' が出たら、先に次を実行:"
+  echo "         export XDG_RUNTIME_DIR=/run/user/\$(id -u)"
   echo "  2) 疎通確認（音が出ることを先に確かめる。無音のまま本番投入しない）:"
   echo "       aplay -D ec_sink /usr/share/sounds/alsa/Front_Center.wav"
   echo "       arecord -D ec_source -d 2 -f S16_LE -r 16000 /tmp/ec_test.wav && aplay /tmp/ec_test.wav"
@@ -235,11 +244,11 @@ do_revert() {
   else
     echo "not found: ${conf_path}（PipeWire設定はすでに無い）"
   fi
-  if [ -f "${asoundrc_path}" ] && grep -q "${marker_begin}" "${asoundrc_path}"; then
-    strip_asoundrc_block
-    echo "cleaned:   ${asoundrc_path}（ec_sink / ec_source を除去）"
+  if ${sudo_cmd} test -f "${asound_path}" && ${sudo_cmd} grep -q "${marker_begin}" "${asound_path}"; then
+    strip_asound_block
+    echo "cleaned:   ${asound_path}（ec_sink / ec_source を除去）"
   else
-    echo "not found: ${asoundrc_path} の ARGOSブロック（すでに無い）"
+    echo "not found: ${asound_path} の ARGOSブロック（すでに無い）"
   fi
   if [ -f "${wp_conf_path}" ] || [ -f "${wp_conf_legacy}" ]; then
     rm -f "${wp_conf_path}" "${wp_conf_legacy}"
@@ -249,6 +258,7 @@ do_revert() {
   fi
   echo
   echo "反映するには: systemctl --user restart pipewire pipewire-pulse wireplumber"
+  echo "  ※ 'Failed to connect to bus: No medium found' が出たら 'export XDG_RUNTIME_DIR=/run/user/\$(id -u)' を先に実行"
   echo ".env で AUDIO_OUTPUT_DEVICE / AUDIO_INPUT_DEVICES / ARGOS_WAKEWORD_BARGEIN_ENABLED を"
   echo "変更していた場合は、そちらも元に戻して ARGOS を再起動すること。"
   echo "既定sink音量(100%)は元に戻していない。必要なら 'wpctl set-volume @DEFAULT_AUDIO_SINK@ <値>' で調整すること。"
