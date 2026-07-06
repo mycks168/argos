@@ -70,8 +70,10 @@ class AuthCoordinator:
         return self._auth.enabled and not self._auth.is_authenticated()
 
     def ensure_authenticated(self, transcript: str, token: int) -> bool:
-        """未認証時は音声キーワードだけを検証し、エージェント送信を止める。
+        """未認証時は顔認証・音声キーワードで解除だけ行い、発話はエージェントへ渡さない。
 
+        戻り値 True は「呼び出し時点で既に認証済み」の場合のみ。ロック中に顔認証や
+        キーワードで解除できても、その発話自体は本人確認用とみなしLLMへは渡さない。
         token はこの発話処理を開始した対話の世代トークン。状態更新はこの世代が
         現行のときだけ反映し、新しい発話が始まっていれば上書きしない。
         """
@@ -80,7 +82,13 @@ class AuthCoordinator:
             self.stop_warning()
             return True
         if self.try_face_auth("顔認証", token):
-            return True
+            # 顔認証で解除できたが、この発話は本人確認のためのものなのでLLMへは渡さない。
+            self._speak_status("本人確認しました。")
+            return False
+        if not transcript.strip():
+            # 無言（PTT短押し想定）。キーワード照合はせず、失敗カウントも増やさない。
+            self._status.set(token, "locked", "ロック中")
+            return False
         result = self._auth.verify_keyword(transcript)
         log.info("本人確認キーワード照合: transcript=%r authenticated=%s message=%s", transcript, result.authenticated, result.message)
         if result.authenticated:
