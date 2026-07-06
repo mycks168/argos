@@ -966,8 +966,8 @@ def test_authenticated_recording_reaches_codex(monkeypatch):
     assert app._agent.asked == ["こんにちは"]
 
 
-def test_face_auth_success_allows_current_recording(monkeypatch):
-    """顔認証が成功した発話はそのままCodexへ送る。"""
+def test_face_auth_success_unlocks_without_forwarding(monkeypatch, capsys):
+    """顔認証で解除できても、その発話自体はエージェントへ渡さない。"""
     _patch_app(monkeypatch)
     monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
     settings = Settings(
@@ -987,7 +987,107 @@ def test_face_auth_success_allows_current_recording(monkeypatch):
 
     app._process_recording()
 
-    assert app._agent.asked == ["こんにちは"]
+    # ロック中の発話は本人確認用とみなし、解除だけしてLLMへは渡さない
+    assert app._agent.asked == []
+    assert app._auth.is_authenticated() is True
+    assert app._dashboard_state.snapshot()["status"]["code"] == "ready"
+    assert "本人確認しました。" in capsys.readouterr().out
+
+
+def test_locked_silent_short_press_unlocks_via_face_auth(monkeypatch, capsys):
+    """ロック中の無言短押し（空文字）でも顔認証で解除を試す。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": True,
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: ""
+    app._local_stt.transcribe = lambda _wav: ""
+    app._face_auth.verify = lambda: type(
+        "Result",
+        (),
+        {"authenticated": True, "message": "顔認証しました。", "score": 0},
+    )()
+
+    app._process_recording()
+
+    assert app._auth.is_authenticated() is True
+    assert app._agent.asked == []
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["status"]["code"] == "ready"
+    # 空文字でも「音声を認識できませんでした」通知は出さない
+    assert snapshot["notifications"] == []
+    assert "本人確認しました。" in capsys.readouterr().out
+
+
+def test_locked_silent_short_press_face_fail_stays_locked(monkeypatch):
+    """ロック中の無言短押しで顔認証も失敗ならロックのまま。失敗回数は増やさない。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda wav: 100)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+            "auth_face_enabled": True,
+        }
+    )
+    app = ArgosApp(settings)
+    app._stt.transcribe = lambda _wav: ""
+    app._local_stt.transcribe = lambda _wav: ""
+    app._face_auth.verify = lambda: type(
+        "Result",
+        (),
+        {"authenticated": False, "message": "顔認証に失敗しました。", "score": 99},
+    )()
+
+    app._process_recording()
+
+    assert app._auth.is_authenticated() is False
+    assert app._agent.asked == []
+    # 無言なのでキーワード照合はせず、失敗カウントも増えない
+    assert app._auth._failures == 0
+    assert app._dashboard_state.snapshot()["status"]["code"] == "locked"
+
+
+def test_mic_off_ptt_press_wakes_display_only(monkeypatch):
+    """マイクOFF中のPTT押下は録音しないが、スクリーンセーバーだけは解除する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._set_microphone_enabled(False)
+    before = app._dashboard_state.snapshot()["display_activity"]["sequence"]
+
+    app._on_ptt_press()
+
+    after = app._dashboard_state.snapshot()["display_activity"]["sequence"]
+    assert after == before + 1
+    assert app._recorder.started is False
+
+
+def test_locked_ptt_press_always_plays_alert(monkeypatch):
+    """ロック中のPTT押下は認証実績が無くてもアラート音を鳴らす。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "auth_enabled": True,
+            "auth_keyword_hash": hash_keyword("解除"),
+        }
+    )
+    app = ArgosApp(settings)
+    calls = []
+    app._auth_coord.play_lock_warning = lambda: calls.append(True)
+    assert app._auth.has_authenticated_once is False
+
+    app._on_ptt_press()
+
+    assert calls == [True]
 
 
 def test_face_auth_failure_falls_back_to_keyword(monkeypatch, capsys):

@@ -492,7 +492,9 @@ class ArgosApp:
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         if not self._is_microphone_enabled():
-            log.info("マイクOFFのためPTT押下を無視します")
+            # マイクOFFでも録音・認証はしないが、スクリーンセーバーだけは解除する。
+            log.info("マイクOFFのためPTT押下を無視します（画面のみ起こす）")
+            self._dashboard_state.wake_display()
             return
         log.info("PTT ON: 録音開始")
         if self._wakeword_listener is not None:
@@ -509,8 +511,8 @@ class ArgosApp:
         generation = self._cancel_active_audio()
         if self._is_auth_locked():
             self._status.set(generation, "auth_listening", "本人確認録音中")
-            if self._auth.has_authenticated_once:
-                self._auth_coord.play_lock_warning()
+            # ロック中はPTT押下のたびにアラート音を鳴らす（認証実績の有無に依らない）。
+            self._auth_coord.play_lock_warning()
         else:
             self._status.set(generation, "listening", "録音中")
         self._recorder.start()
@@ -685,6 +687,10 @@ class ArgosApp:
                 return
             if not transcript:
                 log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                # ロック中なら無言でも顔認証で解除を試す（PTT短押し想定）。
+                if self._is_auth_locked():
+                    self._auth_coord.ensure_authenticated("", token)
+                    return
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
             # 追いかけ受付ではウェイクワードを言っていないため、呼びかけ必須/除去は行わない
@@ -815,6 +821,10 @@ class ArgosApp:
                 return
             if not transcript:
                 log.info("文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                # ロック中なら無言でも顔認証で解除を試す（PTT短押し想定）。
+                if self._is_auth_locked():
+                    self._auth_coord.ensure_authenticated("", token)
+                    return
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
             if self._auth_coord.ensure_authenticated(transcript, token):
