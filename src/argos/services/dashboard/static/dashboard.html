@@ -77,10 +77,10 @@
       --status-frame-color: #5ed3ff;
     }
     body[data-status-code="transcribing"] {
-      --status-frame-color: #ff9f43;
+      --status-frame-color: #ff4a1e;
     }
     body[data-status-code="speaking"] {
-      --status-frame-color: #6ee7a8;
+      --status-frame-color: #4a90ff;
     }
     body[data-status-code="locked"],
     body[data-status-code="alert"],
@@ -102,8 +102,8 @@
     }
     body[data-status-code="transcribing"]::before {
       opacity: 1;
-      border-color: rgba(255, 159, 67, 0.78);
-      box-shadow: 0 0 17px rgba(255, 159, 67, 0.42), inset 0 0 14px rgba(255, 159, 67, 0.14);
+      border-color: rgba(255, 74, 30, 0.78);
+      box-shadow: 0 0 17px rgba(255, 74, 30, 0.42), inset 0 0 14px rgba(255, 74, 30, 0.14);
     }
     body[data-status-code="thinking"]::after,
     body[data-status-code="authenticating"]::after,
@@ -113,8 +113,8 @@
     }
     body[data-status-code="speaking"]::before {
       opacity: 1;
-      border-color: rgba(110, 231, 168, 0.62);
-      box-shadow: 0 0 14px rgba(110, 231, 168, 0.32), inset 0 0 12px rgba(110, 231, 168, 0.1);
+      border-color: rgba(74, 144, 255, 0.62);
+      box-shadow: 0 0 14px rgba(74, 144, 255, 0.32), inset 0 0 12px rgba(74, 144, 255, 0.1);
     }
     body[data-status-code="locked"]::before,
     body[data-status-code="alert"]::before,
@@ -455,8 +455,8 @@
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
-    .status[data-code="transcribing"] .status-dot { background: #ff9f43; box-shadow: 0 0 10px #ff9f43; }
-    .status[data-code="speaking"] .status-dot { background: #69b7e4; }
+    .status[data-code="transcribing"] .status-dot { background: #ff4a1e; box-shadow: 0 0 10px #ff4a1e; }
+    .status[data-code="speaking"] .status-dot { background: #4a90ff; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
     .status[data-code="auth_listening"] .status-dot { background: #ff8c42; box-shadow: 0 0 10px #ff8c42; }

@@ -174,6 +174,54 @@ class SpeechController:
         worker.join(timeout=300)
         return full_response
 
+    def synthesize_response_stream(
+        self, deltas: Iterable[str], slot_key: str = ""
+    ) -> Iterable[tuple[str, str | bytes]]:
+        """応答差分をテキストと文単位の合成WAVへ変換して順に生成する。
+
+        PiZero端末などの遠隔ヘッド向けに、母艦のスピーカーでは再生せず、
+        応答テキストの差分と、句読点で分割した文ごとのTTS合成WAVを返す。
+        ローカル再生・ミュート・キャンセル世代・LCD表示には触れないため、
+        目の前の端末での読み上げ制御とは独立して動く。
+
+        Yields:
+            ("text", delta): エージェント応答の差分テキスト。
+            ("audio", wav_bytes): 文単位で合成したWAVバイト列。
+        """
+        chunker = TextChunker(self._settings.tts_delimiters)
+        for delta in deltas:
+            if delta:
+                yield ("text", delta)
+            if self._settings.dry_run:
+                continue
+            for chunk in chunker.push(delta):
+                wav_data = self._synthesize_chunk(chunk, slot_key)
+                if wav_data is not None:
+                    yield ("audio", wav_data)
+        if self._settings.dry_run:
+            return
+        rest = chunker.flush()
+        if rest:
+            wav_data = self._synthesize_chunk(rest, slot_key)
+            if wav_data is not None:
+                yield ("audio", wav_data)
+
+    def _synthesize_chunk(self, chunk: str, slot_key: str = "") -> bytes | None:
+        """1チャンクを正規化して合成し、失敗時はNoneを返す（ターンは継続する）。"""
+        try:
+            normalized = self._tts_filter.normalize(chunk)
+        except Exception as exc:
+            log.exception("端末ターンのTTSフィルターに失敗しました")
+            self._report_error("TTSフィルター", exc)
+            return None
+        if not normalized.strip():
+            return None
+        try:
+            return self._synthesize_tts(normalized, slot_key)
+        except Exception:
+            log.exception("端末ターンのTTSに失敗しました")
+            return None
+
     def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int, slot_key: str = "") -> None:
         """TTS チャンクを順に合成して再生する。"""
         while True:

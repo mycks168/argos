@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import base64
 import logging
 import random
 import re
 import signal
+import tempfile
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from argos.config import (
@@ -292,6 +294,7 @@ class ArgosApp:
             upload_keep=settings.dashboard_upload_keep,
             control_handler=self._handle_dashboard_control,
             event_handler=self._handle_dashboard_event,
+            terminal_handler=_TerminalGateway(self),
         )
 
     def run(self) -> None:
@@ -735,6 +738,104 @@ class ArgosApp:
         """現在の世代トークンを返す。"""
         return self._status.current_generation()
 
+    def _terminal_list_slots(self) -> dict[str, object]:
+        """PiZero端末向けにエージェントスロット一覧と現在スロットを返す。"""
+        current_name = self._agent.current_name
+        current_provider = self._agent.current_provider
+        slots = [
+            {
+                "name": slot.name,
+                "provider": slot.provider,
+                "active": slot.name == current_name and slot.provider == current_provider,
+            }
+            for slot in self._settings.agent_slots
+        ]
+        return {"slots": slots, "current": {"name": current_name, "provider": current_provider}}
+
+    def _terminal_next_slot(self) -> dict[str, object]:
+        """PiZero端末のダブルクリックに対応して次のスロットへ巡回切替する。
+
+        スロットは母艦・ダッシュボード・端末で共有するため、切替は目の前の端末にも
+        反映する。母艦側では読み上げず、表示だけ更新して切替後の現在スロットを返す。
+        """
+        name = self._agent.next_slot()
+        self._sync_agent_display()
+        log.info("端末操作でエージェントスロット切替: %s", name)
+        return self._terminal_list_slots()
+
+    def _terminal_process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
+        """録音WAVをSTT→エージェント→TTSで処理し、SSE用イベントを順に生成する。
+
+        母艦のスピーカーでは再生せず、応答テキストの差分と文単位の合成WAVを
+        端末へ返す。発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
+        """
+        slot_name = self._agent.current_name
+        slot_provider = self._agent.current_provider
+        slot_key = _app_slot_key(slot_name, slot_provider)
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
+                tmp.write(wav_bytes)
+                tmp_path = tmp.name
+            try:
+                transcript = self._transcribe_wav(tmp_path)
+            except Exception as exc:
+                log.exception("端末ターンの文字起こしに失敗しました")
+                self._report_error("文字起こし", exc)
+                yield {"event": "error", "message": "文字起こしに失敗しました"}
+                return
+            if not transcript:
+                log.info("端末ターンの文字起こし結果が空でした")
+                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                yield {"event": "error", "message": "音声を認識できませんでした"}
+                return
+            yield {"event": "transcript", "text": transcript}
+            log.info("端末ユーザ発話: %s", transcript)
+            # ローカル録音と同じ本人確認ゲートを通す。ロック中は発話を本人確認扱いにし、
+            # 音声キーワード一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
+            auth_token = self._status.current_generation()
+            if not self._auth_coord.ensure_authenticated(transcript, auth_token):
+                if self._auth_coord.is_locked():
+                    yield {"event": "error", "message": "本人確認が必要です。合言葉を話してね。"}
+                else:
+                    # キーワードで解除できたが、この発話自体は本人確認用なのでエージェントへは渡さない。
+                    yield {"event": "text", "delta": "本人確認しました。"}
+                    yield {"event": "done", "text": "本人確認しました。"}
+                return
+            self._dashboard_state.add_message("user", transcript)
+            self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
+            dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
+            seq = 0
+            full_response = ""
+            try:
+                for kind, payload in self._speech.synthesize_response_stream(
+                    self._agent.ask_stream(transcript), slot_key
+                ):
+                    if kind == "text":
+                        text = str(payload)
+                        full_response += text
+                        self._dashboard_state.append_message(dashboard_message_id, text)
+                        yield {"event": "text", "delta": text}
+                    else:
+                        encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
+                        yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
+                        seq += 1
+                log.info("端末エージェント応答: %s", full_response[:300])
+                yield {"event": "done", "text": full_response}
+            except RunnerSlotBusyError as exc:
+                log.info("端末ターンでエージェントスロットが処理中です: %s", exc)
+                yield {"event": "error", "message": "前の応答がまだ処理中です"}
+            except Exception as exc:
+                log.exception("端末ターンのエージェント応答取得に失敗しました")
+                self._report_error("エージェント", exc)
+                yield {"event": "error", "message": "エージェント応答の取得に失敗しました"}
+            finally:
+                self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
+                self._dashboard_state.finish_message(dashboard_message_id)
+        finally:
+            if tmp_path:
+                self._remove_recording_file(tmp_path)
+
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
         action = str(payload.get("action", ""))
@@ -1027,6 +1128,30 @@ class ArgosApp:
         self._auth_coord.stop_warning()
         if self._dashboard_server is not None:
             self._dashboard_server.stop()
+
+
+class _TerminalGateway:
+    """PiZero端末API（Terminal API）をDashboardServerへ渡すためのファサード。
+
+    DashboardServerがARGOS本体の内部実装へ直接依存しないよう、端末向けの
+    3操作（スロット一覧・スロット巡回・ターン処理）だけを公開する。
+    """
+
+    def __init__(self, app: "ArgosApp") -> None:
+        """委譲先のARGOS本体を保持する。"""
+        self._app = app
+
+    def list_slots(self) -> dict[str, object]:
+        """エージェントスロット一覧と現在スロットを返す。"""
+        return self._app._terminal_list_slots()
+
+    def next_slot(self) -> dict[str, object]:
+        """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
+        return self._app._terminal_next_slot()
+
+    def process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
+        """録音WAVを処理し、SSE用イベントを順に生成する。"""
+        return self._app._terminal_process_turn(wav_bytes)
 
 
 def _app_slot_key(name: str, provider: str) -> str:
