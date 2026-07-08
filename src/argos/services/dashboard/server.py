@@ -71,6 +71,7 @@ class DashboardServer:
         upload_keep: int = DEFAULT_UPLOAD_KEEP,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+        terminal_handler: Any | None = None,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -89,6 +90,7 @@ class DashboardServer:
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
         self._control_handler = control_handler
         self._event_handler = event_handler
+        self._terminal_handler = terminal_handler
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -116,6 +118,7 @@ class DashboardServer:
             self._upload_keep,
             self._control_handler,
             self._event_handler,
+            self._terminal_handler,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -149,6 +152,7 @@ def _create_handler(
     upload_keep: int = DEFAULT_UPLOAD_KEEP,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
+    terminal_handler: Any | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -177,6 +181,13 @@ def _create_handler(
                 )
             elif path == "/api/stream":
                 self._send_sse()
+            elif path == "/api/terminal/slots":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_json(terminal_handler.list_slots())
             elif path == "/camera/latest.jpg":
                 self._send_camera_snapshot()
             elif path.startswith("/uploads/"):
@@ -191,6 +202,22 @@ def _create_handler(
                 if not self._require_token():
                     return
                 self._handle_upload()
+                return
+            if path == "/api/terminal/slots/next":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_json(terminal_handler.next_slot())
+                return
+            if path == "/api/terminal/turn":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_terminal_turn(terminal_handler, upload_max_bytes)
                 return
             if path not in {"/api/events", "/api/control"}:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -355,6 +382,41 @@ def _create_handler(
                 return
             finally:
                 state.unsubscribe(subscriber)
+
+        def _send_terminal_turn(self, handler: Any, max_bytes: int) -> None:
+            """録音WAVを受け取り、STT→エージェント→TTS結果をSSEで返す。"""
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._send_json({"error": "Content-Length が不正です"}, HTTPStatus.BAD_REQUEST)
+                return
+            if length <= 0 or length > max_bytes:
+                self._send_json({"error": "音声サイズが不正です"}, HTTPStatus.BAD_REQUEST)
+                return
+            wav_bytes = self.rfile.read(length)
+            # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
+            self.close_connection = True
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            try:
+                for event in handler.process_turn(wav_bytes):
+                    name = str(event.get("event", "message"))
+                    body = json.dumps(event, ensure_ascii=False).encode("utf-8")
+                    self.wfile.write(f"event: {name}\ndata: ".encode("utf-8") + body + b"\n\n")
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                return
+            except Exception:
+                log.exception("端末ターン処理でエラーが発生しました")
+                try:
+                    body = json.dumps({"event": "error", "message": "内部エラー"}, ensure_ascii=False).encode("utf-8")
+                    self.wfile.write(b"event: error\ndata: " + body + b"\n\n")
+                    self.wfile.flush()
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
     return DashboardHandler
 

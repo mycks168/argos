@@ -234,6 +234,27 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 ダッシュボード各スロットの「閉じる」ボタンをクリックすると、フロントエンド側から自動的に `clear_overlay` イベントが送信され、そのスロットがクリアされる。
 
+#### PiSugar モバイル端末（Terminal API）
+
+Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）を載せた `argos-terminal`（別リポジトリ）を、ARGOS母艦の「遠隔ヘッド」として使うためのAPI。母艦の目の前にいなくても、Tailscale等のVPN越しにPTTで話しかけ、応答テキストと音声を端末で受け取る。端末側はSTT・エージェント・TTSを一切持たず、録音WAVの送信・テキスト表示・音声再生・スロット切替だけを担う薄いクライアントとする。
+
+端末からの操作もダッシュボードのリモート操作として扱い、発話・応答・スロット変更はすべて `DashboardState` に記録して既存の `/api/stream` でブラウザにもライブ表示・履歴として残す。これにより後から追跡できる。端末APIはHDMIダッシュボードと同じHTTPサーバー（`ARGOS_DASHBOARD_PORT`、既定8765）上に同居し、認証は同じ `ARGOS_DASHBOARD_TOKEN` を使う。遠隔利用時は `ARGOS_DASHBOARD_HOST` をTailscaleアドレスや `0.0.0.0` へ広げて到達可能にする。端末専用の認証スコープ分離は今後の拡張点とする。
+
+端末APIは以下のエンドポイントを提供する。いずれも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。
+
+- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。イベント種別は次のとおり。
+  - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
+  - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
+  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。
+  - `done`：ターン完了。`{"text": "<応答全文>"}`。
+  - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
+- `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
+- `POST /api/terminal/slots/next`：次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。端末のPTTダブルクリックに対応する。母艦の `next_slot()` を共有するため、切替はダッシュボードや目の前の端末とも一貫する。名前指定での切替（select-by-name）は今後の拡張点とする。
+
+端末ターンはローカル録音と同じ本人確認ゲートを通す。母艦がロック中（本人確認が有効かつ未認証）の場合、端末の発話はLLMエージェントへ渡さず本人確認用として扱う。音声キーワードが一致すれば母艦と共有の認証状態を解除し、`text` で「本人確認しました。」を返して `done` で終える。解除できなければ `error` で本人確認を促す。顔認証は母艦のカメラに依存するため、遠隔端末からの実質的な解除手段は音声キーワードになる。認証状態は母艦と端末で共有するため、どちらで解除しても両方が解除される。本人確認が無効な場合はこのゲートを素通りする。
+
+母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンの合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
 エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
