@@ -17,6 +17,7 @@ from argos.installer import (
     _resolve_os_packages,
     _ensure_agent_limit_cron,
     _ensure_core_env_defaults,
+    _ensure_reminder_dashboard_token,
     _ensure_tts_filter_shared_token,
     _install_chromium_policy,
     _reload_systemd,
@@ -237,6 +238,8 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
             "PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin",
             "uv",
             "sync",
+            "--extra",
+            "face",
         ]
         for command in commands
     )
@@ -777,6 +780,28 @@ def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):
     assert values["ARGOS_DASHBOARD_TOKEN"]
 
 
+def test_ensure_core_env_defaults_generates_agent_runner_token(tmp_path):
+    """既存.envのAgent Runnerトークンが空なら自動生成する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_AGENT_RUNNER_TOKEN=\nARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
+
+    _ensure_core_env_defaults(env_path)
+
+    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert values["ARGOS_AGENT_RUNNER_TOKEN"]
+
+
+def test_ensure_core_env_defaults_restricts_env_permissions(tmp_path):
+    """トークンを含む.envは所有者のみ読める権限へ変更する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
+    env_path.chmod(0o644)
+
+    _ensure_core_env_defaults(env_path)
+
+    assert env_path.stat().st_mode & 0o777 == 0o600
+
+
 def test_ensure_tts_filter_shared_token_generates_and_syncs(tmp_path):
     """本体とtts-filterのBearerトークンを同じ値に揃える。"""
     project = tmp_path / "argos"
@@ -810,3 +835,40 @@ def test_ensure_tts_filter_shared_token_prefers_app_token(tmp_path):
 
     filter_values = dict(line.split("=", 1) for line in filter_env.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert filter_values["TTS_FILTER_BEARER_TOKEN"] == "app-token"
+
+
+def test_ensure_reminder_dashboard_token_syncs_from_app_env(tmp_path):
+    """本体のダッシュボードトークンをargos-reminder側へ反映する。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "argos-reminder"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    reminder_env = service_dir / ".env"
+    app_env.write_text("ARGOS_DASHBOARD_TOKEN=dashboard-token\n", encoding="utf-8")
+    reminder_env.write_text(
+        "ARGOS_DASHBOARD_URL=http://127.0.0.1:8765\nARGOS_DASHBOARD_TOKEN=\n",
+        encoding="utf-8",
+    )
+
+    assert _ensure_reminder_dashboard_token(project) is True
+
+    reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert reminder_values["ARGOS_DASHBOARD_TOKEN"] == "dashboard-token"
+
+
+def test_ensure_reminder_dashboard_token_generates_shared_token(tmp_path):
+    """本体とargos-reminderのトークンが空なら共有トークンを生成する。"""
+    project = tmp_path / "argos"
+    service_dir = project / "services" / "argos-reminder"
+    service_dir.mkdir(parents=True)
+    app_env = project / ".env"
+    reminder_env = service_dir / ".env"
+    app_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
+    reminder_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
+
+    assert _ensure_reminder_dashboard_token(project) is True
+
+    app_values = dict(line.split("=", 1) for line in app_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    assert app_values["ARGOS_DASHBOARD_TOKEN"]
+    assert app_values["ARGOS_DASHBOARD_TOKEN"] == reminder_values["ARGOS_DASHBOARD_TOKEN"]

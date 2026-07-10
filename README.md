@@ -100,7 +100,7 @@ uv run argos-install --json
 uv run argos-install --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、`uv sync` もARGOS実行ユーザーで実行します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
 
 `--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
 
@@ -133,6 +133,10 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 
 `ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
 自宅などSTTゲートウェイが近く誤検知を抑えたい環境では、`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` にすると、文字起こし結果が「アルゴス」などの呼びかけから始まる場合だけ処理します。ダッシュボードのマイクOFFボタンを押すと、PTTとウェイクワードの受付を一時停止できます。
+
+応答の読み上げが終わったあと、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけウェイクワードを言い直さずに続けて話せます。この間に話しかけると、そのまま次の発話として受け付け、応答のたびに窓が開き直すので会話が続きます。この追いかけ受付は本人確認済みのときだけ有効で、無音のまま数秒たつと通常の待機に戻ります。
+
+`ARGOS_WAKEWORD_BARGEIN_ENABLED=true` にすると、読み上げ中でもウェイクワードで割り込んで（バージイン）、進行中の読み上げを止めて次の発話を受け付けられます。ウェイクワードonly運用でTTSを止める手段が無い問題への対策です。ただし自分の声に反応しないよう、マイク入力を音響エコーキャンセル(AEC)済みの経路にすることが前提です。`scripts/setup-echo-cancel.sh`（Raspberry Pi OS / Ubuntu 共通、`--install-deps`で依存導入、`--revert`で撤去）でPipeWireのエコーキャンセルとALSAブリッジを設定します（詳細は `docs/basic_design.md`）。既定は無効です。
 
 モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
 
@@ -196,7 +200,7 @@ uv run scripts/enroll-face-auth.py --count 5
 ```
 
 最初に `check-face-detection.py` で顔が1件検出されるか確認します。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存します。その後、`.env` で `ARGOS_AUTH_FACE_ENABLED=true` にします。起動時とロック中の発話時にカメラ照合を試し、成功した場合はその発話をそのままCodexへ送ります。失敗した場合は音声キーワードで解除できます。
-顔検出にはOpenCVが必要です。未導入の場合、顔認証は失敗扱いになり、音声キーワード解除へ戻ります。
+顔検出にはOpenCVが必要です。`argos-install --apply` または `--update` で導入したARGOS本体の `.venv` には、顔認証用OpenCVも入ります。未導入の場合、顔認証は失敗扱いになり、音声キーワード解除へ戻ります。
 カメラが横向きに写る場合は `ARGOS_AUTH_FACE_IMAGE_ROTATION=90` のように設定します。
 
 起動後に未認証の場合は「本人確認をしてください。」と案内します。`ARGOS_AUTH_WARNING_DELAY_SECONDS` の秒数が過ぎても未認証なら、警告音と本人確認案内を繰り返します。`ARGOS_AUTH_ALERT_DELAY_SECONDS` を超えると「警戒モードに入りました」と案内し、画面を「警戒中」にします。本人確認の失敗が続いた場合は、`ARGOS_AUTH_ALERT_COMMAND` に設定したコマンドも実行できます。
@@ -228,7 +232,7 @@ ARGOS_DASHBOARD_TOKEN=<ランダムなトークン>
 ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 ```
 
-`ARGOS_DASHBOARD_TOKEN` が空の場合、`argos-install --apply` または `--update` 実行時にランダムなトークンを自動生成します。ミュート、マイクOFF、音量変更などの画面操作は、このトークンで保護された `/api/control` を使います。
+`ARGOS_DASHBOARD_TOKEN` が空の場合、`argos-install --apply` または `--update` 実行時にランダムなトークンを自動生成します。インストーラーは同じ値を `services/argos-reminder/.env` にも反映し、リマインダー通知がダッシュボードAPIで401にならないようにします。ミュート、マイクOFF、音量変更などの画面操作は、このトークンで保護された `/api/control` を使います。
 
 ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、現在のエージェントスロット、Wi-Fi接続状態、会話履歴、外部通知を表示します。1920x440では3列、800x600程度では通知欄を右側に残すコンパクト3列、さらに狭い画面では通知欄を下へ回り込ませます。
 会話更新時は通知欄を再描画しないため、表示中の画像を安定して保持します。
@@ -270,6 +274,29 @@ curl -X POST http://<raspberry-pi>:8765/api/events \
 
 通知では `image_url` と `link_url` も指定できます。会話追加は `user_message` または `agent_message`、状態更新は `status`、通知削除は `clear_notifications` を `type` に指定します。
 通知イベントに `sound: true` や `speak: true` を付けると、ARGOS本体が画面を起こし、通知音または通知本文の読み上げを行います。
+
+`display:"center"` を付けると、右の通知欄だけでなく画面中央に大きなアラートを重ねて表示します。「ご飯だよ〜」のような全員へ強く見せたい連絡向けです。`duration_seconds` に秒数を指定すると自動で閉じ、未指定なら画面タップで閉じます。中央アラートは `{"type":"clear_center_alert"}` でも消せます。
+
+```bash
+curl -X POST http://<raspberry-pi>:8765/api/events \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"notification","source":"kitchen","title":"ご飯だよ〜","display":"center","duration_seconds":30,"speak":true}'
+```
+
+通知に画像を添付したい場合は、先に画像をアップロードして得たURLを `image_url` に指定します。
+
+```bash
+url=$(curl -s -X POST http://<raspberry-pi>:8765/api/uploads \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: image/jpeg" --data-binary @photo.jpg | python3 -c 'import sys,json;print(json.load(sys.stdin)["url"])')
+curl -X POST http://<raspberry-pi>:8765/api/events \
+  -H "Authorization: Bearer <ARGOS_DASHBOARD_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d "{\"type\":\"notification\",\"title\":\"写真が届いたよ\",\"display\":\"center\",\"image_url\":\"$url\"}"
+```
+
+アップロード画像は `ARGOS_DASHBOARD_UPLOAD_DIR`（既定 `/tmp/argos/uploads`）へ保存し、`ARGOS_DASHBOARD_UPLOAD_MAX_BYTES`（既定5MB）を超える画像は拒否、`ARGOS_DASHBOARD_UPLOAD_KEEP`（既定50件）を超えた古い画像は自動削除します。複数端末へ一斉通知したい場合は、当面は送信側で各端末の `/api/events` を順に叩いてください。
 ダッシュボードのミュート操作は `POST /api/control` を使い、`action` に `mute`、`unmute`、`toggle_mute` を指定します。読み上げ音量は左側の縦スライダーで変更でき、同じAPIへ `{"action":"set_volume","volume":55}` のように送信します。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証が必要です。変更した音量とミュート状態は `ARGOS_AUDIO_STATE_PATH` に保存し、ARGOS再起動後も前回の状態を復元します。
 
 ttyd がインストール済みなら、tmux セッションを中央または右ペインへ表示できます。既定では `127.0.0.1:7681` に ttyd を起動し、`argos-terminal` セッションを iframe 表示します。Webターミナルはシェル操作権限を持つため、外部公開せずローカル表示に閉じてください。

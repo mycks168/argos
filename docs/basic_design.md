@@ -52,7 +52,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 ```
 
 ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
-`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。
+`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む `.env` は、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
 
 ### VOICEVOX
 
@@ -152,17 +152,25 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 ### HDMI ダッシュボード
 
-`ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。800x600程度の画面では左側操作を圧縮した3列表示を維持し、さらに狭い場合だけ通知欄を下へ回り込ませる。
+`ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。800x600程度の画面では左側操作を圧縮した3列表示を維持し、さらに狭い場合だけ通知欄を下へ回り込ませる。また、画面の高さが極端に低い場合（高さ500px以下）は、会話履歴の文字サイズを維持したまま左側操作パネルの余白（マージンやパディング）を自動で縮小し、スロットボタンや操作パネルが画面下に見切れるのを防ぐ仕様とする。
 
-画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
+待ち受けアドレスは `ARGOS_DASHBOARD_HOST` で指定する。kioskブラウザは同一機からアクセスするため既定は `127.0.0.1`（localhostのみ）とし、状態・会話履歴・カメラ画像などGET系APIを認証なしでLANへ露出しない。LAN内の別端末から表示させる場合だけ `0.0.0.0` などへ明示的に広げる。
+
+画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。インストーラーはARGOS本体の `.env` と `services/argos-reminder/.env` の `ARGOS_DASHBOARD_TOKEN` を同じ値に揃え、リマインダー通知が401で失敗しないようにする。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
+
+通知イベントには表示位置を指定する `display` を追加する。既定の `toast` は従来どおり右カラムの通知欄に積む。`center` を指定すると、右カラムの通知履歴に加えて画面中央へ大きなアラート（`center_alert`）を重ねて表示する。中央アラートは「ご飯だよ〜」のような全員へ強く見せたい一斉連絡を想定し、画像・大きなタイトル・本文をまとめて中央に出す。`duration_seconds` に正の秒数を指定すると、その秒数の経過後に中央アラートを自動で閉じる。0または未指定の場合は画面タップで閉じるまで残す。中央アラートは画面タップ、`duration_seconds` の経過、または `type:"clear_center_alert"` イベントで消去し、消去時はサーバー状態(`center_alert`)もクリアして再描画で復活しないようにする。中央アラートは iframe オーバーレイのスタックとは独立した専用レイヤで、`snapshot()` の `center_alert` を通じてSSEで配信する。
+
+通知画像は外部URL参照(`image_url`)に加えて、ARGOS本体へアップロードして配信できる。`POST /api/uploads` はBearer認証必須で、`Content-Type` に画像MIME（`image/png`、`image/jpeg`、`image/webp`、`image/gif`）を指定した生ボディを受け取り、`ARGOS_DASHBOARD_UPLOAD_DIR`（既定 `/tmp/argos/uploads`）へ `<UUID>.<拡張子>` として保存し、`{"url": "/uploads/<name>"}` を返す。受信サイズは `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES`（既定5MB）を上限とし、保存件数は `ARGOS_DASHBOARD_UPLOAD_KEEP`（既定50件）を超えた古い画像から削除する。`GET /uploads/<name>` は保存済み画像を配信し、パストラバーサルを防ぐためファイル名にディレクトリ区切りや `..` を含むリクエストは拒否する。送信側は「画像をアップロードして得たURLを通知の `image_url` に入れて `/api/events` へ送る」2段構成で画像付き通知を出す。将来、1リクエストで完結させるための `image_data`(base64) 埋め込みは拡張点として残す。
+
+複数端末への一斉通知は、当面は送信側が各端末の `/api/events` を順に叩くファンアウト方式とし、ARGOS本体には配信・中継機構を持たせない。通知イベントの任意項目 `target`（宛先ラベル）は将来の一斉通知向けに受理して無視するだけとし、バリデーションで弾かない。端末レジストリ（ホスト名・部屋・人）、死活監視、自動登録、宛先グループ、ブロードキャストAPIは今後の拡張点として別途設計する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
-動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` はオレンジの流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は緑系の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。
+動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` は赤橙の流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は青の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。枠色はPiSugarモバイル端末（argos-terminal）のLED色と揃えてあり、`transcribing`＝赤橙・`speaking`＝青は端末側と一致する（端末は `thinking` も赤橙で扱う点だけ異なる）。
 中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルにはスロット一覧をARGOSロゴ直下の横並びチップとして表示し、現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。スロット数が増えた場合は、左側パネルの縦方向を圧迫しないよう、スロット一覧だけをタッチ操作で横スクロールできるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
-`ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。
+`ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。マイクOFF中でPTTを押した場合は、録音や本人確認はしないが黒表示だけは解除する。
 左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ直下の操作行に置き、狭い画面でも折り返して見切れないようにする。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。インストーラーは `.env` の `ARGOS_DASHBOARD_TOKEN` が空の場合、`--apply` または `--update` 実行時にランダムなトークンを自動生成する。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
-同じ領域にマイクOFFボタンを表示する。操作は `enable_microphone`、`disable_microphone`、`toggle_microphone` で受け付ける。マイクOFF中はPTT押下とウェイクワード検知を無視し、進行中の録音があれば破棄する。これは読み上げミュートとは独立した一時停止で、再起動後の永続化はしない。
+同じ領域にマイクOFFボタンを表示する。操作は `enable_microphone`、`disable_microphone`、`toggle_microphone` で受け付ける。マイクOFF中はPTT押下とウェイクワード検知による録音を行わず、進行中の録音があれば破棄する。ただしマイクOFF中でもPTT押下でスクリーンセーバー（黒表示）だけは解除する。これは読み上げミュートとは独立した一時停止で、再起動後の永続化はしない。
 左側パネルにはフォントサイズ切替ボタンを表示し、ダッシュボードの主要テキストを `小`、`中`、`大` から選べるようにする。選択値はキオスクブラウザのローカルストレージへ保存し、画面再読み込み後も維持する。未保存時は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` を初期値にする。切替対象は会話欄、通知欄、現在スロット、状態表示、スロットチップなどの可読性に関わるテキストとする。
 左側パネルの `CURRENT SLOT` にはセッションリセットボタンを表示する。誤操作防止のため、1回目のタップで確認表示に切り替え、5秒以内にもう一度タップした場合だけ `POST /api/control` に `{"action":"reset_agent_session"}` を送る。この操作は現在スロットのエージェントセッションIDだけを削除し、ダッシュボードに残っている会話履歴や通知は削除しない。リセット後の次回エージェント呼び出しは新規セッションとして開始し、完了時に通常どおり新しいセッションIDを保存する。
 左側パネルの左端には読み上げ音量の縦スライダーを表示する。スライダーは `POST /api/control` に `{"action":"set_volume","volume":0..100}` を送信し、ARGOS本体の `AudioPlayer` が16bit PCM WAVを小分けに再生しながらソフトウェア音量を反映する。これにより `plughw` 直指定でALSAミキサーを通らない出力でも、再生中の次の小さい再生ブロックから読み上げ音量を変更できる。ALSAミキサー操作は `AUDIO_OUTPUT_CARD` が設定されている場合はそのカード、未設定の場合はデフォルトミキサーへベストエフォートで送る。起動時は `ARGOS_AUDIO_STATE_PATH` の保存済み音量を優先し、保存済み音量がない場合だけ `AUDIO_OUTPUT_VOLUME` を初期値として使う。保存値が壊れている場合は無視する。
@@ -226,9 +234,30 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
 
 ダッシュボード各スロットの「閉じる」ボタンをクリックすると、フロントエンド側から自動的に `clear_overlay` イベントが送信され、そのスロットがクリアされる。
 
+#### PiSugar モバイル端末（Terminal API）
+
+Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）を載せた `argos-terminal`（別リポジトリ）を、ARGOS母艦の「遠隔ヘッド」として使うためのAPI。母艦の目の前にいなくても、Tailscale等のVPN越しにPTTで話しかけ、応答テキストと音声を端末で受け取る。端末側はSTT・エージェント・TTSを一切持たず、録音WAVの送信・テキスト表示・音声再生・スロット切替だけを担う薄いクライアントとする。
+
+端末からの操作もダッシュボードのリモート操作として扱い、発話・応答・スロット変更はすべて `DashboardState` に記録して既存の `/api/stream` でブラウザにもライブ表示・履歴として残す。これにより後から追跡できる。端末APIはHDMIダッシュボードと同じHTTPサーバー（`ARGOS_DASHBOARD_PORT`、既定8765）上に同居し、認証は同じ `ARGOS_DASHBOARD_TOKEN` を使う。遠隔利用時は `ARGOS_DASHBOARD_HOST` をTailscaleアドレスや `0.0.0.0` へ広げて到達可能にする。端末専用の認証スコープ分離は今後の拡張点とする。
+
+端末APIは以下のエンドポイントを提供する。いずれも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。
+
+- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。イベント種別は次のとおり。
+  - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
+  - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
+  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。
+  - `done`：ターン完了。`{"text": "<応答全文>"}`。
+  - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
+- `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
+- `POST /api/terminal/slots/next`：次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。端末のPTTダブルクリックに対応する。母艦の `next_slot()` を共有するため、切替はダッシュボードや目の前の端末とも一貫する。名前指定での切替（select-by-name）は今後の拡張点とする。
+
+端末ターンはローカル録音と同じ本人確認ゲートを通す。母艦がロック中（本人確認が有効かつ未認証）の場合、端末の発話はLLMエージェントへ渡さず本人確認用として扱う。音声キーワードが一致すれば母艦と共有の認証状態を解除し、`text` で「本人確認しました。」を返して `done` で終える。解除できなければ `error` で本人確認を促す。顔認証は母艦のカメラに依存するため、遠隔端末からの実質的な解除手段は音声キーワードになる。認証状態は母艦と端末で共有するため、どちらで解除しても両方が解除される。本人確認が無効な場合はこのゲートを素通りする。
+
+母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンの合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
-Codex 呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
+エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 
 ### 発話時の挨拶
 
@@ -241,13 +270,13 @@ ARGOS は最初の発話処理時と正常終了時に最終利用時刻を `ARG
 
 ### 本人確認
 
-`ARGOS_AUTH_ENABLED=true` の場合、ARGOS は本人確認が済むまで発話をCodexへ送らない。ロック中の発話は文字起こしだけに使い、`ARGOS_AUTH_KEYWORD_HASH` と一致した場合にロックを解除する。解除キーワードそのものはCodexへ送らない。
+`ARGOS_AUTH_ENABLED=true` の場合、ARGOS は本人確認が済むまで発話をCodexへ送らない。ロック中の発話は本人確認だけに使い、顔認証・音声キーワードのどちらで解除できても、その発話自体はCodexへ送らない（用件は解除後に改めて話す）。`ARGOS_AUTH_KEYWORD_HASH` と一致した場合にロックを解除する。Codexへ発話を送るのは、その発話の開始時点で既に認証済みだった場合だけとする。
 
 音声キーワードはPBKDF2ハッシュとして保存する。ハッシュ作成は `uv run scripts/hash-auth-keyword.py` を使う。`ARGOS_AUTH_KEYWORD_HASH` はセミコロン、カンマ、改行区切りの複数ハッシュを受け付け、STTが `唐揚げ` を `からあげ` のように表記ゆれさせる場合も、許可したい表記のハッシュを追加できる。認証済みの有効期限は `ARGOS_AUTH_TRUST_SECONDS` で指定し、既定は30分とする。待機中に有効期限が切れた場合は、HDMIダッシュボードの状態表示を自動で `ロック中` へ戻す。連続失敗が `ARGOS_AUTH_FAILURE_THRESHOLD` に達した場合は警戒通知を出す。
 
-`ARGOS_AUTH_FACE_ENABLED=true` の場合、起動時とロック中の発話時にカメラ照合を試す。照合に成功した場合は音声キーワード解除と同じく認証済み状態へ遷移し、その発話をCodexへ送る。照合に失敗した場合は、同じ発話を音声キーワードとして検証する。
+`ARGOS_AUTH_FACE_ENABLED=true` の場合、起動時とロック中の発話時にカメラ照合を試す。照合に成功した場合は音声キーワード解除と同じく認証済み状態へ遷移する。ただしその発話は本人確認のためのものとみなし、Codexへは送らない（用件は解除後に改めて話す）。照合に失敗した場合は、同じ発話を音声キーワードとして検証する。ロック中の発話が空文字（PTT短押しなど）だった場合は、顔認証だけを試し、音声キーワード照合は行わない（無言で失敗回数を増やさない）。
 
-顔検出確認は `uv run scripts/check-face-detection.py` で行う。撮影画像は `/tmp/argos/camera-latest.jpg` にもコピーする。顔サンプル登録は `uv run scripts/enroll-face-auth.py --count 5` で行う。撮影は `ARGOS_AUTH_FACE_CAPTURE_COMMAND` を使い、登録サンプルは `ARGOS_AUTH_FACE_SAMPLES_DIR` に保存する。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存する。顔検出にはOpenCVを使う。OpenCVが未導入、顔が検出できない、または複数の顔が検出された場合は顔認証を失敗扱いにして音声キーワードへフォールバックする。現段階の顔照合はローカル顔画像指紋の簡易比較で、しきい値は `ARGOS_AUTH_FACE_THRESHOLD`、必要一致数は `ARGOS_AUTH_FACE_MIN_MATCHES` で調整する。
+顔検出確認は `uv run scripts/check-face-detection.py` で行う。撮影画像は `/tmp/argos/camera-latest.jpg` にもコピーする。顔サンプル登録は `uv run scripts/enroll-face-auth.py --count 5` で行う。撮影は `ARGOS_AUTH_FACE_CAPTURE_COMMAND` を使い、登録サンプルは `ARGOS_AUTH_FACE_SAMPLES_DIR` に保存する。登録時は顔が1つだけ検出された画像から、顔領域だけの指紋を保存する。顔検出にはOpenCVを使う。インストーラーはARGOS本体を `uv sync --extra face` で同期し、OpenCVを標準導入する。OpenCVが未導入、顔が検出できない、または複数の顔が検出された場合は顔認証を失敗扱いにして音声キーワードへフォールバックする。現段階の顔照合はローカル顔画像指紋の簡易比較で、しきい値は `ARGOS_AUTH_FACE_THRESHOLD`、必要一致数は `ARGOS_AUTH_FACE_MIN_MATCHES` で調整する。
 
 顔認証に失敗し、撮影画像が残っている場合は、画像を `/tmp/argos/camera-latest.jpg` へコピーし、ダッシュボードの通知に `/camera/latest.jpg` として表示する。
 
@@ -255,7 +284,7 @@ ARGOS は最初の発話処理時と正常終了時に最終利用時刻を `ARG
 撮影画像の向きは `ARGOS_AUTH_FACE_IMAGE_ROTATION` で補正する。指定できる値は `0`、`90`、`180`、`270` とする。
 
 起動後に未認証の場合は、まず「本人確認をしてください。」と案内する。`ARGOS_AUTH_WARNING_DELAY_SECONDS` の秒数が過ぎても未認証なら、警告音と本人確認案内を `ARGOS_AUTH_WARNING_INTERVAL_SECONDS` 間隔で繰り返す。`ARGOS_AUTH_ALERT_DELAY_SECONDS` を超えたら、ダッシュボード状態を `alert`、表示名を `警戒中` にして「警戒モードに入りました。本人確認してください。」と案内する。本人確認に成功したら警告音タイマーを停止する。本人確認の連続失敗がしきい値に達した場合も同じく警戒状態へ切り替える。
-PTT録音中は本人確認の繰り返し案内と警告音を再生しない。これにより、案内音声がマイクへ回り込んで音声キーワード認識を妨げることを避ける。ただし、一度でも本人確認に成功した後に有効期限切れなどで自動ロックされた状態でPTTボタンが押された（録音開始した）場合は、ボタンを押した瞬間に非同期で短い警告チャイム（警告音）を再生し、ユーザーにロック中であることを即座に通知する。起動直後の最初の本人確認時は、このボタン押下時の警告音再生は行わない。
+PTT録音中は本人確認の繰り返し案内と警告音を再生しない。これにより、案内音声がマイクへ回り込んで音声キーワード認識を妨げることを避ける。ただし、本人確認でロック中の状態でPTTボタンが押された（録音開始した）場合は、認証実績の有無にかかわらず、ボタンを押した瞬間に非同期で短い警告チャイム（警告音）を再生し、ユーザーにロック中であることを即座に通知する。
 
 本人確認の連続失敗がしきい値に達した場合は、ダッシュボードへ警戒通知を出し、`ARGOS_AUTH_ALERT_COMMAND` が設定されていれば外部コマンドを実行する。コマンドには `{source}`、`{message}`、`{image_path}` を埋め込める。Slack、SMS、電話などはこのコマンド先のスクリプトで実装する。
 
@@ -300,6 +329,8 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 
 Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
+`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `.env` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
+
 実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 
 ## 音声入力の設定
@@ -333,11 +364,21 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - ウェイクワード有効時は共有マイク入力を使い、PTT録音とウェイクワード監視が別々に `arecord` を起動しない
 - 推論窓は無音で前詰めして、起動直後でも `ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS` 秒ぶんの実音声が入った時点から判定する
 - 検知後は同じ音声ストリームから発話をWAV化し、既存のSTT、本人確認、エージェント処理へ渡す
-- ウェイクワード経由のSTT結果は、先頭に混ざった `アルゴス`、`アルコス`、`argos` などの呼びかけだけを除去してから本人確認と通常会話へ渡す。文中の同語は削除しない
+- ウェイクワード経由のSTT結果は、先頭に混ざった `アルゴス`、`アルコス`、`argos` などの呼びかけだけを除去してから本人確認と通常会話へ渡す。文中の同語は削除しない。呼びかけの表記ゆれは `ARGOS_WAKEWORD_ALIASES`（カンマ/全角読点/改行区切り）で上書きでき、別名のアシスタントにも転用できる。未設定なら組み込みの既定（アルゴス等）を使う
 - ウェイクワードは `ready` または `locked` の時だけ受け付ける。考え中、文字起こし中、録音中、読み上げ中の検知は処理中タスクやTTSをキャンセルせず無視する
 - ウェイクワード検知後の録音中にPTTを押した場合は、別録音を開始せず、そのウェイクワード発話をPTT解放まで継続する
 - 読み上げ中は自己音声による誤検知を避けるため、ウェイクワード検知を無視する
 - 読み上げ終了後も `ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS` 秒間はウェイクワード検知を無視し、検知バッファをクリアする。これはウェイクワードだけの自己音声対策で、PTT録音には影響しない
+- バージイン: `ARGOS_WAKEWORD_BARGEIN_ENABLED=true` の場合、読み上げ中（`speaking`）でもウェイクワードで割り込みを許し、進行中のTTSをキャンセルして録音へ切り替える。追いかけ受付とTTS直後クールダウンの制約もバージイン時は無視する。PTTのボタン割り込みに相当する手段をウェイクワードonly運用に与えるための機能。既定は無効
+  - 前提: 自己音声（スピーカー→マイクのエコー）で自分の「アルゴス」に反応してしまうため、マイク入力を音響エコーキャンセル(AEC)済みの仮想ソースに差し替えることが必須。実機検証ではPipeWire `module-echo-cancel`（WebRTC AEC3）でエコーを閾値下(約0.05)まで抑制でき、ユーザ発話（ダブルトーク）は残ることを確認済み。線形AEC（speexdsp）は不十分
+  - 二重防御: AECで消し切れない残響対策として、ARGOS自身がウェイクワードを含むチャンクを読み上げている最中（`SpeechController.is_speaking_wakeword()`）はバージインを抑止する
+  - ALSA直の橋渡し: ARGOSはTTSを`aplay`、ウェイクワード/STTを`arecord`で鳴らし、どちらもALSAを直接叩く（PipeWireを経由しない）。PipeWireのノード名`ec-source`/`ec-sink`（ハイフン）はそのままでは`aplay`/`arecord`が開けないため、ALSA↔PipeWireを橋渡しするALSA PCM`ec_source`/`ec_sink`（アンダースコア、`type pipewire`）を`/etc/asound.conf`に定義し、`.env`にはこの**ALSA名**を指定する。橋渡しには`pipewire-alsa`パッケージが要る。（`~/.asoundrc`はRaspberry Pi OS等で再起動時に消えることがあるため、システムの`/etc/asound.conf`に置く）
+  - 音切れ対策: エコーキャンセルを挟むとHDMI出力で2種のプチプチが出る。(a) 無音時にHDMIがアイドルでサスペンド↔再開を繰り返す音、(b) Pi 5でDMA headroomが小さく再生が間に合わずxrunする音。対策としてWirePlumberのドロップインで`alsa_output`に`session.suspend-timeout-seconds = 0`（サスペンド無効化）と`api.alsa.headroom = 8192`（DMAバッファ余裕）を設定する
+  - 音量: ARGOSのTTSは従来`aplay`でHDMIへ直出し＝PipeWire音量をバイパスして大音量だったが、`ec_sink`経由にするとTTS音量がPipeWireの既定sink音量に従う。そのため既定sink音量を100%に固定し、音量調整はARGOS内部のvolume設定で行う
+  - 導入手順: `scripts/setup-echo-cancel.sh` が (1) PipeWire永続ドロップイン（既定入出力に追従する`ec-source`/`ec-sink`ノード）、(2) `/etc/asound.conf`のブリッジPCM`ec_source`/`ec_sink`（sudo要）、(3) WirePlumberドロップイン（サスペンド無効化＋HDMI headroom増）、(4) 既定sink音量100%固定 を書き込む。`default`は変更しないため通常運用には影響しない。依存が不足していれば案内して中断し、`--install-deps`で`pipewire-alsa`と`libspa-0.2-modules`をapt導入できる。反映（`systemctl --user restart pipewire pipewire-pulse wireplumber`）後は`aplay -D ec_sink ...`で疎通確認してから、`.env`に`AUDIO_OUTPUT_DEVICE=ec_sink`/`AUDIO_INPUT_DEVICES=ec_source`/`ARGOS_WAKEWORD_BARGEIN_ENABLED=true`を設定する。デバイス名は環境で変わるためPipeWireの既定デバイスに紐付けて移植性を確保しており、Raspberry Pi OS / Ubuntu 共通。これらの設定はファイルとして永続するため再起動後も有効。車載やデスクトップUbuntuなど環境が変わる場合は同条件でエコー抑制を再計測する
+  - 元に戻す: `scripts/setup-echo-cancel.sh --revert` でPipeWireドロップイン、`/etc/asound.conf`のARGOSブロック、WirePlumberドロップインを削除する（`default`や既存設定、`.env`、既定sink音量には触れない）。反映は `systemctl --user restart pipewire pipewire-pulse wireplumber`。`.env`側で入出力デバイスや`ARGOS_WAKEWORD_BARGEIN_ENABLED`を変更していた場合はそちらも戻す
+- 応答の読み上げが終わったら、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけ「追いかけ受付窓」を開き、ウェイクワードを言い直さなくても続けて話せるようにする。窓の中で発話（RMSが `SILENCE_RMS_THRESHOLD` 以上）を検知したら、ウェイクワード無しでそのまま録音・処理する。追いかけ受付の録音は呼びかけを含まないため、STTの呼びかけ必須判定（`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD`）と先頭呼びかけ除去はスキップする
+- 追いかけ受付は本人確認済みのときだけ開く。ロック中は従来どおりウェイクワードと本人確認を求める。窓を開いている間はダッシュボード状態を `followup`（継続受付中）にして画面を起こしたままにし、無音のまま窓が締め切られたら待機表示へ戻す。窓の中で発話に応答したら、その応答のあとに再び窓を開き、会話が続く限り連続で受け付ける。PTT押下時は窓を閉じる。自己音声対策のクールダウンは追いかけ受付には適用しない
 - `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` の場合、ウェイクワード後録音のSTT結果が「アルゴス」などの呼びかけから始まる時だけ本文処理へ進む。自宅など通信遅延が小さく誤検知を強く抑えたい環境向けの設定とする
 - 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
 - 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う
@@ -347,7 +388,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 
 ウェイクワード無効時は従来どおり、PTT録音の開始時だけ `arecord` を起動する。
 
-PTT録音とウェイクワード後録音は、RMS音量だけでは破棄しない。車内では無発話時と小声発話時のRMS差が小さいため、録音後はSTTへ渡し、文字起こし結果が空の場合だけ通知する。
+PTT録音とウェイクワード後録音は、RMS音量だけでは破棄しない。車内では無発話時と小声発話時のRMS差が小さいため、録音後はSTTへ渡し、文字起こし結果が空の場合だけ通知する。ただし本人確認でロック中に文字起こしが空になった場合（PTT短押しなど）は通知せず、顔認証だけを試してロック解除を試みる。
 
 ## 読み上げ分割
 
@@ -393,7 +434,7 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
-ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。
+ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
 
 Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
 

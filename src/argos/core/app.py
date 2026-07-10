@@ -2,18 +2,27 @@
 
 from __future__ import annotations
 
+import base64
 import logging
-import queue
 import random
 import re
-import shutil
 import signal
+import tempfile
 import threading
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from argos.config import Settings
+from argos.config import (
+    DEFAULT_AGENT_PROGRESS_START_PHRASES,
+    DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
+    DEFAULT_WAKEWORD_ALIASES,
+    Settings,
+)
+from argos.core.auth_coordinator import AuthCoordinator
+from argos.core.periodic_monitor import PeriodicMonitor
+from argos.core.speech_controller import SpeechController
+from argos.core.status_controller import StatusController
 from argos.hardware.audio import AudioInputStream, AudioPlayer, Recorder, StreamRecorder, check_audio_level, cleanup_stale_recordings
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
@@ -30,10 +39,9 @@ from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
-from argos.services.startup import build_auth_warning_tone, build_startup_chime
+from argos.services.startup import build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.stt.whisper import FasterWhisperClient
-from argos.services.tts.chunker import TextChunker
 from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.kokoro import KokoroClient
@@ -42,28 +50,14 @@ from argos.services.wakeword import WakeWordListener
 
 
 log = logging.getLogger(__name__)
-FACE_AUTH_FAILURE_IMAGE_PATH = Path("/tmp/argos/camera-latest.jpg")
-FACE_AUTH_FAILURE_IMAGE_URL = "/camera/latest.jpg"
 
 
-CODEX_PROGRESS_START_PHRASES = (
-    "わかった。少し待ってね。",
-    "了解。やってみるね。",
-    "確認するね。",
-    "ちょっと待ってて。",
-    "今見てみるね。",
-    "すぐ調べるね。",
-)
-
-CODEX_PROGRESS_WAIT_PHRASES = (
-    "ちょっと時間かかってるけど、もう少し待ってね。",
-    "もう少しだけ待ってね。まだ確認中だよ。",
-    "まだ確認してる途中だよ。少し待ってね。",
-    "時間かかってるけど、もうちょっと待ってね。",
-)
+# 旧名の後方互換エイリアス。既定フレーズは config 側に集約した。
+CODEX_PROGRESS_START_PHRASES = DEFAULT_AGENT_PROGRESS_START_PHRASES
+CODEX_PROGRESS_WAIT_PHRASES = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
 
 
-class CodexProgressAnnouncer:
+class AgentProgressAnnouncer:
     """LLMエージェント待機中の進捗音声を管理する。"""
 
     def __init__(
@@ -73,23 +67,27 @@ class CodexProgressAnnouncer:
         interval_seconds: float,
         user_text: str = "",
         acknowledgement_client: AcknowledgementClient | None = None,
+        start_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_START_PHRASES,
+        wait_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
     ) -> None:
-        """読み上げ関数と通知間隔を初期化する。"""
+        """読み上げ関数と通知間隔、進捗フレーズを初期化する。"""
         self._speak_status = speak_status
         self._first_delay_seconds = first_delay_seconds
         self._interval_seconds = interval_seconds
         self._user_text = user_text
         self._acknowledgement_client = acknowledgement_client
+        self._start_phrases = start_phrases or DEFAULT_AGENT_PROGRESS_START_PHRASES
+        self._wait_phrases = wait_phrases or DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
         if self._acknowledgement_client is not None and self._user_text:
-            phrase = self._acknowledgement_client.select_phrase(self._user_text, CODEX_PROGRESS_START_PHRASES)
+            phrase = self._acknowledgement_client.select_phrase(self._user_text, self._start_phrases)
             self._speak_status(phrase)
         else:
-            self._speak_random(CODEX_PROGRESS_START_PHRASES)
+            self._speak_random(self._start_phrases)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -104,13 +102,17 @@ class CodexProgressAnnouncer:
         if self._stop.wait(self._first_delay_seconds):
             return
         while not self._stop.is_set():
-            self._speak_random(CODEX_PROGRESS_WAIT_PHRASES)
+            self._speak_random(self._wait_phrases)
             if self._stop.wait(self._interval_seconds):
                 return
 
     def _speak_random(self, phrases: tuple[str, ...]) -> None:
         """候補からランダムに1つ読み上げる。"""
         self._speak_status(random.choice(phrases))
+
+
+# 旧名の後方互換エイリアス。
+CodexProgressAnnouncer = AgentProgressAnnouncer
 
 
 class ArgosApp:
@@ -205,25 +207,51 @@ class ArgosApp:
             should_record_short_press=self._is_auth_locked,
         )
         self._shutdown = threading.Event()
-        self._auth_warning_stop = threading.Event()
-        self._auth_warning_thread: threading.Thread | None = None
-        self._cancel_lock = threading.Lock()
-        self._cancel_generation = 0
-        self._mute_condition = threading.Condition()
-        self._muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
+        self._status = StatusController(self._dashboard_state, self._auth.is_authenticated)
+        initial_muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
+        self._speech = SpeechController(
+            settings=settings,
+            audio=self._audio,
+            lcd=self._lcd,
+            tts_filter=self._tts_filter,
+            voicevox=self._voicevox,
+            kokoro=self._kokoro,
+            tts_cache=self._tts_cache,
+            dashboard_state=self._dashboard_state,
+            status=self._status,
+            voicevox_speakers_by_slot_key=self._voicevox_speakers_by_slot_key,
+            current_slot_key=lambda: _app_slot_key(self._agent.current_name, self._agent.current_provider),
+            is_current_slot=self._is_current_slot_key,
+            report_error=self._report_error,
+            shutdown=self._shutdown,
+            muted=initial_muted,
+        )
+        self._auth_coord = AuthCoordinator(
+            settings=settings,
+            auth=self._auth,
+            face_auth=self._face_auth,
+            security_alert=self._security_alert,
+            status=self._status,
+            dashboard_state=self._dashboard_state,
+            speak_status=lambda text: self._speech.speak_status(text),
+            audio=self._audio,
+            is_recording=lambda: self._recorder.is_recording,
+            report_error=self._report_error,
+            shutdown=self._shutdown,
+        )
         self._microphone_enabled = True
         self._pending_slot_speech: dict[str, str] = {}
         self._pending_speech_thread: threading.Thread | None = None
         self._agent_delivery_thread: threading.Thread | None = None
-        self._agent_usage_thread: threading.Thread | None = None
-        self._wifi_status_thread: threading.Thread | None = None
+        self._agent_usage_monitor: PeriodicMonitor | None = None
+        self._wifi_status_monitor: PeriodicMonitor | None = None
         self._worker: threading.Thread | None = None
         self._wakeword_listener: WakeWordListener | None = None
         self._wakeword_recording = threading.Event()
         self._wakeword_ptt_hold = threading.Event()
-        self._last_tts_finished_at = 0.0
         self._gpio: GpioPttInput | None = None
-        self._dashboard_state.set_audio_muted(self._muted)
+        self._wakeword_pattern = build_wakeword_pattern(settings.wakeword_aliases)
+        self._dashboard_state.set_audio_muted(initial_muted)
 
     def _create_audio_input_stream(self, settings: Settings, audio_devices: Iterable[str]) -> AudioInputStream | None:
         """ウェイクワード有効時にPTTと共有するマイク入力を作成する。"""
@@ -255,13 +283,18 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
             default_font_size=settings.dashboard_default_font_size,
             location_provider=settings.location_provider,
             remote_location_url=settings.remote_location_url,
             remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
+            upload_dir=Path(settings.dashboard_upload_dir).expanduser(),
+            upload_max_bytes=settings.dashboard_upload_max_bytes,
+            upload_keep=settings.dashboard_upload_keep,
             control_handler=self._handle_dashboard_control,
             event_handler=self._handle_dashboard_event,
+            terminal_handler=_TerminalGateway(self),
         )
 
     def run(self) -> None:
@@ -272,15 +305,15 @@ class ArgosApp:
         if self._dashboard_server is not None:
             self._dashboard_server.start()
         self._run_startup_sequence()
-        self._try_face_auth("起動時")
+        self._auth_coord.try_face_auth("起動時", self._status.current_generation())
         self._set_ready_or_locked()
         if not self._settings.dry_run and self._settings.ptt_gpio is not None:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         elif not self._settings.dry_run:
             log.info("ARGOS_PTT_GPIO が未設定のためGPIO PTT入力を無効化します")
         self._start_wakeword_listener()
-        self._announce_auth_required()
-        self._start_auth_status_monitor()
+        self._auth_coord.announce_required()
+        self._auth_coord.start_status_monitor()
         self._start_agent_delivery_monitor()
         self._start_agent_usage_monitor()
         self._start_wifi_status_monitor()
@@ -304,13 +337,13 @@ class ArgosApp:
                 name = self._agent.next_slot()
                 self._sync_agent_display()
                 self._set_ready_or_locked()
-                self._speak_status(f"{name}に切り替えました")
+                self._speech.speak_status(f"{name}に切り替えました")
                 continue
             if text == "/reset":
                 self._agent.reset_current()
-                self._speak_status("現在のセッションを新規会話にしました")
+                self._speech.speak_status("現在のセッションを新規会話にしました")
                 continue
-            if self._ensure_authenticated(text):
+            if self._auth_coord.ensure_authenticated(text, self._status.current_generation()):
                 self._greet_on_interaction()
                 self._handle_text(text)
 
@@ -371,9 +404,9 @@ class ArgosApp:
     def _run_startup_sequence(self) -> None:
         """起動状態を画面へ出し、設定に応じて起動音を鳴らす。"""
         if self._settings.startup_splash_enabled:
-            self._dashboard_state.set_status("booting", "起動中")
+            self._status.set_display("booting", "起動中")
         else:
-            self._dashboard_state.set_status("ready", "待機中")
+            self._status.set_display("ready", "待機中")
         if self._settings.startup_sound_enabled and not self._settings.dry_run:
             try:
                 self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
@@ -382,7 +415,7 @@ class ArgosApp:
                 self._report_error("起動音", exc)
         if self._settings.startup_splash_enabled and self._settings.startup_splash_seconds > 0:
             time.sleep(self._settings.startup_splash_seconds)
-        self._dashboard_state.set_status("ready", "待機中")
+        self._status.set_display("ready", "待機中")
 
     def _greet_on_interaction(self) -> None:
         """設定に応じて発話処理前の挨拶を読み上げる。"""
@@ -390,14 +423,11 @@ class ArgosApp:
             return
         greeting = self._greeting.greeting_on_interaction()
         if greeting:
-            self._speak_status(greeting)
+            self._speech.speak_status(greeting)
 
     def _set_ready_or_locked(self) -> None:
         """認証状態に応じて待機表示またはロック表示へ切り替える。"""
-        if self._auth.enabled and not self._auth.is_authenticated():
-            self._dashboard_state.set_status("locked", "ロック中")
-            return
-        self._dashboard_state.set_status("ready", "待機中")
+        self._status.force_resting()
 
     def _sync_agent_display(self) -> None:
         """現在のエージェントスロットをダッシュボード表示へ反映する。"""
@@ -409,16 +439,13 @@ class ArgosApp:
         """現在エージェントの利用枠を定期的に取得する。"""
         if not self._agent_usage.providers:
             return
-        self._agent_usage_thread = threading.Thread(target=self._run_agent_usage_monitor, daemon=True)
-        self._agent_usage_thread.start()
-
-    def _run_agent_usage_monitor(self) -> None:
-        """利用枠取得コマンドを一定間隔で実行する。"""
-        while not self._shutdown.is_set():
-            self._refresh_current_agent_usage()
-            interval = max(10.0, self._settings.agent_usage_refresh_seconds)
-            if self._shutdown.wait(interval):
-                return
+        self._agent_usage_monitor = PeriodicMonitor(
+            "agent-usage",
+            max(10.0, self._settings.agent_usage_refresh_seconds),
+            self._refresh_current_agent_usage,
+            self._shutdown,
+        )
+        self._agent_usage_monitor.start()
 
     def _publish_agent_usage_pending(self) -> None:
         """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
@@ -450,16 +477,13 @@ class ArgosApp:
         """Wi-Fi接続状態を定期的にダッシュボードへ反映する。"""
         if self._dashboard_server is None:
             return
-        self._wifi_status_thread = threading.Thread(target=self._run_wifi_status_monitor, daemon=True)
-        self._wifi_status_thread.start()
-
-    def _run_wifi_status_monitor(self) -> None:
-        """Wi-Fi接続状態を一定間隔で取得する。"""
-        while not self._shutdown.is_set():
-            self._refresh_wifi_status()
-            interval = max(2.0, self._settings.wifi_status_refresh_seconds)
-            if self._shutdown.wait(interval):
-                return
+        self._wifi_status_monitor = PeriodicMonitor(
+            "wifi-status",
+            max(2.0, self._settings.wifi_status_refresh_seconds),
+            self._refresh_wifi_status,
+            self._shutdown,
+        )
+        self._wifi_status_monitor.start()
 
     def _refresh_wifi_status(self) -> None:
         """現在のWi-Fi状態をダッシュボード状態へ反映する。"""
@@ -468,191 +492,32 @@ class ArgosApp:
         except Exception:
             log.exception("Wi-Fi状態の取得に失敗しました")
 
-    def _announce_auth_required(self) -> None:
-        """起動後に未認証なら本人確認を促す。"""
-        if self._auth.enabled and not self._auth.is_authenticated():
-            self._dashboard_state.set_status("locked", "ロック中")
-            self._dashboard_state.add_error_notification("本人確認", "本人確認をしてください。")
-            self._speak_status("本人確認をしてください。")
-            self._start_auth_warning_timer(self._settings.auth_warning_delay_seconds)
-
-    def _start_auth_status_monitor(self) -> None:
-        """認証期限切れを監視して待機表示をロック表示へ戻す。"""
-        if not self._auth.enabled:
-            return
-        thread = threading.Thread(target=self._run_auth_status_monitor, daemon=True)
-        thread.start()
-
-    def _run_auth_status_monitor(self) -> None:
-        """一定間隔で認証状態を画面表示へ反映する。"""
-        while not self._shutdown.wait(1.0):
-            self._refresh_auth_status()
-
-    def _refresh_auth_status(self) -> None:
-        """待機中に認証が切れていたらロック表示へ切り替える。"""
-        if not self._auth.enabled or self._auth.is_authenticated():
-            return
-        status = self._dashboard_state.snapshot()["status"]["code"]
-        if status == "ready":
-            self._dashboard_state.set_status("locked", "ロック中")
-
-    def _ensure_authenticated(self, transcript: str) -> bool:
-        """未認証時は音声キーワードだけを検証し、エージェント送信を止める。"""
-        if self._auth.is_authenticated():
-            self._auth.mark_activity()
-            self._stop_auth_warning()
-            return True
-        if self._try_face_auth("顔認証"):
-            return True
-        result = self._auth.verify_keyword(transcript)
-        log.info("本人確認キーワード照合: transcript=%r authenticated=%s message=%s", transcript, result.authenticated, result.message)
-        if result.authenticated:
-            self._stop_auth_warning()
-            self._dashboard_state.set_status("ready", "待機中")
-            self._speak_status(result.message)
-            return False
-        self._dashboard_state.set_status("locked", "ロック中")
-        self._dashboard_state.add_error_notification("本人確認", result.message)
-        if result.alert:
-            self._dispatch_security_alert("本人確認", "本人確認に複数回失敗しました。")
-        return False
-
-    def _try_face_auth(self, source: str) -> bool:
-        """顔認証が有効なら照合し、成功時は認証状態を延長する。"""
-        if not self._auth.enabled or not self._face_auth.enabled or self._auth.is_authenticated():
-            return False
-        self._dashboard_state.set_status("authenticating", "本人確認中")
-        result = self._face_auth.verify()
-        if result.authenticated:
-            self._auth.mark_activity()
-            self._stop_auth_warning()
-            self._dashboard_state.set_status("ready", "待機中")
-            return True
-        detail = result.message
-        if result.score is not None:
-            detail = f"{detail} スコア={result.score}"
-        self._report_face_auth_failure(source, detail, getattr(result, "image_path", ""))
-        return False
-
-    def _report_face_auth_failure(self, source: str, detail: str, image_path: str = "") -> None:
-        """顔認証失敗を、撮影画像があれば画像付き通知として表示する。"""
-        image_url = ""
-        if image_path:
-            try:
-                source_path = Path(image_path)
-                if source_path.exists():
-                    FACE_AUTH_FAILURE_IMAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(source_path, FACE_AUTH_FAILURE_IMAGE_PATH)
-                    image_url = f"{FACE_AUTH_FAILURE_IMAGE_URL}?t={int(time.time() * 1000)}"
-            except OSError:
-                log.exception("顔認証失敗画像の通知コピーに失敗しました")
-        if image_url:
-            self._dashboard_state.add_notification(
-                title=f"{source} エラー",
-                text=detail,
-                source=source,
-                priority="high",
-                image_url=image_url,
-            )
-            return
-        self._dashboard_state.add_error_notification(source, detail)
-
-    def _dispatch_security_alert(self, source: str, message: str, image_path: str = "") -> None:
-        """警戒通知をダッシュボードと外部アクションへ送る。"""
-        self._dashboard_state.set_status("alert", "警戒中")
-        self._dashboard_state.add_error_notification("警戒", message)
-        self._start_auth_warning_timer(0, force_alert=True)
-        result = self._security_alert.dispatch(source, message, image_path)
-        if result.executed and not result.succeeded:
-            self._dashboard_state.add_error_notification("警戒通知", result.message)
-
-    def _start_auth_warning_timer(self, delay_seconds: float, force_alert: bool = False) -> None:
-        """未認証が続いた場合に警告音を繰り返すタイマーを開始する。"""
-        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
-            return
-        if self._auth_warning_thread is not None and self._auth_warning_thread.is_alive():
-            return
-        self._auth_warning_stop.clear()
-        self._auth_warning_thread = threading.Thread(
-            target=self._run_auth_warning,
-            args=(delay_seconds, force_alert),
-            daemon=True,
-        )
-        self._auth_warning_thread.start()
-
-    def _run_auth_warning(self, delay_seconds: float, force_alert: bool) -> None:
-        """本人確認が終わるまで警告音を繰り返す。"""
-        if self._auth_warning_stop.wait(max(0.0, delay_seconds)):
-            return
-        started_at = time.monotonic()
-        alert_announced = False
-        while not self._auth_warning_stop.is_set() and not self._auth.is_authenticated():
-            if self._recorder.is_recording:
-                if self._auth_warning_stop.wait(0.2):
-                    return
-                continue
-            alert_mode = force_alert or time.monotonic() - started_at + delay_seconds >= self._settings.auth_alert_delay_seconds
-            if alert_mode:
-                self._dashboard_state.set_status("alert", "警戒中")
-                text = "警戒モードに入りました。本人確認してください。" if not alert_announced else "警戒モードです。本人確認してください。"
-                alert_announced = True
-            else:
-                self._dashboard_state.set_status("locked", "ロック中")
-                text = "本人確認してください。"
-            self._play_auth_warning_sound()
-            self._speak_status(text)
-            if self._auth_warning_stop.wait(self._settings.auth_warning_interval_seconds):
-                return
-
-    def _stop_auth_warning(self) -> None:
-        """本人確認完了時に警告音タイマーを止める。"""
-        self._auth_warning_stop.set()
-        if self._auth_warning_thread is not None and self._auth_warning_thread is not threading.current_thread():
-            self._auth_warning_thread.join(timeout=2)
-
-    def _play_auth_warning_sound(self) -> None:
-        """本人確認失敗時の警告音を鳴らす。"""
-        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
-            return
-        try:
-            self._audio.play_wav(build_auth_warning_tone(self._settings.voicevox_sample_rate))
-        except Exception as exc:
-            log.exception("本人確認警告音の再生に失敗しました")
-            self._report_error("本人確認警告音", exc)
-
-    def _play_auth_lock_warning(self) -> None:
-        """本人確認ロック中の警告音を非同期に再生する。"""
-        if self._settings.dry_run or not self._settings.auth_warning_sound_enabled:
-            return
-        try:
-            tone = build_auth_warning_tone(self._settings.voicevox_sample_rate)
-            threading.Thread(target=self._audio.play_wav, args=(tone,), daemon=True).start()
-        except Exception as exc:
-            log.exception("本人確認ロック警告音の再生に失敗しました")
-            self._report_error("本人確認警告音", exc)
-
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         if not self._is_microphone_enabled():
-            log.info("マイクOFFのためPTT押下を無視します")
+            # マイクOFFでも録音・認証はしないが、スクリーンセーバーだけは解除する。
+            log.info("マイクOFFのためPTT押下を無視します（画面のみ起こす）")
+            self._dashboard_state.wake_display()
             return
         log.info("PTT ON: 録音開始")
+        if self._wakeword_listener is not None:
+            self._wakeword_listener.disarm_followup()
         if self._wakeword_recording.is_set():
             log.info("ウェイクワード録音中のPTT押下を発話継続として扱います")
             self._wakeword_ptt_hold.set()
+            generation = self._cancel_active_audio()
             if self._is_auth_locked():
-                self._dashboard_state.set_status("auth_listening", "本人確認録音中")
+                self._status.set(generation, "auth_listening", "本人確認録音中")
             else:
-                self._dashboard_state.set_status("listening", "録音中")
-            self._cancel_active_audio()
+                self._status.set(generation, "listening", "録音中")
             return
+        generation = self._cancel_active_audio()
         if self._is_auth_locked():
-            self._dashboard_state.set_status("auth_listening", "本人確認録音中")
-            if self._auth.has_authenticated_once:
-                self._play_auth_lock_warning()
+            self._status.set(generation, "auth_listening", "本人確認録音中")
+            # ロック中はPTT押下のたびにアラート音を鳴らす（認証実績の有無に依らない）。
+            self._auth_coord.play_lock_warning()
         else:
-            self._dashboard_state.set_status("listening", "録音中")
-        self._cancel_active_audio()
+            self._status.set(generation, "listening", "録音中")
         self._recorder.start()
 
     def _on_ptt_release(self) -> None:
@@ -665,10 +530,11 @@ class ArgosApp:
             log.info("ウェイクワード録音のPTT継続を解除します")
             self._wakeword_ptt_hold.clear()
             return
+        generation = self._status.current_generation()
         if self._is_auth_locked():
-            self._dashboard_state.set_status("authenticating", "本人確認中")
+            self._status.set(generation, "authenticating", "本人確認中")
         else:
-            self._dashboard_state.set_status("transcribing", "文字起こし中")
+            self._status.set(generation, "transcribing", "文字起こし中")
         self._worker = threading.Thread(target=self._process_recording, daemon=True)
         self._worker.start()
 
@@ -679,7 +545,7 @@ class ArgosApp:
         self._sync_agent_display()
         self._set_ready_or_locked()
         log.info("エージェントスロット切替: %s", name)
-        self._speak_status(f"{name}に切り替えました")
+        self._speech.speak_status(f"{name}に切り替えました")
         self._start_pending_slot_response()
 
     def _on_cancel(self) -> None:
@@ -718,6 +584,8 @@ class ArgosApp:
                 score_log_path=self._settings.wakeword_score_log_path,
                 on_detected=self._on_wakeword_detected,
                 on_recording_ready=self._on_wakeword_recording_ready,
+                on_followup_expired=self._on_wakeword_followup_expired,
+                followup_seconds=self._settings.wakeword_followup_seconds,
             )
             self._wakeword_listener.start()
             self._dashboard_state.add_notification("ウェイクワード", "ウェイクワード監視を開始しました。", source="ARGOS")
@@ -725,8 +593,12 @@ class ArgosApp:
             log.exception("ウェイクワード監視を開始できません")
             self._report_error("ウェイクワード", exc)
 
-    def _on_wakeword_detected(self) -> bool:
-        """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。"""
+    def _on_wakeword_detected(self, followup: bool = False) -> bool:
+        """ウェイクワード検知時に画面状態と音声出力を録音向けへ切り替える。
+
+        followup=True は追いかけ受付窓の中でウェイクワード無しに検知した発話を表す。
+        この場合は継続受付状態からの遷移を許し、TTS直後のクールダウンも無視する。
+        """
         if self._shutdown.is_set():
             return False
         if not self._is_microphone_enabled():
@@ -735,42 +607,78 @@ class ArgosApp:
         if self._recorder.is_recording:
             log.info("PTT録音中のためウェイクワード検知を無視します")
             return False
+        # バージイン: AEC前提でTTS読み上げ中でも割り込みを許可する（追いかけ受付は対象外）。
+        bargein = self._settings.wakeword_bargein_enabled and not followup
+        acceptable_status = ["ready", "locked"]
+        if followup:
+            acceptable_status.append("followup")
+        if bargein:
+            acceptable_status.append("speaking")
         status_code = self._dashboard_state.snapshot().get("status", {}).get("code")
-        if status_code not in ("ready", "locked"):
+        if status_code not in acceptable_status:
             log.info("受付可能状態ではないためウェイクワード検知を無視します: status=%s", status_code)
             return False
         if getattr(self._audio, "is_playing", False) or status_code == "speaking":
-            log.info("読み上げ中のためウェイクワード検知を無視します")
-            return False
-        if self._is_wakeword_tts_cooldown_active():
+            if not bargein:
+                log.info("読み上げ中のためウェイクワード検知を無視します")
+                return False
+            if self._speech.is_speaking_wakeword():
+                log.info("自己ウェイクワード読み上げ中のためバージインを抑止します")
+                return False
+            log.info("バージイン: 読み上げを止めて録音へ切り替えます")
+        if not followup and not bargein and self._speech.is_tts_cooldown_active():
             log.info("読み上げ直後のためウェイクワード検知を無視します")
             return False
-        log.info("ウェイクワード検知を受け取りました")
+        log.info("追いかけ受付の発話を受け取りました" if followup else "ウェイクワード検知を受け取りました")
         self._wakeword_recording.set()
         self._wakeword_ptt_hold.clear()
+        generation = self._cancel_active_audio()
         if self._is_auth_locked():
-            self._dashboard_state.set_status("auth_listening", "本人確認録音中")
+            self._status.set(generation, "auth_listening", "本人確認録音中")
         else:
-            self._dashboard_state.set_status("listening", "録音中")
-        self._cancel_active_audio()
+            self._status.set(generation, "listening", "録音中")
         return True
 
-    def _on_wakeword_recording_ready(self, wav_path: str) -> None:
+    def _on_wakeword_recording_ready(self, wav_path: str, followup: bool = False) -> None:
         """ウェイクワード後に録音されたWAVを処理スレッドへ渡す。"""
         self._wakeword_recording.clear()
         self._wakeword_ptt_hold.clear()
         if self._shutdown.is_set() or not self._is_microphone_enabled():
             self._remove_recording_file(wav_path)
             return
+        generation = self._status.current_generation()
         if self._is_auth_locked():
-            self._dashboard_state.set_status("authenticating", "本人確認中")
+            self._status.set(generation, "authenticating", "本人確認中")
         else:
-            self._dashboard_state.set_status("transcribing", "文字起こし中")
-        self._worker = threading.Thread(target=self._process_wakeword_recording, args=(wav_path,), daemon=True)
+            self._status.set(generation, "transcribing", "文字起こし中")
+        self._worker = threading.Thread(
+            target=self._process_wakeword_recording, args=(wav_path, followup), daemon=True
+        )
         self._worker.start()
 
-    def _process_wakeword_recording(self, wav_path: str) -> None:
+    def _on_wakeword_followup_expired(self) -> None:
+        """追いかけ受付窓が無音のまま締め切られたら通常の待機表示へ戻す。"""
+        if self._shutdown.is_set():
+            return
+        if self._dashboard_state.status_code() == "followup":
+            self._set_ready_or_locked()
+
+    def _arm_followup_window(self) -> None:
+        """応答のTTS後、認証済みなら追いかけ受付窓を開いて継続受付表示にする。"""
+        if self._wakeword_listener is None or self._settings.wakeword_followup_seconds <= 0:
+            return
+        if self._shutdown.is_set() or not self._is_microphone_enabled() or self._is_auth_locked():
+            return
+        # 直後に別の録音が始まっていたら継続受付窓は開かない
+        if self._recorder.is_recording or self._wakeword_recording.is_set():
+            return
+        self._wakeword_listener.arm_followup()
+        self._status.set(self._status.current_generation(), "followup", "継続受付中")
+
+    def _process_wakeword_recording(self, wav_path: str, followup: bool = False) -> None:
         """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。"""
+        token = self._status.current_generation()
+        handled = False
         try:
             level = check_audio_level(wav_path)
             log.info("ウェイクワード後録音音量: RMS=%.1f", level)
@@ -782,57 +690,158 @@ class ArgosApp:
                 return
             if not transcript:
                 log.info("ウェイクワード後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                # ロック中なら無言でも顔認証で解除を試す（PTT短押し想定）。
+                if self._is_auth_locked():
+                    self._auth_coord.ensure_authenticated("", token)
+                    return
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
-            if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript):
-                log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
-                self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
-                return
-            transcript = _strip_leading_wakeword(transcript)
-            if not transcript:
-                log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
-                self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
-                return
-            if self._ensure_authenticated(transcript):
+            # 追いかけ受付ではウェイクワードを言っていないため、呼びかけ必須/除去は行わない
+            if not followup:
+                if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
+                    log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
+                    self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
+                    return
+                transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
+                if not transcript:
+                    log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                    self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
+                    return
+            if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
                 self._handle_text(transcript)
+                handled = True
         except Exception as exc:
             log.exception("ウェイクワード後の音声処理に失敗しました")
             self._report_error("録音", exc)
-            self._speak_status(f"処理に失敗しました。{exc}")
+            self._speech.speak_status(f"処理に失敗しました。{exc}")
         finally:
             self._wakeword_recording.clear()
             self._wakeword_ptt_hold.clear()
             self._remove_recording_file(wav_path)
-            self._set_ready_or_locked()
+            self._status.finish(token)
+        # 応答が完了したら、次の発話を待つ追いかけ受付窓を開く（継続会話）
+        if handled:
+            self._arm_followup_window()
 
     def _should_continue_wakeword_recording(self) -> bool:
         """PTT押下でウェイクワード後録音を継続するか返す。"""
         return self._wakeword_ptt_hold.is_set()
 
-    def _is_wakeword_tts_cooldown_active(self) -> bool:
-        """TTS終了直後の自己音声対策クールダウン中か返す。"""
-        cooldown = max(0.0, self._settings.wakeword_tts_cooldown_seconds)
-        if cooldown <= 0:
-            return False
-        return time.monotonic() - self._last_tts_finished_at < cooldown
-
-    def _mark_tts_finished(self) -> None:
-        """ウェイクワード自己検知を避けるためTTS終了時刻を記録する。"""
-        self._last_tts_finished_at = time.monotonic()
-
     def _cancel_active_audio(self) -> int:
-        """再生中と未再生の読み上げチャンクを無効化し、キャンセル世代を返す。"""
-        with self._cancel_lock:
-            self._cancel_generation += 1
-            generation = self._cancel_generation
+        """再生中と未再生の読み上げチャンクを無効化し、新しい世代を返す。"""
+        generation = self._status.invalidate()
         self._audio.cancel()
         return generation
 
     def _current_cancel_generation(self) -> int:
-        """現在のキャンセル世代を返す。"""
-        with self._cancel_lock:
-            return self._cancel_generation
+        """現在の世代トークンを返す。"""
+        return self._status.current_generation()
+
+    def _terminal_list_slots(self) -> dict[str, object]:
+        """PiZero端末向けにエージェントスロット一覧と現在スロットを返す。"""
+        current_name = self._agent.current_name
+        current_provider = self._agent.current_provider
+        slots = [
+            {
+                "name": slot.name,
+                "provider": slot.provider,
+                "active": slot.name == current_name and slot.provider == current_provider,
+            }
+            for slot in self._settings.agent_slots
+        ]
+        return {"slots": slots, "current": {"name": current_name, "provider": current_provider}}
+
+    def _terminal_next_slot(self) -> dict[str, object]:
+        """PiZero端末のダブルクリックに対応して次のスロットへ巡回切替する。
+
+        スロットは母艦・ダッシュボード・端末で共有するため、切替は目の前の端末にも
+        反映する。母艦側では読み上げず、表示だけ更新して切替後の現在スロットを返す。
+        """
+        name = self._agent.next_slot()
+        self._sync_agent_display()
+        log.info("端末操作でエージェントスロット切替: %s", name)
+        return self._terminal_list_slots()
+
+    def _terminal_process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
+        """録音WAVをSTT→エージェント→TTSで処理し、SSE用イベントを順に生成する。
+
+        母艦のスピーカーでは再生せず、応答テキストの差分と文単位の合成WAVを
+        端末へ返す。発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
+        """
+        slot_name = self._agent.current_name
+        slot_provider = self._agent.current_provider
+        slot_key = _app_slot_key(slot_name, slot_provider)
+        # 端末ターンの進行を母艦ダッシュボードの状態枠へも反映する。
+        token = self._status.current_generation()
+        tmp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
+                tmp.write(wav_bytes)
+                tmp_path = tmp.name
+            self._status.set(token, "transcribing", "文字起こし中")
+            try:
+                transcript = self._transcribe_wav(tmp_path)
+            except Exception as exc:
+                log.exception("端末ターンの文字起こしに失敗しました")
+                self._report_error("文字起こし", exc)
+                yield {"event": "error", "message": "文字起こしに失敗しました"}
+                return
+            if not transcript:
+                log.info("端末ターンの文字起こし結果が空でした")
+                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                yield {"event": "error", "message": "音声を認識できませんでした"}
+                return
+            yield {"event": "transcript", "text": transcript}
+            log.info("端末ユーザ発話: %s", transcript)
+            # ローカル録音と同じ本人確認ゲートを通す。ロック中は発話を本人確認扱いにし、
+            # 音声キーワード一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
+            if not self._auth_coord.ensure_authenticated(transcript, token):
+                if self._auth_coord.is_locked():
+                    yield {"event": "error", "message": "本人確認が必要です。合言葉を話してね。"}
+                else:
+                    # キーワードで解除できたが、この発話自体は本人確認用なのでエージェントへは渡さない。
+                    yield {"event": "text", "delta": "本人確認しました。"}
+                    yield {"event": "done", "text": "本人確認しました。"}
+                return
+            self._status.set(token, "thinking", "考え中")
+            self._dashboard_state.add_message("user", transcript)
+            self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
+            dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
+            seq = 0
+            full_response = ""
+            try:
+                for kind, payload in self._speech.synthesize_response_stream(
+                    self._agent.ask_stream(transcript), slot_key
+                ):
+                    if kind == "text":
+                        text = str(payload)
+                        if not full_response:
+                            self._status.set(token, "speaking", "読み上げ中")
+                        full_response += text
+                        self._dashboard_state.append_message(dashboard_message_id, text)
+                        yield {"event": "text", "delta": text}
+                    else:
+                        encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
+                        yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
+                        seq += 1
+                log.info("端末エージェント応答: %s", full_response[:300])
+                yield {"event": "done", "text": full_response}
+            except RunnerSlotBusyError as exc:
+                log.info("端末ターンでエージェントスロットが処理中です: %s", exc)
+                yield {"event": "error", "message": "前の応答がまだ処理中です"}
+            except Exception as exc:
+                log.exception("端末ターンのエージェント応答取得に失敗しました")
+                self._report_error("エージェント", exc)
+                yield {"event": "error", "message": "エージェント応答の取得に失敗しました"}
+            finally:
+                self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
+                self._dashboard_state.finish_message(dashboard_message_id)
+        finally:
+            # 全経路で母艦の状態枠を休止（待機中）へ戻す。stale世代なら無視される。
+            self._status.finish(token)
+            if tmp_path:
+                self._remove_recording_file(tmp_path)
 
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
@@ -842,7 +851,7 @@ class ArgosApp:
         elif action == "unmute":
             self._set_muted(False)
         elif action == "toggle_mute":
-            self._set_muted(not self._is_muted())
+            self._set_muted(not self._speech.is_muted())
         elif action == "set_volume":
             volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
             self._dashboard_state.set_audio_volume(volume)
@@ -863,14 +872,14 @@ class ArgosApp:
                 source="ARGOS",
             )
             return {
-                "muted": self._is_muted(),
+                "muted": self._speech.is_muted(),
                 "volume": self._audio.volume,
                 "session_reset": True,
                 "slot": {"name": slot_name, "provider": slot_provider},
             }
         else:
             raise ValueError(f"未対応の操作です: {action}")
-        return {"muted": self._is_muted(), "volume": self._audio.volume, "microphone_enabled": self._is_microphone_enabled()}
+        return {"muted": self._speech.is_muted(), "volume": self._audio.volume, "microphone_enabled": self._is_microphone_enabled()}
 
     def _handle_dashboard_event(self, payload: dict[str, object], response: dict[str, object]) -> None:
         """外部表示イベントに応じて通知音や読み上げを行う。"""
@@ -897,7 +906,7 @@ class ArgosApp:
             phrase = "。".join(part for part in (title, text) if part)
             if phrase:
                 self._wait_for_notification_audio_slot()
-                self._speak_status(phrase)
+                self._speech.speak_status(phrase)
 
     def _wait_for_notification_audio_slot(self) -> None:
         """通知音声が他の読み上げと重ならないよう、再生中なら待つ。"""
@@ -906,6 +915,7 @@ class ArgosApp:
 
     def _process_recording(self) -> None:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
+        token = self._status.current_generation()
         wav_path = ""
         try:
             wav_path = self._recorder.stop()
@@ -919,19 +929,24 @@ class ArgosApp:
                 return
             if not transcript:
                 log.info("文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                # ロック中なら無言でも顔認証で解除を試す（PTT短押し想定）。
+                if self._is_auth_locked():
+                    self._auth_coord.ensure_authenticated("", token)
+                    return
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
-            if self._ensure_authenticated(transcript):
+                return
+            if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
                 self._handle_text(transcript)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
             self._report_error("録音", exc)
-            self._speak_status(f"処理に失敗しました。{exc}")
+            self._speech.speak_status(f"処理に失敗しました。{exc}")
         finally:
             if wav_path:
                 self._remove_recording_file(wav_path)
             self._button.mark_idle()
-            self._set_ready_or_locked()
+            self._status.finish(token)
 
     def _remove_recording_file(self, wav_path: str) -> None:
         """処理済みの録音ファイルを削除する。"""
@@ -961,11 +976,11 @@ class ArgosApp:
         handle_generation = self._current_cancel_generation()
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
-        self._dashboard_state.set_status("thinking", "考え中")
-        announcer = self._start_codex_progress(text, slot_key)
+        self._status.set(handle_generation, "thinking", "考え中")
+        announcer = self._start_agent_progress(text, slot_key)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
-            response = self._speak_response_stream(
+            response = self._speech.speak_response_stream(
                 self._stop_progress_on_first_delta(self._agent.ask_stream(text), announcer),
                 dashboard_message_id=dashboard_message_id,
                 slot_key=slot_key,
@@ -977,120 +992,49 @@ class ArgosApp:
                 self._dashboard_state.add_notification(f"{slot_name} 応答完了", "スロットを切り替えると読み上げます。", source="ARGOS")
         except RunnerSlotBusyError as exc:
             log.info("エージェントスロットが処理中です: %s", exc)
-            self._speak_status("前の応答がまだ処理中だよ。少し待ってね。")
+            self._speech.speak_status("前の応答がまだ処理中だよ。少し待ってね。")
         except Exception as exc:
             log.exception("エージェント応答の取得に失敗しました")
             self._report_error("エージェント", exc)
             exc_msg = str(exc).lower()
             if "rate limit" in exc_msg or "quota" in exc_msg or "limit" in exc_msg:
-                self._speak_status("リミット制限に達しました。")
+                self._speech.speak_status("リミット制限に達しました。")
             else:
-                self._speak_status("エージェントの応答取得に失敗しました。")
+                self._speech.speak_status("エージェントの応答取得に失敗しました。")
         finally:
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
             self._dashboard_state.finish_message(dashboard_message_id)
             if announcer is not None:
                 announcer.stop()
-            if self._current_cancel_generation() == handle_generation:
-                self._set_ready_or_locked()
+            self._status.finish(handle_generation)
 
-    def _speak_response(self, text: str) -> None:
-        """エージェント応答を tts-filter と TTS に通して再生する。"""
-        if not text:
-            return
-        if self._is_muted():
-            self._show_lcd(text)
-            return
-        if self._settings.dry_run:
-            print(f"ARGOS> {text}")
-            return
-        self._show_lcd(text)
-        try:
-            normalized = self._tts_filter.normalize(text)
-        except Exception as exc:
-            log.exception("TTSフィルターに失敗しました")
-            self._report_error("TTSフィルター", exc)
-            return
-        try:
-            wav_data = self._synthesize_tts(normalized)
-        except Exception as exc:
-            log.exception("TTSに失敗しました")
-            return
-        try:
-            self._wake_dashboard_display()
-            self._audio.play_wav(wav_data)
-            self._mark_tts_finished()
-        except Exception as exc:
-            log.exception("音声再生に失敗しました")
-            self._report_error("音声再生", exc)
-
-    def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "", slot_key: str = "") -> str:
-        """応答差分を句読点で分割し、TTS へ順次投入する。"""
-        full_response = ""
-        chunker = TextChunker(self._settings.tts_delimiters)
-        if self._settings.dry_run:
-            if not self._is_muted():
-                print("ARGOS> ", end="", flush=True)
-            for delta in deltas:
-                full_response += delta
-                if dashboard_message_id:
-                    self._dashboard_state.append_message(dashboard_message_id, delta)
-                if not self._is_muted():
-                    print(delta, end="", flush=True)
-            if not self._is_muted():
-                print()
-            return full_response
-
-        stream_generation = self._current_cancel_generation()
-        tts_queue: queue.Queue[str | None] = queue.Queue()
-        worker = threading.Thread(target=self._tts_worker, args=(tts_queue, stream_generation, slot_key), daemon=True)
-        worker.start()
-
-        for delta in deltas:
-            full_response += delta
-            if dashboard_message_id:
-                self._dashboard_state.append_message(dashboard_message_id, delta)
-            log.info("エージェント応答差分: %s", delta[:120])
-            for chunk in chunker.push(delta):
-                if self._current_cancel_generation() != stream_generation:
-                    log.info("キャンセル済みのため TTS チャンクを読み上げません: %s", chunk[:80])
-                    continue
-                if slot_key and not self._is_current_slot_key(slot_key):
-                    log.info("非表示スロットのため TTS チャンクを読み上げません: %s", chunk[:80])
-                    continue
-                log.info("TTS チャンク投入: %s", chunk[:80])
-                tts_queue.put(chunk)
-
-        rest = chunker.flush()
-        if rest and self._current_cancel_generation() == stream_generation and (not slot_key or self._is_current_slot_key(slot_key)):
-            log.info("TTS 最終チャンク投入: %s", rest[:80])
-            tts_queue.put(rest)
-        tts_queue.put(None)
-        worker.join(timeout=300)
-        return full_response
-
-    def _start_codex_progress(self, user_text: str = "", slot_key: str = "") -> CodexProgressAnnouncer | None:
+    def _start_agent_progress(self, user_text: str = "", slot_key: str = "") -> AgentProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
-        if not self._settings.codex_progress_voice:
+        if not self._settings.agent_progress_voice:
             return None
         def speak_if_current(text: str) -> None:
             """現在スロットの待機通知だけ読み上げる。"""
             if not slot_key or self._is_current_slot_key(slot_key):
-                self._speak_status(text)
-        announcer = CodexProgressAnnouncer(
+                self._speech.speak_status(text)
+        announcer = AgentProgressAnnouncer(
             speak_status=speak_if_current,
-            first_delay_seconds=self._settings.codex_progress_first_delay_seconds,
-            interval_seconds=self._settings.codex_progress_interval_seconds,
+            first_delay_seconds=self._settings.agent_progress_first_delay_seconds,
+            interval_seconds=self._settings.agent_progress_interval_seconds,
             user_text=user_text,
             acknowledgement_client=self._acknowledgement,
+            start_phrases=self._settings.agent_progress_start_phrases,
+            wait_phrases=self._settings.agent_progress_wait_phrases,
         )
         announcer.start()
         return announcer
 
+    # 旧名の後方互換エイリアス。
+    _start_codex_progress = _start_agent_progress
+
     def _stop_progress_on_first_delta(
         self,
         deltas: Iterable[str],
-        announcer: CodexProgressAnnouncer | None,
+        announcer: AgentProgressAnnouncer | None,
     ) -> Iterable[str]:
         """エージェント本文が届いた時点で進捗音声を止める。"""
         stopped = False
@@ -1100,166 +1044,25 @@ class ArgosApp:
                 stopped = True
             yield delta
 
-    def _tts_worker(self, tts_queue: queue.Queue[str | None], generation: int, slot_key: str = "") -> None:
-        """TTS チャンクを順に合成して再生する。"""
-        while True:
-            chunk = tts_queue.get()
-            if chunk is None:
-                return
-            if self._current_cancel_generation() != generation:
-                self._drain_tts_queue(tts_queue)
-                return
-            if slot_key and not self._is_current_slot_key(slot_key):
-                self._drain_tts_queue(tts_queue)
-                return
-            if not self._wait_until_unmuted(generation):
-                self._drain_tts_queue(tts_queue)
-                return
-            self._show_lcd(chunk)
-            self._dashboard_state.set_status("speaking", "読み上げ中")
-            try:
-                normalized = self._tts_filter.normalize(chunk)
-            except Exception as exc:
-                log.exception("TTSフィルターに失敗しました")
-                self._report_error("TTSフィルター", exc)
-                self._drain_tts_queue(tts_queue)
-                return
-            if self._current_cancel_generation() != generation:
-                self._drain_tts_queue(tts_queue)
-                return
-            try:
-                wav_data = self._synthesize_tts(normalized, slot_key)
-            except Exception as exc:
-                log.exception("TTSに失敗しました")
-                self._drain_tts_queue(tts_queue)
-                return
-            if self._current_cancel_generation() != generation:
-                self._drain_tts_queue(tts_queue)
-                return
-            if not self._wait_until_unmuted(generation):
-                self._drain_tts_queue(tts_queue)
-                return
-            try:
-                self._wake_dashboard_display()
-                self._audio.play_wav(wav_data)
-                self._mark_tts_finished()
-            except Exception as exc:
-                log.exception("音声再生に失敗しました")
-                self._report_error("音声再生", exc)
-                self._drain_tts_queue(tts_queue)
-                return
-            if self._current_cancel_generation() != generation:
-                self._drain_tts_queue(tts_queue)
-                return
-
-    def _drain_tts_queue(self, tts_queue: queue.Queue[str | None]) -> None:
-        """キャンセル済みの TTS キューに残ったチャンクを破棄する。"""
-        while True:
-            try:
-                tts_queue.get_nowait()
-            except queue.Empty:
-                return
-
-    def _speak_status(self, text: str) -> None:
-        """短い状態メッセージを読み上げる。"""
-        log.info("状態通知: %s", text)
-        self._show_lcd(text)
-        if self._is_muted():
-            return
-        if self._settings.dry_run:
-            print(f"ARGOS> {text}")
-            return
-        try:
-            normalized = self._tts_filter.normalize(text)
-        except Exception as exc:
-            log.exception("状態通知のTTSフィルターに失敗しました")
-            self._report_error("TTSフィルター", exc)
-            return
-        try:
-            wav_data = self._synthesize_tts(normalized)
-        except Exception as exc:
-            log.exception("状態通知のTTSに失敗しました")
-            return
-        try:
-            self._wake_dashboard_display()
-            self._audio.play_wav(wav_data)
-        except Exception as exc:
-            log.exception("状態通知の音声再生に失敗しました")
-            self._report_error("音声再生", exc)
-
-    def _wake_dashboard_display(self) -> None:
-        """読み上げ開始に合わせてダッシュボードのスクリーンセーバーを解除する。"""
-        self._dashboard_state.wake_display()
-
-    def _synthesize_tts(self, text: str, slot_key: str = "") -> bytes:
-        """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""
-        speaker_id = self._voicevox_speaker_for_slot(slot_key)
-        if self._settings.tts_cache_enabled:
-            cached = self._tts_cache.get(text, speaker_id)
-            if cached is not None:
-                return cached
-
-        if self._settings.voicevox_url.strip():
-            try:
-                wav_data = self._voicevox.synthesize(text, speaker=speaker_id)
-                if self._settings.tts_cache_enabled:
-                    self._tts_cache.set(text, speaker_id, wav_data)
-                return wav_data
-            except Exception as exc:
-                log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
-                self._report_error("VOICEVOX", exc)
-        try:
-            wav_data = self._kokoro.synthesize(text)
-            if self._settings.tts_cache_enabled:
-                self._tts_cache.set(text, speaker_id, wav_data)
-            return wav_data
-        except Exception as exc:
-            log.exception("Kokoroに失敗しました")
-            self._report_error("Kokoro", exc)
-            raise
-
-    def _voicevox_speaker_for_slot(self, slot_key: str = "") -> int:
-        """指定スロットまたは現在スロットのVOICEVOX話者IDを返す。"""
-        key = slot_key or _app_slot_key(self._agent.current_name, self._agent.current_provider)
-        return self._voicevox_speakers_by_slot_key.get(key, self._settings.voicevox_speaker)
-
     def _report_error(self, source: str, exc: Exception) -> None:
         """内部エラーをダッシュボードへ短い通知として表示する。"""
         text = str(exc).strip() or exc.__class__.__name__
-        self._dashboard_state.set_status("error", "処理エラー")
+        self._status.set_display("error", "処理エラー")
         self._dashboard_state.add_error_notification(source, text[:300])
-
-    def _show_lcd(self, text: str) -> None:
-        """LCDが有効ならテキストを表示する。"""
-        if self._lcd is None:
-            return
-        try:
-            self._lcd.show_text(text)
-        except Exception:
-            log.exception("LCD表示に失敗しました")
 
     def _set_muted(self, muted: bool) -> None:
         """ダッシュボード操作による読み上げミュート状態を更新する。"""
-        with self._mute_condition:
-            changed = self._muted != muted
-            self._muted = muted
-            self._mute_condition.notify_all()
+        changed = self._speech.set_muted(muted)
         self._dashboard_state.set_audio_muted(muted)
         self._save_audio_state()
         if muted:
-            self._audio.cancel()
-            if self._dashboard_state.snapshot()["status"]["code"] == "speaking":
+            if self._dashboard_state.status_code() == "speaking":
                 self._set_ready_or_locked()
             if changed:
                 self._dashboard_state.add_notification("ミュート", "読み上げを一時停止しました。", source="ARGOS")
             return
         if changed:
             self._dashboard_state.add_notification("ミュート解除", "読み上げを再開します。", source="ARGOS")
-
-    def _is_muted(self) -> bool:
-        """読み上げミュート中ならTrueを返す。"""
-        with self._mute_condition:
-            return self._muted
 
     def _set_microphone_enabled(self, enabled: bool) -> None:
         """ダッシュボード操作によるマイク受付状態を更新する。"""
@@ -1283,7 +1086,7 @@ class ArgosApp:
     def _save_audio_state(self) -> None:
         """現在の読み上げ音量とミュート状態を保存する。"""
         try:
-            self._audio_state.save(self._audio.volume, self._is_muted())
+            self._audio_state.save(self._audio.volume, self._speech.is_muted())
         except OSError as exc:
             log.exception("音声状態の保存に失敗しました")
             self._report_error("音声状態保存", exc)
@@ -1307,18 +1110,15 @@ class ArgosApp:
 
     def _speak_pending_slot_response(self, response: str, slot_key: str) -> None:
         """未読応答を通常応答と同じチャンク分割とキャンセル制御で読み上げる。"""
-        self._speak_response_stream([response], slot_key=slot_key)
+        token = self._status.current_generation()
+        try:
+            self._speech.speak_response_stream([response], slot_key=slot_key)
+        finally:
+            self._status.finish(token)
 
     def _is_auth_locked(self) -> bool:
         """本人確認が必要なロック状態ならTrueを返す。"""
-        return self._auth.enabled and not self._auth.is_authenticated()
-
-    def _wait_until_unmuted(self, generation: int) -> bool:
-        """ミュート解除またはキャンセルまでTTSワーカーを待機させる。"""
-        with self._mute_condition:
-            while self._muted and self._current_cancel_generation() == generation and not self._shutdown.is_set():
-                self._mute_condition.wait(timeout=0.2)
-        return self._current_cancel_generation() == generation and not self._shutdown.is_set()
+        return self._auth_coord.is_locked()
 
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""
@@ -1332,9 +1132,33 @@ class ArgosApp:
         if self._audio_input_stream is not None:
             self._audio_input_stream.stop()
         self._cancel_active_audio()
-        self._stop_auth_warning()
+        self._auth_coord.stop_warning()
         if self._dashboard_server is not None:
             self._dashboard_server.stop()
+
+
+class _TerminalGateway:
+    """PiZero端末API（Terminal API）をDashboardServerへ渡すためのファサード。
+
+    DashboardServerがARGOS本体の内部実装へ直接依存しないよう、端末向けの
+    3操作（スロット一覧・スロット巡回・ターン処理）だけを公開する。
+    """
+
+    def __init__(self, app: "ArgosApp") -> None:
+        """委譲先のARGOS本体を保持する。"""
+        self._app = app
+
+    def list_slots(self) -> dict[str, object]:
+        """エージェントスロット一覧と現在スロットを返す。"""
+        return self._app._terminal_list_slots()
+
+    def next_slot(self) -> dict[str, object]:
+        """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
+        return self._app._terminal_next_slot()
+
+    def process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
+        """録音WAVを処理し、SSE用イベントを順に生成する。"""
+        return self._app._terminal_process_turn(wav_bytes)
 
 
 def _app_slot_key(name: str, provider: str) -> str:
@@ -1342,16 +1166,21 @@ def _app_slot_key(name: str, provider: str) -> str:
     return f"{provider}\0{name}"
 
 
-_LEADING_WAKEWORD_PATTERN = re.compile(
-    r"^\s*(?:アルゴス|あるごす|アルコス|あるこす|ARGOS|Argos|argos)[\s、。,.，．:：!！?？-]*"
-)
+def build_wakeword_pattern(aliases: tuple[str, ...]) -> re.Pattern[str]:
+    """設定されたウェイクワード別名から、先頭の呼びかけを検出する正規表現を作る。"""
+    alternatives = "|".join(re.escape(alias) for alias in aliases if alias) or "(?!)"
+    return re.compile(rf"^\s*(?:{alternatives})[\s、。,.，．:：!！?？-]*")
 
 
-def _strip_leading_wakeword(text: str) -> str:
+# 既定別名から作った後方互換用のモジュールパターン。
+_LEADING_WAKEWORD_PATTERN = build_wakeword_pattern(DEFAULT_WAKEWORD_ALIASES)
+
+
+def _strip_leading_wakeword(text: str, pattern: re.Pattern[str] = _LEADING_WAKEWORD_PATTERN) -> str:
     """ウェイクワード経由STTの先頭に混ざった呼びかけだけを除去する。"""
-    return _LEADING_WAKEWORD_PATTERN.sub("", text, count=1).strip()
+    return pattern.sub("", text, count=1).strip()
 
 
-def _has_leading_wakeword(text: str) -> bool:
+def _has_leading_wakeword(text: str, pattern: re.Pattern[str] = _LEADING_WAKEWORD_PATTERN) -> bool:
     """STT結果が呼びかけから始まるかを判定する。"""
-    return bool(_LEADING_WAKEWORD_PATTERN.match(text))
+    return bool(pattern.match(text))

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,12 +13,80 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+# エージェント待機中に読み上げる進捗音声の既定フレーズ。
+# provider共通。ARGOS_AGENT_PROGRESS_START_PHRASES などで上書きできる。
+DEFAULT_AGENT_PROGRESS_START_PHRASES: tuple[str, ...] = (
+    "わかった。少し待ってね。",
+    "了解。やってみるね。",
+    "確認するね。",
+    "ちょっと待ってて。",
+    "今見てみるね。",
+    "すぐ調べるね。",
+)
+DEFAULT_AGENT_PROGRESS_WAIT_PHRASES: tuple[str, ...] = (
+    "ちょっと時間かかってるけど、もう少し待ってね。",
+    "もう少しだけ待ってね。まだ確認中だよ。",
+    "まだ確認してる途中だよ。少し待ってね。",
+    "時間かかってるけど、もうちょっと待ってね。",
+)
+
+# ウェイクワード経由STTの先頭に混ざる呼びかけの既定表記ゆれ。
+# ARGOS_WAKEWORD_ALIASES（カンマ区切り）で上書きできる。
+DEFAULT_WAKEWORD_ALIASES: tuple[str, ...] = (
+    "アルゴス",
+    "あるごす",
+    "アルコス",
+    "あるこす",
+    "ARGOS",
+    "Argos",
+    "argos",
+)
+
+
 def _bool_env(name: str, default: bool) -> bool:
     """環境変数を真偽値として読み込む。"""
     raw = os.environ.get(name)
     if raw is None:
         return default
     return raw.lower() in ("1", "true", "yes", "on")
+
+
+def _env_with_fallback(name: str, fallback_name: str, default: str) -> str:
+    """新しい環境変数名を優先し、なければ旧名、どちらもなければ既定値を返す。"""
+    value = os.environ.get(name)
+    if value is not None:
+        return value
+    return os.environ.get(fallback_name, default)
+
+
+def _bool_env_with_fallback(name: str, fallback_name: str, default: bool) -> bool:
+    """真偽値の環境変数を、新名優先・旧名フォールバックで読み込む。"""
+    if os.environ.get(name) is not None:
+        return _bool_env(name, default)
+    return _bool_env(fallback_name, default)
+
+
+def _float_env_with_fallback(name: str, fallback_name: str, default: float) -> float:
+    """浮動小数の環境変数を、新名優先・旧名フォールバックで読み込む。"""
+    return float(_env_with_fallback(name, fallback_name, str(default)))
+
+
+def _split_phrases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """セミコロン（半角・全角）・改行区切りのフレーズ一覧を環境変数から読み込む。"""
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return default
+    phrases = tuple(part.strip() for part in re.split(r"[;；\n]+", raw) if part.strip())
+    return phrases or default
+
+
+def _split_aliases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """カンマ（半角・全角）・改行区切りの別名一覧を環境変数から読み込む。"""
+    raw = os.environ.get(name, "")
+    if not raw.strip():
+        return default
+    aliases = tuple(part.strip() for part in re.split(r"[,，、\n]+", raw) if part.strip())
+    return aliases or default
 
 
 @dataclass(frozen=True)
@@ -104,9 +173,12 @@ class Settings:
     hermes_pass_session_id: bool = True
     hermes_resume_saved: bool = True
     hermes_extra_args: tuple[str, ...] = ()
-    codex_progress_voice: bool = True
-    codex_progress_first_delay_seconds: float = 8.0
-    codex_progress_interval_seconds: float = 20.0
+    agent_progress_voice: bool = True
+    agent_progress_first_delay_seconds: float = 8.0
+    agent_progress_interval_seconds: float = 20.0
+    agent_progress_start_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_START_PHRASES
+    agent_progress_wait_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
+    agent_default_system_prompt: str = ""
     codex_stream_mode: str = "stream"
     greeting_enabled: bool = True
     greeting_state_path: str = "~/.local/state/argos/greeting-state.json"
@@ -145,6 +217,9 @@ class Settings:
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
     dashboard_default_font_size: str = "medium"
+    dashboard_upload_dir: str = "/tmp/argos/uploads"
+    dashboard_upload_max_bytes: int = 5 * 1024 * 1024
+    dashboard_upload_keep: int = 50
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
@@ -182,8 +257,12 @@ class Settings:
     wakeword_vad_min_silence_seconds: float = 1.5
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
+    wakeword_followup_seconds: float = 3.0
+    wakeword_bargein_enabled: bool = False
     wakeword_score_log_path: str = ""
     wakeword_require_stt_wakeword: bool = False
+    wakeword_aliases: tuple[str, ...] = DEFAULT_WAKEWORD_ALIASES
+    camera_snapshot_path: str = "/tmp/argos/camera-latest.jpg"
     agent_system_prompt: str = ""
     agent_system_prompt_file: str = ""
     agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
@@ -334,8 +413,12 @@ def load_settings() -> Settings:
         wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
         wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
+        wakeword_followup_seconds=float(os.environ.get("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", "3.0")),
+        wakeword_bargein_enabled=_bool_env("ARGOS_WAKEWORD_BARGEIN_ENABLED", False),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
+        wakeword_aliases=_split_aliases("ARGOS_WAKEWORD_ALIASES", DEFAULT_WAKEWORD_ALIASES),
+        camera_snapshot_path=os.environ.get("ARGOS_CAMERA_SNAPSHOT_PATH", "/tmp/argos/camera-latest.jpg"),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
@@ -375,6 +458,9 @@ def load_settings() -> Settings:
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
+        dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),
+        dashboard_upload_max_bytes=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024))),
+        dashboard_upload_keep=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_KEEP", "50")),
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
@@ -414,13 +500,22 @@ def load_settings() -> Settings:
         tts_cache_max_chars=int(os.environ.get("ARGOS_TTS_CACHE_MAX_CHARS", "30")),
         tts_cache_max_size_mb=int(os.environ.get("ARGOS_TTS_CACHE_MAX_SIZE_MB", "200")),
         tts_cache_dir=os.environ.get("ARGOS_TTS_CACHE_DIR", "cache/tts"),
-        codex_progress_voice=_bool_env("ARGOS_CODEX_PROGRESS_VOICE", True),
-        codex_progress_first_delay_seconds=float(
-            os.environ.get("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "8")
+        agent_progress_voice=_bool_env_with_fallback(
+            "ARGOS_AGENT_PROGRESS_VOICE", "ARGOS_CODEX_PROGRESS_VOICE", True
         ),
-        codex_progress_interval_seconds=float(
-            os.environ.get("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "20")
+        agent_progress_first_delay_seconds=_float_env_with_fallback(
+            "ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS", "ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", 8.0
         ),
+        agent_progress_interval_seconds=_float_env_with_fallback(
+            "ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS", "ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", 20.0
+        ),
+        agent_progress_start_phrases=_split_phrases(
+            "ARGOS_AGENT_PROGRESS_START_PHRASES", DEFAULT_AGENT_PROGRESS_START_PHRASES
+        ),
+        agent_progress_wait_phrases=_split_phrases(
+            "ARGOS_AGENT_PROGRESS_WAIT_PHRASES", DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
+        ),
+        agent_default_system_prompt=os.environ.get("ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT", ""),
         codex_stream_mode=os.environ.get("ARGOS_CODEX_STREAM_MODE", "stream").strip().lower(),
         greeting_enabled=_bool_env("ARGOS_GREETING_ENABLED", True),
         greeting_state_path=os.environ.get(

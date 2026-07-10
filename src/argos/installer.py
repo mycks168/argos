@@ -31,6 +31,7 @@ DEFAULT_OS_PACKAGES = (
     "tmux",
     "x11-xserver-utils",
 )
+DEFAULT_PROJECT_EXTRAS = ("face",)
 
 AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
 PLACEHOLDER_TOKENS = {"", "change-me", "changeme", "change_me"}
@@ -141,7 +142,7 @@ def build_install_plan(
     packages = list(os_packages or DEFAULT_OS_PACKAGES)
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
-        InstallStep("sync", str(project_dir), "uv syncでARGOS本体の仮想環境を作成する"),
+        InstallStep("sync", str(project_dir), "uv sync --extra faceでARGOS本体の仮想環境を作成する"),
         InstallStep("env", str(project_dir / ".env"), ".envがなければ.env.exampleから作成する"),
     ]
     if bootstrap:
@@ -274,7 +275,7 @@ def apply_plan(
     _ensure_core_env_defaults(project_dir / ".env")
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
-    _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home)
+    _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home, extras=DEFAULT_PROJECT_EXTRAS)
     if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
         _install_chromium_policy(project_dir, runner=runner)
     if any(service.kind == "user" for service in plan.services):
@@ -282,6 +283,7 @@ def apply_plan(
     for service in plan.services:
         _apply_service(service, plan, runner=runner)
     _ensure_tts_filter_shared_token(project_dir)
+    _ensure_reminder_dashboard_token(project_dir)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
@@ -337,8 +339,10 @@ def _copy_env_example(
         if home:
             env["HOME"] = home
         runner(["sudo", "-u", user, "cp", str(example_path), str(env_path)], check=True, env=env)
+        runner(["sudo", "-u", user, "chmod", "600", str(env_path)], check=True, env=env)
         return
     shutil.copyfile(example_path, env_path)
+    _restrict_env_permissions(env_path)
 
 
 def configure_env(
@@ -372,8 +376,10 @@ def _ensure_core_env_defaults(env_path: Path) -> None:
     """既存.envに不足しているARGOS本体の必須既定値を補完する。"""
     values = _read_env_values(env_path)
     changed = _ensure_dashboard_token(values)
+    changed = _ensure_agent_runner_token(values) or changed
     if changed:
         _write_env_values(env_path, values)
+    _restrict_env_permissions(env_path)
 
 
 def _ensure_dashboard_token(values: dict[str, str]) -> bool:
@@ -382,6 +388,27 @@ def _ensure_dashboard_token(values: dict[str, str]) -> bool:
         return False
     values["ARGOS_DASHBOARD_TOKEN"] = secrets.token_urlsafe(32)
     return True
+
+
+def _ensure_agent_runner_token(values: dict[str, str]) -> bool:
+    """Agent Runner API用Bearerトークンが空なら生成する。
+
+    トークンが空のままだとRunner APIは認証なしで全リクエストを受け付ける。
+    ARGOS本体とRunnerは同じ.envを読むため、生成するだけで両者に共有される。
+    """
+    if values.get("ARGOS_AGENT_RUNNER_TOKEN", "").strip():
+        return False
+    values["ARGOS_AGENT_RUNNER_TOKEN"] = secrets.token_urlsafe(32)
+    return True
+
+
+def _restrict_env_permissions(env_path: Path) -> None:
+    """Bearerトークンを含む.envを所有者のみ読み書き可能にする。"""
+    try:
+        env_path.chmod(0o600)
+    except OSError:
+        # 所有者以外が実行した場合などは権限変更をあきらめ、インストールは続行する
+        pass
 
 
 def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
@@ -406,6 +433,35 @@ def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
         filter_values["TTS_FILTER_BEARER_TOKEN"] = token
         _write_env_values(filter_env, filter_values)
         changed = True
+    _restrict_env_permissions(app_env)
+    _restrict_env_permissions(filter_env)
+    return changed
+
+
+def _ensure_reminder_dashboard_token(project_dir: Path) -> bool:
+    """ARGOS本体とargos-reminderのダッシュボードBearerトークンを揃える。"""
+    app_env = project_dir / ".env"
+    reminder_env = project_dir / "services" / "argos-reminder" / ".env"
+    if not app_env.exists() or not reminder_env.exists():
+        return False
+
+    app_values = _read_env_values(app_env)
+    reminder_values = _read_env_values(reminder_env)
+    app_token = app_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
+    reminder_token = reminder_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
+    token = _select_shared_token(app_token, reminder_token)
+
+    changed = False
+    if app_token != token:
+        app_values["ARGOS_DASHBOARD_TOKEN"] = token
+        _write_env_values(app_env, app_values)
+        changed = True
+    if reminder_token != token:
+        reminder_values["ARGOS_DASHBOARD_TOKEN"] = token
+        _write_env_values(reminder_env, reminder_values)
+        changed = True
+    _restrict_env_permissions(app_env)
+    _restrict_env_permissions(reminder_env)
     return changed
 
 
@@ -818,7 +874,14 @@ def _ensure_service_home_dirs(plan: InstallPlan, *, runner=subprocess.run) -> No
         runner(["sudo", "chown", "-R", f"{plan.service_user}:{plan.service_group}", str(path)], check=True)
 
 
-def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None, home: str | None = None) -> None:
+def _uv_sync(
+    directory: Path,
+    *,
+    runner=subprocess.run,
+    user: str | None = None,
+    home: str | None = None,
+    extras: tuple[str, ...] = (),
+) -> None:
     """指定ディレクトリでuv syncを実行する。"""
     if not (directory / "pyproject.toml").exists():
         return
@@ -827,6 +890,8 @@ def _uv_sync(directory: Path, *, runner=subprocess.run, user: str | None = None,
     if home:
         env["HOME"] = home
     command = ["uv", "sync"]
+    for extra in extras:
+        command.extend(("--extra", extra))
     if user:
         home_value = home or str(Path("/home") / user)
         command = [

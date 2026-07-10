@@ -136,9 +136,11 @@ class WakeWordListener:
         devices: Iterable[str],
         model_dir: str | Path,
         threshold: float,
-        on_recording_ready: Callable[[str], None],
+        on_recording_ready: Callable[..., None],
         *,
-        on_detected: Callable[[], bool | None] | None = None,
+        on_detected: Callable[..., bool | None] | None = None,
+        on_followup_expired: Callable[[], None] | None = None,
+        followup_seconds: float = 0.0,
         audio_source: AudioInputStream | None = None,
         should_continue_recording: Callable[[], bool] | None = None,
         capture_sample_rate: int = SAMPLE_RATE,
@@ -167,6 +169,10 @@ class WakeWordListener:
         self._capture_sample_rate = max(1, int(capture_sample_rate))
         self._on_recording_ready = on_recording_ready
         self._on_detected = on_detected
+        self._on_followup_expired = on_followup_expired
+        self._followup_seconds = max(0.0, followup_seconds)
+        # 追いかけ受付窓の締め切り時刻（monotonic）。0.0 は窓が閉じている状態。
+        self._followup_deadline = 0.0
         self._audio_source = audio_source
         self._should_continue_recording = should_continue_recording
         self._window_seconds = window_seconds
@@ -203,6 +209,16 @@ class WakeWordListener:
         self._stop_process()
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=3)
+
+    def arm_followup(self) -> None:
+        """TTS応答後、一定時間ウェイクワード無しで次の発話を受け付ける窓を開く。"""
+        if self._followup_seconds <= 0:
+            return
+        self._followup_deadline = time.monotonic() + self._followup_seconds
+
+    def disarm_followup(self) -> None:
+        """追いかけ受付の窓を閉じる。"""
+        self._followup_deadline = 0.0
 
     def _run(self) -> None:
         """モデルを読み込んで、停止要求まで監視を続ける。"""
@@ -242,6 +258,9 @@ class WakeWordListener:
                 if not data:
                     continue
                 raw_ring.append(data)
+                if self._followup_deadline and self._handle_followup(data, stream, ring, raw_ring):
+                    actual_samples = 0
+                    continue
                 samples = _pcm16_samples(data)
                 ring.extend(samples)
                 actual_samples += len(samples)
@@ -259,6 +278,7 @@ class WakeWordListener:
                 if score >= threshold:
                     log.info("ウェイクワード検知: score=%.4f threshold=%.4f", score, threshold)
                     self._append_score_log(score, threshold, detected=True)
+                    self._followup_deadline = 0.0
                     if self._on_detected is not None:
                         if self._on_detected() is False:
                             log.info("ウェイクワード検知をアプリ側で無視しました")
@@ -273,6 +293,34 @@ class WakeWordListener:
                         self._on_recording_ready(wav_path)
         finally:
             stream.close()
+
+    def _handle_followup(self, data: bytes, stream: "_WakeWordInputStream", ring: deque, raw_ring: deque) -> bool:
+        """追いかけ受付窓を判定する。録音を起こした、または窓を閉じたら True を返す。
+
+        窓が開いている間は無音のうちは False を返して通常のウェイクワード検知も
+        続ける。発話（RMSが無音しきい値以上）を検知したらウェイクワード無しで録音し、
+        締め切りを過ぎたら on_followup_expired を呼んで窓を閉じる。
+        """
+        now = time.monotonic()
+        if now >= self._followup_deadline:
+            self._followup_deadline = 0.0
+            if self._on_followup_expired is not None:
+                self._on_followup_expired()
+            return True
+        if _pcm16_rms(data) < self._silence_rms_threshold:
+            return False
+        self._followup_deadline = 0.0
+        log.info("追いかけ受付の発話を検知しました")
+        accepted = self._on_detected is None or self._on_detected(followup=True) is not False
+        pre_roll = list(raw_ring)
+        ring.clear()
+        raw_ring.clear()
+        if not accepted:
+            return True
+        wav_path = self._record_utterance(stream.read, pre_roll_frames=pre_roll)
+        if wav_path:
+            self._on_recording_ready(wav_path, followup=True)
+        return True
 
     def _append_score_log(self, score: float, threshold: float, *, detected: bool) -> None:
         """tmpfs上の調査用ファイルへウェイクワードスコアを追記する。"""

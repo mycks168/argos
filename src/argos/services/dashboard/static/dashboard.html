@@ -77,10 +77,10 @@
       --status-frame-color: #5ed3ff;
     }
     body[data-status-code="transcribing"] {
-      --status-frame-color: #ff9f43;
+      --status-frame-color: #ff4a1e;
     }
     body[data-status-code="speaking"] {
-      --status-frame-color: #6ee7a8;
+      --status-frame-color: #4a90ff;
     }
     body[data-status-code="locked"],
     body[data-status-code="alert"],
@@ -102,8 +102,8 @@
     }
     body[data-status-code="transcribing"]::before {
       opacity: 1;
-      border-color: rgba(255, 159, 67, 0.78);
-      box-shadow: 0 0 17px rgba(255, 159, 67, 0.42), inset 0 0 14px rgba(255, 159, 67, 0.14);
+      border-color: rgba(255, 74, 30, 0.78);
+      box-shadow: 0 0 17px rgba(255, 74, 30, 0.42), inset 0 0 14px rgba(255, 74, 30, 0.14);
     }
     body[data-status-code="thinking"]::after,
     body[data-status-code="authenticating"]::after,
@@ -113,8 +113,8 @@
     }
     body[data-status-code="speaking"]::before {
       opacity: 1;
-      border-color: rgba(110, 231, 168, 0.62);
-      box-shadow: 0 0 14px rgba(110, 231, 168, 0.32), inset 0 0 12px rgba(110, 231, 168, 0.1);
+      border-color: rgba(74, 144, 255, 0.62);
+      box-shadow: 0 0 14px rgba(74, 144, 255, 0.32), inset 0 0 12px rgba(74, 144, 255, 0.1);
     }
     body[data-status-code="locked"]::before,
     body[data-status-code="alert"]::before,
@@ -159,6 +159,70 @@
     .screensaver.is-active {
       opacity: 1;
       pointer-events: auto;
+    }
+    /* 画面中央に大きく出す通知（display=center）用のアラート表示 */
+    .center-alert {
+      position: fixed;
+      inset: 0;
+      z-index: 60;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 4vh 4vw;
+      background: rgba(4, 12, 18, 0.82);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+    }
+    .center-alert.is-active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+    .center-alert-card {
+      width: min(900px, 92vw);
+      max-height: 92vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      gap: 16px;
+      padding: 32px 40px;
+      border: 2px solid #2a9d8f;
+      border-radius: 16px;
+      background: linear-gradient(180deg, #0d1b24, #0a141b);
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+      overflow: hidden;
+    }
+    .center-alert[data-priority="high"] .center-alert-card { border-color: #e63946; }
+    .center-alert-source {
+      font-size: 20px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #7fb7ad;
+    }
+    .center-alert[data-priority="high"] .center-alert-source { color: #f4a1a8; }
+    .center-alert-title {
+      font-size: clamp(28px, 5vw, 56px);
+      font-weight: 800;
+      line-height: 1.2;
+      color: #f2f8fb;
+    }
+    .center-alert-text {
+      font-size: clamp(18px, 2.6vw, 30px);
+      line-height: 1.4;
+      color: #cde0e6;
+    }
+    .center-alert-image {
+      max-width: 100%;
+      max-height: 46vh;
+      object-fit: contain;
+      border-radius: 10px;
+      background: #000;
+    }
+    .center-alert-hint {
+      margin-top: 4px;
+      font-size: 15px;
+      color: #6f8791;
     }
     .splash-frame {
       position: relative;
@@ -391,8 +455,8 @@
     .status-dot { width: 13px; height: 13px; border-radius: 50%; background: #2a9d8f; }
     .status[data-code="listening"] .status-dot { background: #e63946; }
     .status[data-code="thinking"] .status-dot { background: #f4d35e; }
-    .status[data-code="transcribing"] .status-dot { background: #ff9f43; box-shadow: 0 0 10px #ff9f43; }
-    .status[data-code="speaking"] .status-dot { background: #69b7e4; }
+    .status[data-code="transcribing"] .status-dot { background: #ff4a1e; box-shadow: 0 0 10px #ff4a1e; }
+    .status[data-code="speaking"] .status-dot { background: #4a90ff; }
     .status[data-code="booting"] .status-dot { background: #f4d35e; }
     .status[data-code="locked"] .status-dot { background: #e63946; }
     .status[data-code="auth_listening"] .status-dot { background: #ff8c42; box-shadow: 0 0 10px #ff8c42; }
@@ -481,6 +545,7 @@
     .notice-text { margin-top: 3px; color: #c3d0d7; font-size: var(--notice-text-font-size); line-height: 1.3; }
     .notice-image { width: 100%; max-height: 220px; margin-top: 6px; background: #000; object-fit: contain; }
     .empty { color: #738591; font-size: 15px; }
+
     @media (max-width: 1200px) {
       body { overflow: auto; }
       .dashboard { grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
@@ -686,6 +751,30 @@
       margin-top: auto;
     }
 
+    /* 画面の高さが低い（ウルトラワイド画面など）場合のコンパクトレイアウト */
+    @media (max-height: 500px) {
+      section { padding: 2px 18px; }
+      .status-panel p.eyebrow:first-of-type { margin-bottom: 2px; }
+      .volume-control { top: 8px; bottom: 8px; }
+      .brand-controls { margin-top: 2px; }
+      .brand-controls .control-button { padding: 4px 8px; }
+      .clock-date-row { margin-top: 2px; gap: 8px; }
+      .status { margin-top: 2px; gap: 7px; }
+      .agent { margin-top: 2px; padding: 2px 6px; }
+      .agent-name { margin-top: 1px; line-height: 1.08; }
+      .agent-provider { margin-top: 0; line-height: 1.05; }
+      .agent-usage { margin-top: 4px; padding: 4px 6px; border-radius: 6px; }
+      .agent-usage-title { margin-bottom: 1px; }
+      .agent-usage-row-wrapper { margin-top: 2px; }
+      .agent-usage-progress-container { height: 4px; margin-top: 2px; }
+      .slots { margin-top: 4px; min-height: 24px; gap: 4px; }
+      .slot-button { padding: 3px 6px; line-height: 1.1; }
+      .slots-container p.eyebrow { margin-top: 3px !important; margin-bottom: 2px !important; }
+      .session-reset-button { margin-top: 4px; padding-top: 5px; padding-bottom: 5px; }
+      .font-size-control { margin-top: 4px; gap: 4px; }
+      .font-size-button { padding: 3px 0; }
+    }
+
     /* 設定モーダル */
     .settings-modal {
       position: fixed;
@@ -739,6 +828,15 @@
 </head>
 <body>
   <div id="screensaver" class="screensaver" aria-hidden="true"></div>
+  <div id="center-alert" class="center-alert" aria-hidden="true">
+    <div class="center-alert-card">
+      <div id="center-alert-source" class="center-alert-source"></div>
+      <img id="center-alert-image" class="center-alert-image" alt="" hidden>
+      <div id="center-alert-title" class="center-alert-title"></div>
+      <div id="center-alert-text" class="center-alert-text"></div>
+      <div class="center-alert-hint">画面をタップで閉じる</div>
+    </div>
+  </div>
   <div id="splash" class="splash" aria-hidden="true">
     <div class="splash-frame">
       <div class="splash-kicker">AUTONOMOUS ROAD GUARDIAN</div>
@@ -862,6 +960,11 @@
     const messages = document.getElementById("messages");
     const notifications = document.getElementById("notifications");
     const screensaver = document.getElementById("screensaver");
+    const centerAlert = document.getElementById("center-alert");
+    const centerAlertSource = document.getElementById("center-alert-source");
+    const centerAlertImage = document.getElementById("center-alert-image");
+    const centerAlertTitle = document.getElementById("center-alert-title");
+    const centerAlertText = document.getElementById("center-alert-text");
     const splash = document.getElementById("splash");
     const status = document.getElementById("status");
     const statusLabel = document.getElementById("status-label");
@@ -1066,6 +1169,59 @@
         screensaverTimer = window.setTimeout(showScreensaver, screensaverTimeoutMs);
       }
     }
+    let currentCenterAlertId = null;
+    let dismissedCenterAlertId = null;
+    let centerAlertTimer = null;
+    function hideCenterAlert() {
+      centerAlert.classList.remove("is-active");
+      centerAlert.setAttribute("aria-hidden", "true");
+      if (centerAlertTimer) {
+        window.clearTimeout(centerAlertTimer);
+        centerAlertTimer = null;
+      }
+    }
+    function closeCenterAlert() {
+      // 閉じたアラートは再表示しないよう記録し、サーバ状態もクリアする
+      dismissedCenterAlertId = currentCenterAlertId;
+      currentCenterAlertId = null;
+      hideCenterAlert();
+      sendEvent("clear_center_alert");
+    }
+    function renderCenterAlert(alert) {
+      if (!alert || !alert.active) {
+        currentCenterAlertId = null;
+        hideCenterAlert();
+        return;
+      }
+      // 一度閉じたアラートや表示済みのアラートは描画し直さない
+      if (alert.id && (alert.id === dismissedCenterAlertId || alert.id === currentCenterAlertId)) {
+        return;
+      }
+      currentCenterAlertId = alert.id || null;
+      centerAlert.dataset.priority = alert.priority || "normal";
+      centerAlertSource.textContent = alert.source || "お知らせ";
+      centerAlertTitle.textContent = alert.title || "";
+      centerAlertText.textContent = alert.text || "";
+      if (alert.image_url) {
+        centerAlertImage.src = alert.image_url;
+        centerAlertImage.hidden = false;
+      } else {
+        centerAlertImage.removeAttribute("src");
+        centerAlertImage.hidden = true;
+      }
+      centerAlert.classList.add("is-active");
+      centerAlert.setAttribute("aria-hidden", "false");
+      resetScreensaver();
+      if (centerAlertTimer) {
+        window.clearTimeout(centerAlertTimer);
+        centerAlertTimer = null;
+      }
+      const duration = Number(alert.duration_seconds) || 0;
+      if (duration > 0) {
+        centerAlertTimer = window.setTimeout(closeCenterAlert, duration * 1000);
+      }
+    }
+    centerAlert.addEventListener("click", closeCenterAlert);
     function render(state) {
       status.dataset.code = state.status.code;
       document.body.dataset.statusCode = state.status.code || "ready";
@@ -1095,7 +1251,7 @@
       if (state.status.code === "booting") {
         showSplash();
       }
-      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening"]);
+      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening", "followup"]);
       if (activeStates.has(state.status.code)) {
         resetScreensaver();
       }
@@ -1104,6 +1260,8 @@
         resetScreensaver();
       }
       previousDisplayActivitySequence = displayActivitySequence;
+
+      renderCenterAlert(state.center_alert);
 
       // スロットスタックを先に反映し、会話/通知へ戻る場合は描画キャッシュを破棄する
       renderSlots(state);

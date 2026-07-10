@@ -14,6 +14,24 @@ def test_load_default_slot(monkeypatch):
     assert settings.agent_slots[0].cwd == "/tmp/work"
 
 
+def test_load_wakeword_followup_seconds(monkeypatch):
+    """追いかけ受付の秒数を読み込む。既定は3秒。"""
+    monkeypatch.delenv("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", raising=False)
+    assert load_settings().wakeword_followup_seconds == 3.0
+
+    monkeypatch.setenv("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", "5.5")
+    assert load_settings().wakeword_followup_seconds == 5.5
+
+
+def test_load_wakeword_bargein_enabled(monkeypatch):
+    """バージイン有効フラグを読み込む。既定は無効。"""
+    monkeypatch.delenv("ARGOS_WAKEWORD_BARGEIN_ENABLED", raising=False)
+    assert load_settings().wakeword_bargein_enabled is False
+
+    monkeypatch.setenv("ARGOS_WAKEWORD_BARGEIN_ENABLED", "true")
+    assert load_settings().wakeword_bargein_enabled is True
+
+
 def test_load_agent_provider(monkeypatch):
     """LLMエージェントプロバイダーを読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_PROVIDER", "codex")
@@ -367,16 +385,41 @@ def test_load_hermes_settings(monkeypatch):
     assert settings.hermes_extra_args == ("--x", "--y")
 
 
-def test_load_codex_progress_settings(monkeypatch):
-    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
-    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_FIRST_DELAY_SECONDS", "3")
-    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "7")
+def test_load_agent_progress_settings(monkeypatch):
+    monkeypatch.setenv("ARGOS_AGENT_PROGRESS_VOICE", "false")
+    monkeypatch.setenv("ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS", "3")
+    monkeypatch.setenv("ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS", "7")
 
     settings = load_settings()
 
-    assert settings.codex_progress_voice is False
-    assert settings.codex_progress_first_delay_seconds == 3
-    assert settings.codex_progress_interval_seconds == 7
+    assert settings.agent_progress_voice is False
+    assert settings.agent_progress_first_delay_seconds == 3
+    assert settings.agent_progress_interval_seconds == 7
+
+
+def test_load_agent_progress_settings_falls_back_to_codex_env(monkeypatch):
+    """旧 ARGOS_CODEX_PROGRESS_* も後方互換で読み込む。"""
+    monkeypatch.delenv("ARGOS_AGENT_PROGRESS_VOICE", raising=False)
+    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
+    monkeypatch.setenv("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "9")
+
+    settings = load_settings()
+
+    assert settings.agent_progress_voice is False
+    assert settings.agent_progress_interval_seconds == 9
+
+
+def test_load_agent_progress_phrases_and_wakeword_aliases(monkeypatch):
+    """進捗フレーズとウェイクワード別名を環境変数で上書きできる。"""
+    monkeypatch.setenv("ARGOS_AGENT_PROGRESS_START_PHRASES", "はじめるよ；ちょっと待って")
+    monkeypatch.setenv("ARGOS_AGENT_PROGRESS_WAIT_PHRASES", "まだだよ")
+    monkeypatch.setenv("ARGOS_WAKEWORD_ALIASES", "ジャービス, jarvis")
+
+    settings = load_settings()
+
+    assert settings.agent_progress_start_phrases == ("はじめるよ", "ちょっと待って")
+    assert settings.agent_progress_wait_phrases == ("まだだよ",)
+    assert settings.wakeword_aliases == ("ジャービス", "jarvis")
 
 
 def test_load_greeting_settings(monkeypatch):

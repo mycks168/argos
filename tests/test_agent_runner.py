@@ -540,3 +540,34 @@ def test_agent_runner_server_handles_job_lifecycle(tmp_path):
     finally:
         httpd.shutdown()
         thread.join(timeout=2)
+
+
+def test_agent_runner_server_rejects_bad_request_body(tmp_path):
+    """サイズ超過や不正JSONのリクエストは400で拒否する。"""
+    store = AgentJobStore(tmp_path / "runner")
+    runner = AgentRunner(_settings(tmp_path), store, client_factory=lambda _settings, _slot: FakeAgentClient())
+    api = AgentRunnerServer(runner, token="token")
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), api._build_handler())
+    thread = Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    headers = {"Authorization": "Bearer token"}
+    try:
+        oversized = requests.post(
+            f"{base_url}/api/jobs",
+            data=b"x" * (1024 * 1024 + 1),
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=5,
+        )
+        assert oversized.status_code == 400
+
+        broken = requests.post(
+            f"{base_url}/api/jobs",
+            data=b"{not-json",
+            headers={**headers, "Content-Type": "application/json"},
+            timeout=2,
+        )
+        assert broken.status_code == 400
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)

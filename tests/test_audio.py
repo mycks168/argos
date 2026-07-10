@@ -339,15 +339,27 @@ def test_audio_player_set_volume_applies_amixer(monkeypatch):
     assert run_calls[0] == ["amixer", "-q", "-D", "hw:CARD=card0", "set", "Master", "100%"]
 
 
-def test_audio_player_set_volume_uses_default_mixer_without_card(monkeypatch):
-    """出力カード未指定時はデフォルトミキサーへ音量を反映する。"""
+def test_audio_player_set_volume_skips_amixer_without_card(monkeypatch):
+    """出力カード未指定時はHWミキサーを触らず、WAVスケールのみで音量調整する。
+
+    ec_sink など PipeWire 仮想シンク経由の再生で amixer がデフォルトデバイスの
+    音量を触ると、WAVスケールと二重に効いて音量が一貫しなくなるため。
+    """
     run_calls = []
     monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: run_calls.append(command))
 
     player = AudioPlayer("plughw:0,0", "", 80)
 
     assert player.set_volume(35) == 35
-    assert run_calls[0] == ["amixer", "-q", "set", "Master", "35%"]
+    assert player.volume == 35
+    assert run_calls == []  # amixer は一切呼ばれない
+
+
+def test_audio_player_clamps_initial_volume_out_of_range():
+    """保存済み設定に範囲外値が入っていても初期化時に0-100へ丸める。"""
+    assert AudioPlayer("plughw:0,0", "", 180).volume == 100
+    assert AudioPlayer("plughw:0,0", "", -20).volume == 0
+    assert AudioPlayer("plughw:0,0", "", 60).volume == 60
 
 
 def test_audio_player_scales_wav_before_playback(monkeypatch):

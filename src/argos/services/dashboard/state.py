@@ -48,6 +48,7 @@ class DashboardState:
             }
         }
         self._agent_usage: dict[str, dict[str, Any]] = {}
+        self._center_alert = {"active": False, "updated_at": _now_iso()}
         self._overlay = {"active": False, "updated_at": _now_iso()}
         self._display_activity = {"sequence": 0, "updated_at": _now_iso()}
         self._slot_stack_center = [{"type": "conversation", "title": "会話", "created_at": _now_iso()}]
@@ -68,6 +69,7 @@ class DashboardState:
                 "audio": deepcopy(self._audio),
                 "microphone": deepcopy(self._microphone),
                 "network": deepcopy(self._network),
+                "center_alert": deepcopy(self._center_alert),
                 "overlay": deepcopy(self._overlay),
                 "display_activity": deepcopy(self._display_activity),
                 "messages": deepcopy(list(self._current_messages_locked())),
@@ -83,6 +85,11 @@ class DashboardState:
         with self._lock:
             self._status = {"code": code, "label": label, "updated_at": _now_iso()}
             self._publish_locked()
+
+    def status_code(self) -> str:
+        """現在の動作状態コードを返す。"""
+        with self._lock:
+            return str(self._status["code"])
 
     def set_agent(self, name: str, provider: str) -> None:
         """現在のエージェントスロット表示を更新する。"""
@@ -250,24 +257,40 @@ class DashboardState:
         priority: str = "normal",
         image_url: str = "",
         link_url: str = "",
+        display: str = "toast",
+        duration_seconds: float = 0.0,
     ) -> str:
-        """外部通知を追加し、通知IDを返す。"""
+        """外部通知を追加し、通知IDを返す。
+
+        display が ``center`` の場合は、右パネルの通知履歴に加えて画面中央の
+        大きなアラート表示（center_alert）も更新する。duration_seconds は
+        中央アラートの自動消去秒数で、0以下ならタップで閉じるまで残す。
+        """
         notification_id = uuid.uuid4().hex
         with self._lock:
-            self._notifications.append(
-                {
-                    "id": notification_id,
-                    "title": title,
-                    "text": text,
-                    "source": source,
-                    "priority": priority,
-                    "image_url": image_url,
-                    "link_url": link_url,
-                    "created_at": _now_iso(),
-                }
-            )
+            notice = {
+                "id": notification_id,
+                "title": title,
+                "text": text,
+                "source": source,
+                "priority": priority,
+                "image_url": image_url,
+                "link_url": link_url,
+                "display": display,
+                "duration_seconds": duration_seconds,
+                "created_at": _now_iso(),
+            }
+            self._notifications.append(notice)
+            if display == "center":
+                self._center_alert = {"active": True, **notice, "updated_at": _now_iso()}
             self._publish_locked()
         return notification_id
+
+    def clear_center_alert(self) -> None:
+        """画面中央の大きなアラート表示を消去する。"""
+        with self._lock:
+            self._center_alert = {"active": False, "updated_at": _now_iso()}
+            self._publish_locked()
 
     def add_error_notification(self, source: str, text: str) -> str:
         """内部エラーを通知し、直前と同じ内容なら重複追加しない。"""
@@ -287,6 +310,8 @@ class DashboardState:
                     "priority": "high",
                     "image_url": "",
                     "link_url": "",
+                    "display": "toast",
+                    "duration_seconds": 0.0,
                     "created_at": _now_iso(),
                 }
             )

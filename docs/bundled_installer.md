@@ -86,7 +86,7 @@ uv run argos-install --apply
 
 別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、ChromiumなどのOSパッケージ導入、`uv` のARGOS実行ユーザー向け導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
 user serviceが含まれる場合は、Chromiumやデスクトップセッションが使う `~/.config`、`~/.local`、`~/.cache` をARGOS実行ユーザー所有へ補正する。既存環境でこれらがrootや別ユーザー所有になっている場合も、`--apply` または `--update` で再補正する。
-OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体とサブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
+OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体の `uv sync` は `--extra face` を付け、顔認証用のOpenCVを標準で入れる。サブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
 
 ```bash
 sudo git clone https://github.com/mycks168/argos.git /opt/argos
@@ -99,6 +99,8 @@ sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 `--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
 `.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+
+`argos-install --apply` と `--update` は、ARGOS本体の `ARGOS_DASHBOARD_TOKEN` を `services/argos-reminder/.env` にも反映する。両方が空の場合は共有トークンを生成する。これにより、argos-reminder が `POST /api/events` へ通知を送るときにBearer認証不一致で401になることを避ける。
 
 エージェントproviderは `codex`、`antigravity`、`claude`、`hermes` からカンマ区切りで選択し、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者IDを設定する。これにより、新規インストール時に不要なスロットが最初から表示されることを避ける。
 
