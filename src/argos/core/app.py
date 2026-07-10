@@ -772,11 +772,14 @@ class ArgosApp:
         slot_name = self._agent.current_name
         slot_provider = self._agent.current_provider
         slot_key = _app_slot_key(slot_name, slot_provider)
+        # 端末ターンの進行を母艦ダッシュボードの状態枠へも反映する。
+        token = self._status.current_generation()
         tmp_path = ""
         try:
             with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
                 tmp.write(wav_bytes)
                 tmp_path = tmp.name
+            self._status.set(token, "transcribing", "文字起こし中")
             try:
                 transcript = self._transcribe_wav(tmp_path)
             except Exception as exc:
@@ -793,8 +796,7 @@ class ArgosApp:
             log.info("端末ユーザ発話: %s", transcript)
             # ローカル録音と同じ本人確認ゲートを通す。ロック中は発話を本人確認扱いにし、
             # 音声キーワード一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
-            auth_token = self._status.current_generation()
-            if not self._auth_coord.ensure_authenticated(transcript, auth_token):
+            if not self._auth_coord.ensure_authenticated(transcript, token):
                 if self._auth_coord.is_locked():
                     yield {"event": "error", "message": "本人確認が必要です。合言葉を話してね。"}
                 else:
@@ -802,6 +804,7 @@ class ArgosApp:
                     yield {"event": "text", "delta": "本人確認しました。"}
                     yield {"event": "done", "text": "本人確認しました。"}
                 return
+            self._status.set(token, "thinking", "考え中")
             self._dashboard_state.add_message("user", transcript)
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
             dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
@@ -813,6 +816,8 @@ class ArgosApp:
                 ):
                     if kind == "text":
                         text = str(payload)
+                        if not full_response:
+                            self._status.set(token, "speaking", "読み上げ中")
                         full_response += text
                         self._dashboard_state.append_message(dashboard_message_id, text)
                         yield {"event": "text", "delta": text}
@@ -833,6 +838,8 @@ class ArgosApp:
                 self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
                 self._dashboard_state.finish_message(dashboard_message_id)
         finally:
+            # 全経路で母艦の状態枠を休止（待機中）へ戻す。stale世代なら無視される。
+            self._status.finish(token)
             if tmp_path:
                 self._remove_recording_file(tmp_path)
 
