@@ -231,6 +231,9 @@ class Settings:
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
+    voicevox_accept_opus: bool = False
+    stt_gateway_use_opus: bool = False
+    stt_gateway_opus_bitrate: str = "24k"
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -422,6 +425,8 @@ def load_settings() -> Settings:
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
+        stt_gateway_use_opus=_bool_env("STT_GATEWAY_USE_OPUS", False),
+        stt_gateway_opus_bitrate=os.environ.get("STT_GATEWAY_OPUS_BITRATE", "24k"),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),
@@ -565,6 +570,7 @@ def load_settings() -> Settings:
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
         voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
         voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
+        voicevox_accept_opus=_bool_env("VOICEVOX_ACCEPT_OPUS", False),
     )
 
 

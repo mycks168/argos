@@ -8,9 +8,11 @@
 
 リクエスト:
 
-- `file`: WAV ファイル
+- `file`: WAV ファイル（`STT_GATEWAY_USE_OPUS=true` のときは Opus ファイル）
 - `language`: 既定値 `ja`
 - `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>`。トークン未設定時は送信しない。
+
+`STT_GATEWAY_USE_OPUS=true` のときは、録音WAVを ffmpeg で Ogg Opus にエンコードしてから送信し、アップロードサイズを削減する。送信ファイル名は拡張子を `.opus` に、MIME は `audio/opus` にする。ビットレートは `STT_GATEWAY_OPUS_BITRATE`（既定 `24k`）で調整する。stt-gateway 側が Opus 受信に対応している必要がある。既定（`false`）では従来どおり WAV を送る。
 
 レスポンス:
 
@@ -64,6 +66,8 @@ VOICEVOX Engine は次の順で呼び出す。
 `audio_query` の JSON に `outputSamplingRate` と `VOICEVOX_SPEED_SCALE` で指定した `speedScale` を設定してから `synthesis` に渡す。
 
 `VOICEVOX_BEARER_TOKEN` が設定されている場合は、`audio_query` と `synthesis` の両方へ `Authorization: Bearer <token>` を付ける。未設定の場合は認証ヘッダーを送らない。
+
+`VOICEVOX_ACCEPT_OPUS=true` のときは、`synthesis` のリクエストに `Accept: audio/opus` を付ける。素の VOICEVOX Engine は Opus 非対応のため、これは Opus 対応ラッパーを前提とする（ラッパーが `Accept` を見て Ogg Opus を返す）。レスポンスの `Content-Type` に `opus` を含む場合は ffmpeg で WAV へデコードしてから再生へ渡す。WAV が返った場合はそのまま再生するため、既定（`false`）や非対応エンジンでもフォールバックが効く。
 
 `VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
 
