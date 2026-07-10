@@ -128,7 +128,13 @@ class ArgosApp:
             self._recorder = StreamRecorder(self._audio_input_stream, settings.audio_sample_rate)
         else:
             self._recorder = Recorder(audio_devices, settings.audio_sample_rate)
-        self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
+        self._stt = SttGatewayClient(
+            settings.stt_gateway_url,
+            settings.stt_language,
+            settings.stt_gateway_token,
+            settings.stt_gateway_use_opus,
+            settings.stt_gateway_opus_bitrate,
+        )
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
             settings.stt_language,
@@ -149,6 +155,7 @@ class ArgosApp:
             settings.voicevox_speed_scale,
             settings.voicevox_volume_scale,
             settings.voicevox_bearer_token,
+            settings.voicevox_accept_opus,
         )
         self._voicevox_speakers_by_slot_key = {
             _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker
