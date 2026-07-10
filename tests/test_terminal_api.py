@@ -181,6 +181,24 @@ def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     assert ("assistant", "応答") in roles
 
 
+def test_app_terminal_process_turn_updates_dashboard_status(monkeypatch):
+    """端末ターン中に母艦の状態枠が遷移し、完了で待機へ戻る。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr(
+        app._speech,
+        "synthesize_response_stream",
+        lambda deltas, slot_key="": iter([("text", "応答"), ("audio", b"WAV")]),
+    )
+    codes = []
+    for _ in app._terminal_process_turn(b"RIFFDATA"):
+        codes.append(app._dashboard_state.status_code())
+    # 文字起こし中→読み上げ中を経由し、完了で待機(ready)へ戻る。
+    assert "transcribing" in codes
+    assert "speaking" in codes
+    assert app._dashboard_state.status_code() == "ready"
+
+
 def test_app_terminal_process_turn_empty_transcript(monkeypatch):
     """文字起こしが空ならerrorイベントを返す。"""
     _patch_app(monkeypatch)
