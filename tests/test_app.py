@@ -703,6 +703,52 @@ def test_wakeword_requirement_discards_without_wakeword(monkeypatch):
     assert app._agent.asked == []
 
 
+def test_wakeword_requirement_saves_false_positive_candidate(monkeypatch, tmp_path):
+    """呼びかけなしで破棄した音声を誤検知候補として保存する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "wakeword_require_stt_wakeword": True,
+            "wakeword_false_positive_dir": str(tmp_path / "candidates"),
+        }
+    )
+    app = ArgosApp(settings)
+    wav_path = tmp_path / "wakeword.wav"
+    wav_path.write_bytes(b"RIFF-test-audio")
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "周囲の会話"
+
+    app._process_wakeword_recording(str(wav_path), followup=False)
+
+    saved = list((tmp_path / "candidates" / "hard_negative").glob("*/metadata.json"))
+    assert len(saved) == 1
+    metadata = json.loads(saved[0].read_text(encoding="utf-8"))
+    assert metadata["reason"] == "wakeword_missing"
+    assert metadata["transcript"] == "周囲の会話"
+
+
+def test_wakeword_followup_does_not_save_empty_transcript(monkeypatch, tmp_path):
+    """追いかけ受付の空文字起こしはウェイクワード誤検知候補に含めない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "wakeword_false_positive_dir": str(tmp_path / "candidates"),
+        }
+    )
+    app = ArgosApp(settings)
+    wav_path = tmp_path / "followup.wav"
+    wav_path.write_bytes(b"RIFF-test-audio")
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: ""
+    app._local_stt.transcribe = lambda _wav: ""
+
+    app._process_wakeword_recording(str(wav_path), followup=True)
+
+    assert not (tmp_path / "candidates").exists()
+
+
 def test_wakeword_turn_arms_followup_window(monkeypatch):
     """応答が完了したら追いかけ受付窓を開き、継続受付表示にする。"""
     _patch_app(monkeypatch)

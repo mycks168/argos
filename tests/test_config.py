@@ -126,6 +126,17 @@ def test_load_wakeword_score_log_path(monkeypatch):
     assert settings.wakeword_score_log_path == "/tmp/argos/wakeword-score.log"
 
 
+def test_load_wakeword_false_positive_settings(monkeypatch):
+    """ウェイクワード誤検知候補の保存設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE", "false")
+    monkeypatch.setenv("ARGOS_WAKEWORD_FALSE_POSITIVE_DIR", "/tmp/wakeword-candidates")
+
+    settings = load_settings()
+
+    assert settings.wakeword_false_positive_capture is False
+    assert settings.wakeword_false_positive_dir == "/tmp/wakeword-candidates"
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
