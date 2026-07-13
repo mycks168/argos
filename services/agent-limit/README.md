@@ -42,6 +42,9 @@ uv run ./codex_status.py
 - `reset`: リセット日時(`MM/DD HH:MM`形式)
 - `credits`: 残りクレジット数
 
+> [!NOTE]
+> 最新のCodexなど5時間制限（5h limit）が存在しないモデルの場合、`five_hour` はダミーデータとして `{"usage_pct": 0, "reset": "N/A"}` が返されます。
+
 ### agyの使用状況取得
 
 ```sh

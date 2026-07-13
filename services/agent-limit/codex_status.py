@@ -53,8 +53,14 @@ def parse_status(screen, now=None):
     five_hour = parse_limit_row("5h limit", screen, now)
     weekly = parse_limit_row("Weekly limit", screen, now)
     mc = re.search(r"Credits:\s*([\d,]+) credits", screen)
-    if not (five_hour and weekly and mc):
+    if not (weekly and mc):
         raise ValueError(f"/statusの出力を解析できませんでした:\n{screen}")
+
+    if not five_hour:
+        five_hour = {
+            "usage_pct": 0,
+            "reset": "N/A",
+        }
 
     return {
         "five_hour": five_hour,
