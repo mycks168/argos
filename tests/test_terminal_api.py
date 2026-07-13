@@ -263,6 +263,7 @@ def test_app_terminal_list_and_next_slots(monkeypatch):
     app = ArgosApp(_settings())
     listing = app._terminal_list_slots()
     assert listing["current"]["name"] == "作業"
+    assert "model" in listing["current"]
     assert listing["slots"][0]["active"] is True
     switched = app._terminal_next_slot()
     assert switched["current"]["name"] == "次"

@@ -60,7 +60,9 @@ def _settings(tmp_path: Path) -> Settings:
 
 def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path):
     """Claudeの初回呼び出し時に新規セッションIDを自動生成して保存することを確認する。"""
-    settings = _settings(tmp_path)
+    base = _settings(tmp_path)
+    slot = AgentSlot("Claude", "claude", base.agent_slots[0].cwd, model="opus")
+    settings = Settings(**{**base.__dict__, "agent_slots": (slot,)})
     calls = []
 
     class FakeProc:
@@ -100,6 +102,7 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
     # 2. 実行コマンドと引数確認
     command, cwd = calls[0]
     assert "--session-id" in command
+    assert command[command.index("--model") + 1] == "opus"
     # 生成されたUUIDを取り出す
     session_id_idx = command.index("--session-id") + 1
     session_id = command[session_id_idx]

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from collections.abc import Generator
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 log = logging.getLogger(__name__)
@@ -101,6 +101,11 @@ class ClaudeCliClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._conversations[self._index].slot.provider
 
+    @property
+    def current_model(self) -> str:
+        """現在スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._conversations[self._index].slot)
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。
 
@@ -151,6 +156,10 @@ class ClaudeCliClient:
             # 確認ダイアログを出さずに自動で進めるためのオプション
             "--permission-mode", "bypassPermissions"
         ]
+
+        model = resolve_agent_slot_model(self._settings, conversation.slot)
+        if model:
+            command.extend(["--model", model])
 
         if is_new_session:
             command.extend(["--session-id", conversation.session_id])

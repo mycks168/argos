@@ -583,12 +583,24 @@ def _ask_agent_slots(
         default_name = existing.get("name") or AGENT_SLOT_NAME_DEFAULTS.get(provider, provider)
         default_slot_cwd = existing.get("cwd") or default_cwd
         default_voice = existing.get("voice") or AGENT_SLOT_VOICE_DEFAULTS.get(provider, "")
+        default_model = existing.get("model") or _provider_model_default(values, provider)
         name = input_func(f"{provider} のスロット名 [{default_name}]: ").strip() or default_name
         cwd = input_func(f"{name} の作業ディレクトリ [{default_slot_cwd}]: ").strip() or default_slot_cwd
         voice = input_func(f"{name} のVOICEVOX話者ID。不要なら '-' [{default_voice or '未設定'}]: ").strip()
         if not voice:
             voice = default_voice
+        model = input_func(
+            f"{name} のモデル。スロット固有指定なしなら '-' [{default_model or 'CLI既定'}]: "
+        ).strip()
+        if not model:
+            model = default_model
+        if model.lower() in {"-", "none", "null", "なし", "不要", "既定", "デフォルト"}:
+            model = ""
         if voice.lower() in {"-", "none", "null", "なし", "不要"}:
+            voice = ""
+        if model:
+            values[f"ARGOS_AGENT_SLOT_{index}"] = f"{name},{provider},{cwd},{voice},{model}"
+        elif not voice:
             values[f"ARGOS_AGENT_SLOT_{index}"] = f"{name},{provider},{cwd}"
         else:
             values[f"ARGOS_AGENT_SLOT_{index}"] = f"{name},{provider},{cwd},{voice}"
@@ -621,7 +633,7 @@ def _read_agent_slot_values(values: dict[str, str]) -> list[dict[str, str]]:
         raw = values.get(f"ARGOS_AGENT_SLOT_{index}", "")
         if not raw:
             continue
-        parts = [part.strip() for part in raw.split(",", 3)]
+        parts = [part.strip() for part in raw.split(",", 4)]
         if not parts or not parts[0]:
             continue
         slots.append(
@@ -630,9 +642,22 @@ def _read_agent_slot_values(values: dict[str, str]) -> list[dict[str, str]]:
                 "provider": parts[1] if len(parts) > 1 and parts[1] else default_provider,
                 "cwd": parts[2] if len(parts) > 2 and parts[2] else default_cwd,
                 "voice": parts[3] if len(parts) > 3 else "",
+                "model": parts[4] if len(parts) > 4 else "",
             }
         )
     return slots
+
+
+def _provider_model_default(values: dict[str, str], provider: str) -> str:
+    """provider全体の既存モデル設定をスロット入力時の既定値として返す。"""
+    key = {
+        "codex": "ARGOS_CODEX_MODEL",
+        "claude": "ARGOS_CLAUDE_MODEL",
+        "claudecode": "ARGOS_CLAUDE_MODEL",
+        "antigravity": "ARGOS_ANTIGRAVITY_MODEL",
+        "hermes": "ARGOS_HERMES_MODEL",
+    }.get(provider, "")
+    return values.get(key, "") if key else ""
 
 
 def _agent_slot_indices(values: dict[str, str]) -> list[int]:

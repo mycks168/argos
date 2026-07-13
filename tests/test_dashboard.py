@@ -27,7 +27,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     """画面へ表示する状態をまとめて保持できる。"""
     state = DashboardState()
     state.set_status("thinking", "考え中")
-    state.set_agent("アンチグラビティ", "antigravity")
+    state.set_agent("アンチグラビティ", "antigravity", "Gemini Test")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
     state.set_microphone_enabled(False)
@@ -61,6 +61,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["status"]["code"] == "thinking"
     assert snapshot["agent"]["name"] == "アンチグラビティ"
     assert snapshot["agent"]["provider"] == "antigravity"
+    assert snapshot["agent"]["model"] == "Gemini Test"
     assert snapshot["slots"][0]["name"] == "アンチグラビティ"
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
@@ -124,7 +125,7 @@ def test_dashboard_state_keeps_messages_per_agent_slot():
 def test_dashboard_state_tracks_slot_unread_and_busy():
     """スロットごとの未読と処理中状態を保持する。"""
     state = DashboardState()
-    state.set_slots([("作業", "codex"), ("調査", "antigravity")])
+    state.set_slots([("作業", "codex", "gpt-test"), ("調査", "antigravity", "Gemini Test")])
     state.set_agent("作業", "codex")
     state.set_slot_busy("調査", "antigravity", True)
     state.set_slot_unread("調査", "antigravity", True)
@@ -135,6 +136,7 @@ def test_dashboard_state_tracks_slot_unread_and_busy():
     assert slots["作業"]["active"] is True
     assert slots["調査"]["busy"] is True
     assert slots["調査"]["unread"] is True
+    assert slots["作業"]["model"] == "gpt-test"
 
     state.set_agent("調査", "antigravity")
     slots = {slot["name"]: slot for slot in state.snapshot()["slots"]}
@@ -226,6 +228,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "border-radius: 999px" in html
         assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
         assert "state.agent?.provider" in html
+        assert "state.agent?.model" in html
         assert 'class="brand-row"' in html
         assert 'class="brand-controls"' in html
         assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html

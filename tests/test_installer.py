@@ -739,9 +739,11 @@ def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
             "作業",
             "/opt/argos",
             "2",
+            "gpt-test",
             "Claude",
             "/home/argos",
             "-",
+            "sonnet",
             "",
             "",
             "",
@@ -763,8 +765,8 @@ def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
 
     text = env_path.read_text(encoding="utf-8")
     assert "ARGOS_AGENT_PROVIDER=codex" in text
-    assert "ARGOS_AGENT_SLOT_1=作業,codex,/opt/argos,2" in text
-    assert "ARGOS_AGENT_SLOT_2=Claude,claude,/home/argos" in text
+    assert "ARGOS_AGENT_SLOT_1=作業,codex,/opt/argos,2,gpt-test" in text
+    assert "ARGOS_AGENT_SLOT_2=Claude,claude,/home/argos,,sonnet" in text
     assert "ARGOS_AGENT_SLOT_3=\n" in text
     assert "ARGOS_AGENT_SLOT_4=\n" in text
 

@@ -114,7 +114,10 @@ def _write_transcript(settings: Settings, conversation_id: str, entries: list[di
 def test_antigravity_ask_stream_saves_conversation(monkeypatch, tmp_path):
     """transcriptから回答を読み、最新会話IDをArgos状態へ保存する。"""
     settings = _settings(tmp_path)
-    settings = Settings(**{**settings.__dict__, "antigravity_continue_session": True})
+    slot = AgentSlot("AG", "antigravity", settings.agent_slots[0].cwd, model="Gemini Test")
+    settings = Settings(
+        **{**settings.__dict__, "agent_slots": (slot,), "antigravity_continue_session": True}
+    )
     calls = []
 
     class FakeProc:
@@ -153,6 +156,8 @@ def test_antigravity_ask_stream_saves_conversation(monkeypatch, tmp_path):
         "--sandbox",
         "--print-timeout",
         "30s",
+        "--model",
+        "Gemini Test",
         "--x",
         "--print",
         "こんにちは",

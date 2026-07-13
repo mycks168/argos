@@ -357,7 +357,7 @@
     }
     .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
-    .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; overflow-wrap: anywhere; }
     .agent {
       margin-top: 10px;
       padding: 6px 8px;
@@ -1227,7 +1227,9 @@
       document.body.dataset.statusCode = state.status.code || "ready";
       statusLabel.textContent = state.status.label;
       agentName.textContent = state.agent?.name || "--";
-      agentProvider.textContent = state.agent?.provider || "--";
+      const provider = state.agent?.provider || "--";
+      const model = state.agent?.model || "";
+      agentProvider.textContent = model ? `${provider} · ${model}` : provider;
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `

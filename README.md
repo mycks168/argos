@@ -319,7 +319,7 @@ Codex のセッションIDは `ARGOS_AGENT_STATE_PATH` にスロットごとに�
 
 ARGOS共通のシステム指示は各スロットの会話開始時だけエージェントへ渡します。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE`、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定できます。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、`/reset` 後は再度注入します。
 
-Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目に話者IDを指定し、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8` のように設定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
+Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目、モデルを変える場合は5項目目を使い、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8,model-name` のように設定します。話者を省略してモデルだけ指定する場合は4項目目を空にします。従来の3・4項目形式もそのまま利用できます。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
 
 ARGOS本体の再起動で実行中エージェントを巻き込まない構成にする場合は、別サービスとして Agent Runner を起動します。
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Protocol
 
 from argos.config import AgentSlot
-from argos.config import Settings
+from argos.config import Settings, resolve_agent_slot_model
 from argos.services.antigravity import AntigravityCliClient
 from argos.services.claude.cli import ClaudeCliClient
 from argos.services.codex.cli import CodexCliClient
@@ -27,6 +27,10 @@ class AgentClient(Protocol):
     @property
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
+
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
@@ -73,6 +77,11 @@ class SystemPromptAgentClient:
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
         return self._client.current_provider
+
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return self._client.current_model
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
@@ -181,6 +190,7 @@ class RoutedAgentClient:
 
     def __init__(self, settings: Settings) -> None:
         """設定から各スロットのproviderクライアントを作成する。"""
+        self._settings = settings
         self._routes = [AgentRoute(slot=slot, client=create_provider_client(settings, slot)) for slot in settings.agent_slots]
         if not self._routes:
             raise ValueError("エージェントスロットが設定されていません")
@@ -195,6 +205,11 @@ class RoutedAgentClient:
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
         return self._routes[self._index].slot.provider
+
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._routes[self._index].slot)
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""

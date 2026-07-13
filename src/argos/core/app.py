@@ -18,6 +18,7 @@ from argos.config import (
     DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
     DEFAULT_WAKEWORD_ALIASES,
     Settings,
+    resolve_agent_slot_model,
 )
 from argos.core.auth_coordinator import AuthCoordinator
 from argos.core.periodic_monitor import PeriodicMonitor
@@ -180,7 +181,9 @@ class ArgosApp:
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState()
         self._dashboard_state.set_audio_volume(self._audio.volume)
-        self._dashboard_state.set_slots([(slot.name, slot.provider) for slot in settings.agent_slots])
+        self._dashboard_state.set_slots(
+            [(slot.name, slot.provider, resolve_agent_slot_model(settings, slot)) for slot in settings.agent_slots]
+        )
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -438,9 +441,20 @@ class ArgosApp:
 
     def _sync_agent_display(self) -> None:
         """現在のエージェントスロットをダッシュボード表示へ反映する。"""
-        self._dashboard_state.set_agent(self._agent.current_name, self._agent.current_provider)
+        self._dashboard_state.set_agent(
+            self._agent.current_name,
+            self._agent.current_provider,
+            self._current_agent_model(),
+        )
         self._publish_agent_usage_pending()
         self._refresh_current_agent_usage()
+
+    def _current_agent_model(self) -> str:
+        """現在のスロット設定から表示・実行対象モデルを返す。"""
+        for slot in self._settings.agent_slots:
+            if slot.name == self._agent.current_name and slot.provider == self._agent.current_provider:
+                return resolve_agent_slot_model(self._settings, slot)
+        return ""
 
     def _start_agent_usage_monitor(self) -> None:
         """現在エージェントの利用枠を定期的に取得する。"""
@@ -749,15 +763,20 @@ class ArgosApp:
         """PiZero端末向けにエージェントスロット一覧と現在スロットを返す。"""
         current_name = self._agent.current_name
         current_provider = self._agent.current_provider
+        current_model = self._current_agent_model()
         slots = [
             {
                 "name": slot.name,
                 "provider": slot.provider,
+                "model": resolve_agent_slot_model(self._settings, slot),
                 "active": slot.name == current_name and slot.provider == current_provider,
             }
             for slot in self._settings.agent_slots
         ]
-        return {"slots": slots, "current": {"name": current_name, "provider": current_provider}}
+        return {
+            "slots": slots,
+            "current": {"name": current_name, "provider": current_provider, "model": current_model},
+        }
 
     def _terminal_next_slot(self) -> dict[str, object]:
         """PiZero端末のダブルクリックに対応して次のスロットへ巡回切替する。

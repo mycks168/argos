@@ -10,7 +10,7 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
@@ -70,6 +70,11 @@ class HermesCliClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._conversations[self._index].slot.provider
 
+    @property
+    def current_model(self) -> str:
+        """現在スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._conversations[self._index].slot)
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
         self._index = (self._index + 1) % len(self._conversations)
@@ -115,8 +120,9 @@ class HermesCliClient:
     def _build_command(self, conversation: HermesConversation, prompt: str) -> list[str]:
         """Hermes CLI のコマンドラインを構築する。"""
         command = [self._settings.hermes_command, "chat", "-q", prompt, "-Q", "--source", self._settings.hermes_source]
-        if self._settings.hermes_model:
-            command.extend(["--model", self._settings.hermes_model])
+        model = resolve_agent_slot_model(self._settings, conversation.slot)
+        if model:
+            command.extend(["--model", model])
         if self._settings.hermes_provider:
             command.extend(["--provider", self._settings.hermes_provider])
         if self._settings.hermes_toolsets:

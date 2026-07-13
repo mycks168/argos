@@ -424,23 +424,30 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 書式:
 
 ```text
-名前,provider,cwd[,voicevox_speaker]
+名前,provider,cwd[,voicevox_speaker[,model]]
 ```
 
 - `名前`: 読み上げるスロット名
 - `provider`: `codex` などのエージェント種別
 - `cwd`: エージェントの作業ディレクトリ
 - `voicevox_speaker`: 任意。指定した場合、このスロットの読み上げだけ指定VOICEVOX話者IDを使う
+- `model`: 任意。指定した場合、このスロットのCLI起動時にモデルを指定する。話者を省略してモデルだけ指定する場合は4項目目を空にする
+
+3項目の旧形式とVOICEVOX話者までの4項目形式はそのまま読み込む。モデル未指定時は、Codexでは既存の `ARGOS_CODEX_MODEL`、Claudeでは `ARGOS_CLAUDE_MODEL`、Antigravityでは `ARGOS_ANTIGRAVITY_MODEL`、Hermesでは既存の `ARGOS_HERMES_MODEL` を使い、それも空なら各CLIの既定モデルに任せる。
 
 スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。既定スロットのVOICEVOX話者IDは `ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER` で指定できる。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
 
-新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとに `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存のスロット設定を維持する。
+新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者、モデルを確認して `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存値またはprovider全体設定を維持する。
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
 ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
 
-Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
+Codex固有の `CODEX_HOME` は `ARGOS_CODEX_HOME` で全体設定として指定する。`ARGOS_CODEX_MODEL` はスロットにモデルがない場合の後方互換フォールバックとして扱う。
+
+モデルを変更してもスロットの保存キーとprovider側セッションIDは維持し、次の発話から新しいモデルで同じ会話を再開する。モデル変更を理由に自動リセットはしない。providerが継続を拒否した場合はエラーを表示し、必要な場合だけ利用者が既存のセッションリセットを実行する。
+
+ダッシュボードのCURRENT SLOTには `provider · model` を表示する。モデル未指定でCLI既定に任せている場合はproviderだけを表示する。
 
 ## Antigravity CLI
 

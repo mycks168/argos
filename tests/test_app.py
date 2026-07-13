@@ -294,6 +294,19 @@ def test_dashboard_shows_current_agent_slot(monkeypatch):
     assert snapshot["agent"]["provider"] == "codex"
 
 
+def test_dashboard_shows_current_slot_model(monkeypatch):
+    """現在スロットのモデルをダッシュボード状態へ反映する。"""
+    _patch_app(monkeypatch)
+    settings = _settings()
+    slot = AgentSlot("作業", "codex", "/tmp", model="gpt-test")
+    app = ArgosApp(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    snapshot = app._dashboard_state.snapshot()
+
+    assert snapshot["agent"]["model"] == "gpt-test"
+    assert snapshot["slots"][0]["model"] == "gpt-test"
+
+
 def test_deliver_runner_result_speaks_current_slot_response(monkeypatch, capsys):
     """Runnerで完了した現在スロットの未配信応答は自動で読み上げる。"""
     _patch_app(monkeypatch)

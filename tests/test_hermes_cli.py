@@ -118,6 +118,17 @@ def test_hermes_ask_stream_saves_session_id(monkeypatch, tmp_path):
     assert "20260607_102005_eb28d3" in Path(settings.agent_state_path).read_text(encoding="utf-8")
 
 
+def test_hermes_slot_model_overrides_global(tmp_path):
+    """Hermesもスロット固有モデルを全体設定より優先する。"""
+    settings = _settings(tmp_path)
+    slot = AgentSlot("Hermes", "hermes", settings.agent_slots[0].cwd, model="slot-model")
+    client = HermesCliClient(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    command = client._build_command(client._conversations[0], "依頼")
+
+    assert command[command.index("--model") + 1] == "slot-model"
+
+
 def test_hermes_uses_saved_session(monkeypatch, tmp_path):
     """保存済みsession IDがあれば--resumeで継続する。"""
     settings = _settings(tmp_path)

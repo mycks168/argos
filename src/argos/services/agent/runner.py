@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.client import AgentClient, create_provider_client
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 
@@ -38,6 +38,7 @@ class AgentJob:
     result_path: str
     created_at: float
     updated_at: float
+    model: str = ""
     delivered_to_argos: bool = False
     delivered_at: float | None = None
 
@@ -74,6 +75,7 @@ class AgentJobStore:
             result_path=str(result_path),
             created_at=now,
             updated_at=now,
+            model=slot.model,
         )
         self.save(job)
         return job
@@ -213,6 +215,8 @@ class AgentRunner:
             )
             raise AgentSlotBusyError(existing)
         job = self._store.create(slot, prompt)
+        job.model = resolve_agent_slot_model(self._settings, slot)
+        self._store.save(job)
         self._active_job_ids.add(job.job_id)
         thread = threading.Thread(target=self._run_job, args=(job, slot), daemon=True)
         thread.start()

@@ -97,6 +97,7 @@ class AgentSlot:
     provider: str
     cwd: str
     voicevox_speaker: int | None = None
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -156,6 +157,8 @@ class Settings:
     antigravity_command: str
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
+    claude_model: str = ""
+    antigravity_model: str = ""
     antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
     antigravity_print_timeout: str = "5m0s"
@@ -272,6 +275,22 @@ class Settings:
     agent_skills_dir: str = "/opt/argos/skills"
 
 
+def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
+    """スロット固有値を優先し、provider全体設定を後方互換の既定値として返す。"""
+    if slot.model.strip():
+        return slot.model.strip()
+    provider = slot.provider.strip().lower()
+    if provider == "codex":
+        return settings.codex_model.strip()
+    if provider in {"claude", "claudecode"}:
+        return settings.claude_model.strip()
+    if provider == "antigravity":
+        return settings.antigravity_model.strip()
+    if provider == "hermes":
+        return settings.hermes_model.strip()
+    return ""
+
+
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
     slots: list[AgentSlot] = []
@@ -281,7 +300,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
         raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
         if not raw:
             break
-        parts = [part.strip() for part in raw.split(",", 3)]
+        parts = [part.strip() for part in raw.split(",", 4)]
         if parts and parts[0]:
             slots.append(
                 AgentSlot(
@@ -289,6 +308,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
                     provider=parts[1] if len(parts) > 1 and parts[1] else default_provider,
                     cwd=parts[2] if len(parts) > 2 and parts[2] else default_cwd,
                     voicevox_speaker=_optional_int(parts[3]) if len(parts) > 3 else None,
+                    model=parts[4] if len(parts) > 4 else "",
                 )
             )
         index += 1
@@ -481,6 +501,8 @@ def load_settings() -> Settings:
         antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "agy"),
         antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
         antigravity_extra_args=antigravity_extra_args,
+        claude_model=os.environ.get("ARGOS_CLAUDE_MODEL", ""),
+        antigravity_model=os.environ.get("ARGOS_ANTIGRAVITY_MODEL", ""),
         antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", True),
         antigravity_sandbox=_bool_env("ARGOS_ANTIGRAVITY_SANDBOX", False),
         antigravity_print_timeout=os.environ.get("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "5m0s"),

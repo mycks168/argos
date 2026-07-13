@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
-from argos.services.codex.cli import CodexCliClient
+from argos.services.codex.cli import CodexCliClient, _slot_key
 
 
 def _settings(tmp_path, stream_mode="stream"):
@@ -409,3 +409,16 @@ def test_bypass_sandbox_adds_codex_bypass_flag(tmp_path):
     assert "--dangerously-bypass-approvals-and-sandbox" in first_command
     assert "--dangerously-bypass-approvals-and-sandbox" in resume_command
     assert "-s" not in first_command
+
+
+def test_slot_model_overrides_global_without_changing_session_key(tmp_path):
+    """スロットモデルを優先し、モデル変更では保存セッションを分断しない。"""
+    settings = _settings(tmp_path)
+    first_slot = AgentSlot("作業", "codex", str(tmp_path), model="slot-model-a")
+    second_slot = AgentSlot("作業", "codex", str(tmp_path), model="slot-model-b")
+    client = CodexCliClient(Settings(**{**settings.__dict__, "agent_slots": (first_slot,)}))
+
+    command = client._build_command(client._conversations[0], "/tmp/out.txt")
+
+    assert command[command.index("-m") + 1] == "slot-model-a"
+    assert _slot_key(first_slot) == _slot_key(second_slot)

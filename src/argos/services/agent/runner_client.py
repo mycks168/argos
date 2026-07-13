@@ -7,7 +7,7 @@ from collections.abc import Iterable
 
 import requests
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 
 
 class RunnerSlotBusyError(RuntimeError):
@@ -39,6 +39,11 @@ class RunnerAgentClient:
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
         return self._slots[self._index].provider
+
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._slots[self._index])
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""

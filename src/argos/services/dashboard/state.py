@@ -91,7 +91,7 @@ class DashboardState:
         with self._lock:
             return str(self._status["code"])
 
-    def set_agent(self, name: str, provider: str) -> None:
+    def set_agent(self, name: str, provider: str, model: str = "") -> None:
         """現在のエージェントスロット表示を更新する。"""
         with self._lock:
             self._current_slot_key = _slot_key(name, provider)
@@ -108,15 +108,20 @@ class DashboardState:
             self._agent = {
                 "name": name,
                 "provider": provider,
+                "model": model,
                 "updated_at": _now_iso(),
             }
             self._publish_locked()
 
-    def set_slots(self, slots: list[tuple[str, str]]) -> None:
+    def set_slots(self, slots: list[tuple[str, str] | tuple[str, str, str]]) -> None:
         """表示するエージェントスロット一覧を設定する。"""
         with self._lock:
-            for name, provider in slots:
+            for slot in slots:
+                name, provider = slot[:2]
                 self._ensure_slot_locked(name, provider)
+                model = slot[2] if len(slot) > 2 else ""
+                key = _slot_key(name, provider)
+                self._slots[key] = {**self._slots[key], "model": model}
             self._publish_locked()
 
     def set_slot_busy(self, name: str, provider: str, busy: bool) -> None:
@@ -466,6 +471,7 @@ class DashboardState:
             "key": key,
             "name": name,
             "provider": provider,
+            "model": "",
             "active": key == self._current_slot_key,
             "busy": False,
             "unread": False,
