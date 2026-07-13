@@ -264,6 +264,8 @@ class Settings:
     wakeword_bargein_enabled: bool = False
     wakeword_score_log_path: str = ""
     wakeword_require_stt_wakeword: bool = False
+    wakeword_false_positive_capture: bool = True
+    wakeword_false_positive_dir: str = "/tmp/argos/wakeword-candidates"
     wakeword_aliases: tuple[str, ...] = DEFAULT_WAKEWORD_ALIASES
     camera_snapshot_path: str = "/tmp/argos/camera-latest.jpg"
     agent_system_prompt: str = ""
@@ -420,6 +422,10 @@ def load_settings() -> Settings:
         wakeword_bargein_enabled=_bool_env("ARGOS_WAKEWORD_BARGEIN_ENABLED", False),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
+        wakeword_false_positive_capture=_bool_env("ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE", True),
+        wakeword_false_positive_dir=os.environ.get(
+            "ARGOS_WAKEWORD_FALSE_POSITIVE_DIR", "/tmp/argos/wakeword-candidates"
+        ),
         wakeword_aliases=_split_aliases("ARGOS_WAKEWORD_ALIASES", DEFAULT_WAKEWORD_ALIASES),
         camera_snapshot_path=os.environ.get("ARGOS_CAMERA_SNAPSHOT_PATH", "/tmp/argos/camera-latest.jpg"),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),

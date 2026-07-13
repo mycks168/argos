@@ -134,6 +134,8 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 `ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
 自宅などSTTゲートウェイが近く誤検知を抑えたい環境では、`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` にすると、文字起こし結果が「アルゴス」などの呼びかけから始まる場合だけ処理します。ダッシュボードのマイクOFFボタンを押すと、PTTとウェイクワードの受付を一時停止できます。
 
+誤検知で破棄された録音は、既定で `/tmp/argos/wakeword-candidates/hard_negative/` に音声と判定理由を保存します。周囲の会話を誤検知候補として判別するには `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` も有効にします。内容を聞いて誤検知だと確認したものだけ、wakeword trainerの `raw-dataset/hard_negative/` へ移してください。保存を止める場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE=false`、保存先を変える場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_DIR` を設定します。`/tmp` 配下は再起動で消えるため、確認前に必要な候補を退避してください。
+
 応答の読み上げが終わったあと、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけウェイクワードを言い直さずに続けて話せます。この間に話しかけると、そのまま次の発話として受け付け、応答のたびに窓が開き直すので会話が続きます。この追いかけ受付は本人確認済みのときだけ有効で、無音のまま数秒たつと通常の待機に戻ります。
 
 `ARGOS_WAKEWORD_BARGEIN_ENABLED=true` にすると、読み上げ中でもウェイクワードで割り込んで（バージイン）、進行中の読み上げを止めて次の発話を受け付けられます。ウェイクワードonly運用でTTSを止める手段が無い問題への対策です。ただし自分の声に反応しないよう、マイク入力を音響エコーキャンセル(AEC)済みの経路にすることが前提です。`scripts/setup-echo-cancel.sh`（Raspberry Pi OS / Ubuntu 共通、`--install-deps`で依存導入、`--revert`で撤去）でPipeWireのエコーキャンセルとALSAブリッジを設定します（詳細は `docs/basic_design.md`）。既定は無効です。

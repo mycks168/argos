@@ -46,7 +46,7 @@ from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
-from argos.services.wakeword import WakeWordListener
+from argos.services.wakeword import WakeWordListener, save_false_positive_candidate
 
 
 log = logging.getLogger(__name__)
@@ -701,17 +701,22 @@ class ArgosApp:
                 if self._is_auth_locked():
                     self._auth_coord.ensure_authenticated("", token)
                     return
+                if not followup:
+                    self._save_wakeword_false_positive(wav_path, "stt_empty", "", level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
             # 追いかけ受付ではウェイクワードを言っていないため、呼びかけ必須/除去は行わない
             if not followup:
                 if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
                     log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
+                    self._save_wakeword_false_positive(wav_path, "wakeword_missing", transcript, level)
                     self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
                     return
+                original_transcript = transcript
                 transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
                 if not transcript:
                     log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                    self._save_wakeword_false_positive(wav_path, "wakeword_only", original_transcript, level)
                     self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
                     return
             if self._auth_coord.ensure_authenticated(transcript, token):
@@ -730,6 +735,22 @@ class ArgosApp:
         # 応答が完了したら、次の発話を待つ追いかけ受付窓を開く（継続会話）
         if handled:
             self._arm_followup_window()
+
+    def _save_wakeword_false_positive(self, wav_path: str, reason: str, transcript: str, rms: float) -> None:
+        """破棄したウェイクワード録音を再学習候補として退避する。"""
+        if not self._settings.wakeword_false_positive_capture:
+            return
+        try:
+            saved_dir = save_false_positive_candidate(
+                wav_path,
+                self._settings.wakeword_false_positive_dir,
+                reason=reason,
+                transcript=transcript,
+                rms=rms,
+            )
+            log.info("ウェイクワード誤検知候補を保存しました: %s", saved_dir)
+        except (OSError, ValueError) as exc:
+            log.warning("ウェイクワード誤検知候補を保存できませんでした: %s", exc)
 
     def _should_continue_wakeword_recording(self) -> bool:
         """PTT押下でウェイクワード後録音を継続するか返す。"""
