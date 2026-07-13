@@ -85,6 +85,11 @@ def test_place_name_toba_is_read_from_dictionary():
     assert "とばに行く" in got
 
 
+def test_gokenchi_is_read_from_dictionary():
+    got = normalize_for_tts("誤検知をテストする")
+    assert "ごけんちをテストする" in got
+
+
 def test_phrase_rules_are_loaded_from_yaml(tmp_path: Path):
     path = tmp_path / "dictionary.yml"
     save_config(
