@@ -158,6 +158,8 @@ class Settings:
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
     claude_model: str = ""
+    # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
+    dashboard_view_key: str = ""
     antigravity_model: str = ""
     antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
@@ -489,6 +491,7 @@ def load_settings() -> Settings:
         dashboard_host=os.environ.get("ARGOS_DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
+        dashboard_view_key=os.environ.get("ARGOS_DASHBOARD_VIEW_KEY", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),

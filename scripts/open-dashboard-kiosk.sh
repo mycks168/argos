@@ -20,6 +20,12 @@ if pgrep -f "[c]hromium.*--kiosk.*http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}
   exit 0
 fi
 
+# 閲覧キーが設定されていれば、初回アクセスでCookieを受け取るためURLへ付与する。
+DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
+if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
+  DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
+fi
+
 exec chromium \
   --user-data-dir="${HOME}/.config/argos-dashboard-chromium-kiosk" \
   --password-store=basic \
@@ -39,4 +45,4 @@ exec chromium \
   --disable-infobars \
   --disable-session-crashed-bubble \
   --autoplay-policy=no-user-gesture-required \
-  "http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
+  "${DASHBOARD_URL}"

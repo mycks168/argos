@@ -293,6 +293,7 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            view_key=settings.dashboard_view_key,
             camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
             default_font_size=settings.dashboard_default_font_size,
