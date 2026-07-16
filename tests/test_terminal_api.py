@@ -175,10 +175,12 @@ def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     assert base64.b64decode(events[2]["data"]) == b"WAV"
     assert events[2]["seq"] == 0
     # ダッシュボードにユーザ発話と応答が記録される。
-    messages = app._dashboard_state.snapshot()["messages"]
-    roles = [(m["role"], m["text"]) for m in messages]
+    snapshot = app._dashboard_state.snapshot()
+    roles = [(m["role"], m["text"]) for m in snapshot["messages"]]
     assert ("user", "こんにちは") in roles
     assert ("assistant", "応答") in roles
+    # 端末PTTでキオスク画面のスクリーンセーバーが解除される。
+    assert snapshot["display_activity"]["sequence"] >= 1
 
 
 def test_app_terminal_process_turn_updates_dashboard_status(monkeypatch):
@@ -321,3 +323,101 @@ def test_synthesize_response_stream_yields_text_and_audio():
     # 「こんにちは。」で区切られ1文分の音声が出る。末尾「元気？」はflushで音声化。
     audio = [payload for kind, payload in events if kind == "audio"]
     assert audio and audio[0] == "norm:こんにちは。".encode("utf-8")
+
+
+# --- Opus対応 ---
+def _make_test_wav(seconds: float = 0.2) -> bytes:
+    """テスト用の小さな正弦波WAVを生成する。"""
+    import io
+    import math
+    import struct
+    import wave
+
+    frames = int(16000 * seconds)
+    buf = io.BytesIO()
+    with wave.open(buf, "w") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(b"".join(struct.pack("<h", int(10000 * math.sin(2 * math.pi * 440 * i / 16000))) for i in range(frames)))
+    return buf.getvalue()
+
+
+def test_terminal_turn_accepts_opus_upload():
+    """Content-TypeがOgg Opusの音声はWAVへデコードしてから処理する。"""
+    from argos.services.opus_codec import encode_wav_to_opus
+
+    wav = _make_test_wav()
+    opus = encode_wav_to_opus(wav)
+    assert len(opus) < len(wav)
+    handler = FakeTerminalHandler([{"event": "done", "text": "OK"}])
+    server, base_url = _start_server(handler)
+    try:
+        with _request(base_url + "/api/terminal/turn", method="POST", body=opus, content_type="audio/ogg") as response:
+            events = _read_sse_events(response)
+        assert [name for name, _ in events] == ["done"]
+        assert handler.received_wav.startswith(b"RIFF")
+    finally:
+        server.stop()
+
+
+def test_terminal_turn_rejects_broken_opus():
+    """Opusとして解釈できないボディは400を返す。"""
+    handler = FakeTerminalHandler([])
+    server, base_url = _start_server(handler)
+    try:
+        with pytest.raises(HTTPError) as exc_info:
+            _request(base_url + "/api/terminal/turn", method="POST", body=b"not-opus", content_type="audio/ogg")
+        assert exc_info.value.code == 400
+    finally:
+        server.stop()
+
+
+def test_terminal_turn_returns_opus_audio_when_requested():
+    """X-Argos-Audio: opus のとき応答音声チャンクをOpusで返す。"""
+    from argos.services.opus_codec import decode_opus_to_wav
+
+    wav = _make_test_wav()
+    turn_events = [
+        {"event": "audio", "seq": 0, "format": "wav", "data": base64.b64encode(wav).decode("ascii")},
+        {"event": "done", "text": "OK"},
+    ]
+    handler = FakeTerminalHandler(turn_events)
+    server, base_url = _start_server(handler)
+    try:
+        request = Request(
+            base_url + "/api/terminal/turn",
+            data=b"RIFFDATA",
+            headers={
+                "Authorization": "Bearer secret",
+                "Content-Type": "audio/wav",
+                "X-Argos-Audio": "opus",
+            },
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            events = _read_sse_events(response)
+        audio_events = [payload for name, payload in events if name == "audio"]
+        assert audio_events[0]["format"] == "opus"
+        decoded = decode_opus_to_wav(base64.b64decode(audio_events[0]["data"]))
+        assert decoded.startswith(b"RIFF")
+    finally:
+        server.stop()
+
+
+def test_terminal_turn_keeps_wav_audio_by_default():
+    """Opus要求ヘッダが無ければ応答音声はWAVのまま返す。"""
+    turn_events = [
+        {"event": "audio", "seq": 0, "format": "wav", "data": base64.b64encode(b"WAVDATA").decode("ascii")},
+        {"event": "done", "text": "OK"},
+    ]
+    handler = FakeTerminalHandler(turn_events)
+    server, base_url = _start_server(handler)
+    try:
+        with _request(base_url + "/api/terminal/turn", method="POST", body=b"RIFFDATA", content_type="audio/wav") as response:
+            events = _read_sse_events(response)
+        audio_events = [payload for name, payload in events if name == "audio"]
+        assert audio_events[0]["format"] == "wav"
+        assert base64.b64decode(audio_events[0]["data"]) == b"WAVDATA"
+    finally:
+        server.stop()

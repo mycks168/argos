@@ -822,6 +822,8 @@ class ArgosApp:
         slot_key = _app_slot_key(slot_name, slot_provider)
         # 端末ターンの進行を母艦ダッシュボードの状態枠へも反映する。
         token = self._status.current_generation()
+        # 端末PTTでもキオスク画面のスクリーンセーバーを解除する。
+        self._dashboard_state.wake_display()
         tmp_path = ""
         try:
             with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import queue
@@ -17,6 +18,7 @@ from urllib.parse import urlparse
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
+from argos.services.opus_codec import OpusCodecError, decode_opus_to_wav, encode_wav_to_opus
 
 
 log = logging.getLogger(__name__)
@@ -384,7 +386,7 @@ def _create_handler(
                 state.unsubscribe(subscriber)
 
         def _send_terminal_turn(self, handler: Any, max_bytes: int) -> None:
-            """録音WAVを受け取り、STT→エージェント→TTS結果をSSEで返す。"""
+            """録音音声（WAVまたはOgg Opus）を受け取り、STT→エージェント→TTS結果をSSEで返す。"""
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
@@ -394,6 +396,16 @@ def _create_handler(
                 self._send_json({"error": "音声サイズが不正です"}, HTTPStatus.BAD_REQUEST)
                 return
             wav_bytes = self.rfile.read(length)
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            if content_type in {"audio/ogg", "audio/opus"}:
+                try:
+                    wav_bytes = decode_opus_to_wav(wav_bytes)
+                except OpusCodecError as exc:
+                    log.warning("端末ターンのOpusデコードに失敗しました: %s", exc)
+                    self._send_json({"error": "Opusデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
+                    return
+            # X-Argos-Audio: opus のとき、応答音声チャンクをOpusへ変換して返す。
+            wants_opus = self.headers.get("X-Argos-Audio", "").strip().lower() == "opus"
             # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
             self.close_connection = True
             self.send_response(HTTPStatus.OK)
@@ -403,6 +415,8 @@ def _create_handler(
             self.end_headers()
             try:
                 for event in handler.process_turn(wav_bytes):
+                    if wants_opus and event.get("event") == "audio" and event.get("format") == "wav":
+                        event = _encode_audio_event_to_opus(event)
                     name = str(event.get("event", "message"))
                     body = json.dumps(event, ensure_ascii=False).encode("utf-8")
                     self.wfile.write(f"event: {name}\ndata: ".encode("utf-8") + body + b"\n\n")
@@ -419,6 +433,20 @@ def _create_handler(
                     return
 
     return DashboardHandler
+
+
+def _encode_audio_event_to_opus(event: dict[str, Any]) -> dict[str, Any]:
+    """audioイベントのWAVペイロードをOgg Opusへ変換する。失敗時はWAVのまま返す。"""
+    try:
+        wav = base64.b64decode(str(event.get("data", "")))
+        opus = encode_wav_to_opus(wav)
+    except (OpusCodecError, ValueError):
+        log.exception("応答音声のOpusエンコードに失敗したためWAVのまま返します")
+        return event
+    converted = dict(event)
+    converted["format"] = "opus"
+    converted["data"] = base64.b64encode(opus).decode("ascii")
+    return converted
 
 
 def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, Any]:

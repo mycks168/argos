@@ -246,10 +246,10 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 端末APIは以下のエンドポイントを提供する。いずれも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。
 
-- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。イベント種別は次のとおり。
+- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。`Content-Type: audio/ogg`（または `audio/opus`）の場合はOgg Opusとして受け取り、母艦側でWAVへデコードしてから処理する（LTE等の低速回線向け）。デコード失敗は400を返す。イベント種別は次のとおり。
   - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
   - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
-  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。
+  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。リクエストヘッダー `X-Argos-Audio: opus` を付けると、各チャンクをOgg Opusへ変換して `{"format": "opus", ...}` で返す（変換失敗時はWAVのまま返すフォールバック付き）。
   - `done`：ターン完了。`{"text": "<応答全文>"}`。
   - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
 - `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
