@@ -7,3 +7,4 @@ cache/
 
 .env
 services/agent-limit/*.json
+hailort.log

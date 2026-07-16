@@ -6,6 +6,7 @@ from collections import deque
 import numpy as np
 
 from argos.services.wakeword.livekit import (
+    LiveKitWakeWordModel,
     WakeWordListener,
     _pcm16_frames_to_float,
     _pcm16_rms,
@@ -13,6 +14,34 @@ from argos.services.wakeword.livekit import (
     _resample_pcm16,
     load_default_threshold,
 )
+
+
+def test_wakeword_model_batches_embedding_windows():
+    """16個のメル窓を1回の埋め込み推論へまとめる。"""
+    calls = []
+
+    class FakeEmbedding:
+        """入力形状を記録する埋め込みモデル。"""
+
+        def __call__(self, windows):
+            calls.append(windows.shape)
+            return np.ones((windows.shape[0], 96), dtype=np.float32)
+
+    class FakeClassifier:
+        """固定スコアを返す分類器。"""
+
+        def run(self, _outputs, inputs):
+            assert inputs["embeddings"].shape == (1, 16, 96)
+            return [np.array([[0.75]], dtype=np.float32)]
+
+    model = LiveKitWakeWordModel.__new__(LiveKitWakeWordModel)
+    model._mel_frontend = lambda _audio: np.ones((196, 32), dtype=np.float32)
+    model._speech_embedding = FakeEmbedding()
+    model._classifier = FakeClassifier()
+    model._classifier_input_name = "embeddings"
+
+    assert model.predict_score(np.zeros(32000, dtype=np.float32)) == 0.75
+    assert calls == [(16, 76, 32)]
 from argos.services.wakeword.vad import detect_vad_segments, estimate_endpoint_from_vad
 
 

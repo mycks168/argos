@@ -296,6 +296,7 @@ def test_load_wakeword_settings(monkeypatch):
     """ウェイクワード設定を読み込む。"""
     monkeypatch.setenv("ARGOS_WAKEWORD_ENABLED", "true")
     monkeypatch.setenv("ARGOS_WAKEWORD_MODEL_DIR", "/tmp/wakeword")
+    monkeypatch.setenv("ARGOS_WAKEWORD_EMBEDDING_HEF", "/tmp/wakeword/embedding.hef")
     monkeypatch.setenv("ARGOS_WAKEWORD_THRESHOLD", "0.7")
     monkeypatch.setenv("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "48000")
     monkeypatch.setenv("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.5")
@@ -318,6 +319,7 @@ def test_load_wakeword_settings(monkeypatch):
 
     assert settings.wakeword_enabled is True
     assert settings.wakeword_model_dir == "/tmp/wakeword"
+    assert settings.wakeword_embedding_hef == "/tmp/wakeword/embedding.hef"
     assert settings.wakeword_threshold == 0.7
     assert settings.wakeword_capture_sample_rate == 48000
     assert settings.wakeword_window_seconds == 2.5

@@ -362,6 +362,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 ウェイクワードは `ARGOS_WAKEWORD_ENABLED=true` の場合だけ有効になる。既定では無効で、PTT操作には影響しない。
 
 - `ARGOS_WAKEWORD_MODEL_DIR` にLiveKit形式の `argos.onnx`、`melspectrogram.onnx`、`embedding_model.onnx` を置く
+- `ARGOS_WAKEWORD_EMBEDDING_HEF`が指定されている場合は、音声埋め込みモデルをHailoRT経由でHailo-8へオフロードする。メル特徴量生成と最終分類はONNX Runtimeを継続し、HEF設定が空なら全段をCPUで実行する
 - しきい値は `ARGOS_WAKEWORD_THRESHOLD` を最優先に使う。`argos_eval.json` の `optimal_threshold` や `threshold` は学習時の参考値で、常時監視では自動採用しない
 - 入力デバイスは通常録音と同じ `AUDIO_INPUT_DEVICES` または `AUDIO_DEVICE` を使う
 - `ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE` でraw入力の実サンプルレートを指定できる。`dsnoop` が16kHz指定でも48kHzを返す環境では `48000` を指定し、ARGOS内部で16kHzへ変換してモデルとVADへ渡す

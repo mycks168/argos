@@ -584,6 +584,7 @@ class ArgosApp:
             self._wakeword_listener = WakeWordListener(
                 devices=self._settings.audio_input_devices or (self._settings.audio_input_device,),
                 model_dir=self._settings.wakeword_model_dir,
+                embedding_hef_path=self._settings.wakeword_embedding_hef,
                 threshold=self._settings.wakeword_threshold,
                 audio_source=self._audio_input_stream,
                 should_continue_recording=self._should_continue_wakeword_recording,

@@ -142,6 +142,8 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 
 モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
 
+Raspberry Pi AI HAT+のHailo-8を使う場合は、Hailo用にコンパイルした`embedding.hef`を配置し、`ARGOS_WAKEWORD_EMBEDDING_HEF=models/wakeword/embedding.hef`を設定します。メル特徴量と最終分類はONNX Runtime、負荷の大きい音声埋め込みはHailoで実行します。HEF設定が空の場合は従来どおり全段をCPUで実行します。
+
 ```text
 models/wakeword/
   argos.onnx

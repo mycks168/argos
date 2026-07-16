@@ -247,6 +247,7 @@ class Settings:
     wifi_status_refresh_seconds: float = 10.0
     wakeword_enabled: bool = False
     wakeword_model_dir: str = "models/wakeword"
+    wakeword_embedding_hef: str = ""
     wakeword_threshold: float = 0.5
     wakeword_capture_sample_rate: int = 16000
     wakeword_window_seconds: float = 2.0
@@ -422,6 +423,7 @@ def load_settings() -> Settings:
         wifi_status_refresh_seconds=float(os.environ.get("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "10")),
         wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
         wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
+        wakeword_embedding_hef=os.environ.get("ARGOS_WAKEWORD_EMBEDDING_HEF", ""),
         wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),
         wakeword_capture_sample_rate=int(os.environ.get("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "16000")),
         wakeword_window_seconds=float(os.environ.get("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.0")),

@@ -79,6 +79,75 @@ class SpeechEmbedding:  # pragma: no cover
         return outputs[0].squeeze(axis=(1, 2))
 
 
+class HailoSpeechEmbedding:  # pragma: no cover
+    """Hailo-8で音声埋め込みHEFを実行する。"""
+
+    def __init__(self, hef_path: str | Path) -> None:
+        """HailoRTの仮想デバイスと推論パイプラインを初期化する。"""
+        import sys
+
+        try:
+            import hailo_platform  # noqa: F401
+        except ModuleNotFoundError:
+            system_packages = "/usr/lib/python3/dist-packages"
+            if system_packages not in sys.path:
+                sys.path.append(system_packages)
+        from hailo_platform import (
+            ConfigureParams,
+            FormatType,
+            HEF,
+            HailoStreamInterface,
+            InferVStreams,
+            InputVStreamParams,
+            OutputVStreamParams,
+            VDevice,
+        )
+
+        path = Path(hef_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Hailo音声埋め込みモデルが見つかりません: {path}")
+        hef = HEF(str(path))
+        self._device = VDevice()
+        configure_params = ConfigureParams.create_from_hef(hef, HailoStreamInterface.PCIe)
+        self._network_group = self._device.configure(hef, configure_params)[0]
+        self._input_params = InputVStreamParams.make(self._network_group, format_type=FormatType.FLOAT32)
+        self._output_params = OutputVStreamParams.make(self._network_group, format_type=FormatType.FLOAT32)
+        self._input_name = next(iter(self._input_params))
+        self._output_name = next(iter(self._output_params))
+        self._activation = self._network_group.activate()
+        self._activation.__enter__()
+        self._pipeline = InferVStreams(self._network_group, self._input_params, self._output_params)
+        self._pipeline.__enter__()
+
+    def __call__(self, mel_windows):
+        """メル特徴量をHailoへまとめて送り、96次元埋め込みを返す。"""
+        import numpy as np
+
+        if mel_windows.ndim == 3:
+            mel_windows = mel_windows[..., np.newaxis]
+        outputs = self._pipeline.infer({self._input_name: mel_windows.astype(np.float32)})
+        return outputs[self._output_name].reshape(mel_windows.shape[0], 96)
+
+    def close(self) -> None:
+        """HailoRTの推論パイプラインと仮想デバイスを閉じる。"""
+        pipeline = getattr(self, "_pipeline", None)
+        if pipeline is not None:
+            pipeline.__exit__(None, None, None)
+            self._pipeline = None
+        activation = getattr(self, "_activation", None)
+        if activation is not None:
+            activation.__exit__(None, None, None)
+            self._activation = None
+        device = getattr(self, "_device", None)
+        if device is not None:
+            device.release()
+            self._device = None
+
+    def __del__(self) -> None:
+        """破棄時にHailoRTリソースを解放する。"""
+        self.close()
+
+
 class LiveKitWakeWordModel:  # pragma: no cover
     """LiveKit wakewordの3段ONNX推論を実行する。"""
 
@@ -87,6 +156,7 @@ class LiveKitWakeWordModel:  # pragma: no cover
         classifier_path: str | Path,
         mel_path: str | Path,
         embedding_path: str | Path,
+        embedding_hef_path: str | Path = "",
     ) -> None:
         """前処理モデルと分類器を読み込む。"""
         import onnxruntime as ort
@@ -95,7 +165,11 @@ class LiveKitWakeWordModel:  # pragma: no cover
         if not classifier.exists():
             raise FileNotFoundError(f"ウェイクワード分類器が見つかりません: {classifier}")
         self._mel_frontend = MelSpectrogramFrontend(mel_path)
-        self._speech_embedding = SpeechEmbedding(embedding_path)
+        if str(embedding_hef_path).strip():
+            self._speech_embedding = HailoSpeechEmbedding(embedding_hef_path)
+            log.info("ウェイクワード音声埋め込みにHailoを使用します: %s", embedding_hef_path)
+        else:
+            self._speech_embedding = SpeechEmbedding(embedding_path)
         self._classifier = ort.InferenceSession(str(classifier), providers=["CPUExecutionProvider"])
         self._classifier_input_name = self._classifier.get_inputs()[0].name
 
@@ -115,14 +189,14 @@ class LiveKitWakeWordModel:  # pragma: no cover
         if all_mel.shape[0] < EMBEDDING_WINDOW:
             return 0.0
 
-        embeddings = []
-        for start in range(0, all_mel.shape[0] - EMBEDDING_WINDOW + 1, EMBEDDING_STRIDE):
-            window = all_mel[start : start + EMBEDDING_WINDOW]
-            embeddings.append(self._speech_embedding(window[None, :, :])[0])
-        if len(embeddings) < MIN_EMBEDDINGS:
+        windows = [
+            all_mel[start : start + EMBEDDING_WINDOW]
+            for start in range(0, all_mel.shape[0] - EMBEDDING_WINDOW + 1, EMBEDDING_STRIDE)
+        ]
+        if len(windows) < MIN_EMBEDDINGS:
             return 0.0
 
-        emb_sequence = np.stack(embeddings[-MIN_EMBEDDINGS:], axis=0)
+        emb_sequence = self._speech_embedding(np.stack(windows[-MIN_EMBEDDINGS:], axis=0))
         emb_input = emb_sequence[None, :, :].astype(np.float32)
         outputs = self._classifier.run(None, {self._classifier_input_name: emb_input})
         return float(outputs[0][0, 0])
@@ -159,6 +233,7 @@ class WakeWordListener:
         vad_min_silence_seconds: float = 1.5,
         vad_check_seconds: float = 0.32,
         score_log_path: str = "",
+        embedding_hef_path: str = "",
     ) -> None:
         """監視対象デバイスと検知後録音の条件を保持する。"""
         self._devices = tuple(device for device in devices if device)
@@ -190,6 +265,7 @@ class WakeWordListener:
         self._vad_min_silence_seconds = vad_min_silence_seconds
         self._vad_check_seconds = vad_check_seconds
         self._score_log_path = Path(score_log_path).expanduser() if score_log_path.strip() else None
+        self._embedding_hef_path = Path(embedding_hef_path).expanduser() if embedding_hef_path.strip() else ""
         self._vad_model: object | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -227,6 +303,7 @@ class WakeWordListener:
                 classifier_path=self._model_dir / "argos.onnx",
                 mel_path=self._model_dir / "melspectrogram.onnx",
                 embedding_path=self._model_dir / "embedding_model.onnx",
+                embedding_hef_path=self._embedding_hef_path,
             )
             threshold = load_default_threshold(self._model_dir, self._threshold)
         except Exception:
