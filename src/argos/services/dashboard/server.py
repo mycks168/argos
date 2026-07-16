@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import queue
 import threading
 import uuid
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
@@ -26,6 +28,8 @@ DEFAULT_UPLOAD_DIR = Path("/tmp/argos/uploads")
 DEFAULT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_UPLOAD_KEEP = 50
 FONT_SIZE_OPTIONS = {"small", "medium", "large"}
+# 閲覧認証で使うCookie名。値には閲覧キーそのものを保持する。
+VIEW_KEY_COOKIE = "argos_view_key"
 # アップロード画像のMIMEタイプと保存拡張子の対応。
 UPLOAD_MIME_EXTENSIONS = {
     "image/png": ".png",
@@ -59,6 +63,7 @@ class DashboardServer:
         host: str,
         port: int,
         token: str,
+        view_key: str = "",
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
@@ -78,6 +83,7 @@ class DashboardServer:
         self._host = host
         self._port = port
         self._token = token
+        self._view_key = view_key
         self._camera_snapshot_path = camera_snapshot_path
         self._gps_device_path = gps_device_path
         self._upload_dir = upload_dir
@@ -106,6 +112,7 @@ class DashboardServer:
         handler = _create_handler(
             self._state,
             self._token,
+            self._view_key,
             self._camera_snapshot_path,
             self._gps_device_path,
             self._screensaver_seconds,
@@ -140,6 +147,7 @@ class DashboardServer:
 def _create_handler(
     state: DashboardState,
     token: str,
+    view_key: str,
     camera_snapshot_path: Path,
     gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
@@ -162,6 +170,8 @@ def _create_handler(
         def do_GET(self) -> None:
             """画面、状態、ヘルスチェック、SSEを返す。"""
             path = urlparse(self.path).path
+            if path != "/api/health" and not self._require_view():
+                return
             if path == "/":
                 self._send_html()
             elif path.startswith("/static/"):
@@ -243,6 +253,29 @@ def _create_handler(
             """標準HTTPログをアプリログへ流す。"""
             log.info("dashboard http: " + format, *args)
 
+        def _view_request_authorized(self) -> bool:
+            """閲覧キーがクエリ、Cookie、Bearerのいずれかで一致するか調べる。"""
+            query_key = parse_qs(urlparse(self.path).query).get("key", [""])[0]
+            if query_key and hmac.compare_digest(query_key, view_key):
+                return True
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            morsel = cookie.get(VIEW_KEY_COOKIE)
+            if morsel is not None and hmac.compare_digest(morsel.value, view_key):
+                return True
+            return bool(token) and bearer_header_matches(self.headers.get("Authorization", ""), token)
+
+        def _require_view(self) -> bool:
+            """閲覧系エンドポイントのアクセスキーを検証する。未設定なら常に許可する。"""
+            if not view_key:
+                return True
+            if self._view_request_authorized():
+                return True
+            if urlparse(self.path).path.startswith("/api/"):
+                self._send_json({"error": "アクセスキーが必要です"}, HTTPStatus.UNAUTHORIZED)
+            else:
+                self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+            return False
+
         def _require_token(self) -> bool:
             """更新系APIのBearer認証を検証する。"""
             if not token:
@@ -270,6 +303,12 @@ def _create_handler(
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
+            if view_key:
+                # クエリキーで入った端末が以降キーなしで再読込できるようCookieを配る。
+                self.send_header(
+                    "Set-Cookie",
+                    f"{VIEW_KEY_COOKIE}={view_key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000",
+                )
             self.end_headers()
             self.wfile.write(html)
 

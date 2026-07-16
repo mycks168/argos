@@ -160,6 +160,8 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 
 待ち受けアドレスは `ARGOS_DASHBOARD_HOST` で指定する。kioskブラウザは同一機からアクセスするため既定は `127.0.0.1`（localhostのみ）とし、状態・会話履歴・カメラ画像などGET系APIを認証なしでLANへ露出しない。LAN内の別端末から表示させる場合だけ `0.0.0.0` などへ明示的に広げる。
 
+LANへ広げる場合は `ARGOS_DASHBOARD_VIEW_KEY` に閲覧用アクセスキーを設定する。キー設定時は、画面(`/`)、静的ファイル(`/static/*`)、状態(`/api/state`)、位置情報(`/api/location`)、SSE(`/api/stream`)、カメラ画像、アップロード画像の閲覧に認証を必須とする。認証は `?key=<値>` クエリ、発行済みCookie（`argos_view_key`、HttpOnly）、または `ARGOS_DASHBOARD_TOKEN` のBearerヘッダーのいずれかで通す。正しいキー付きで画面を開いた端末にはCookieを配り、以降はキーなしURLで再読込できる。`/api/health` は死活監視用に常時開放する。キー未設定時は従来通り閲覧制限なし（後方互換）。kiosk起動スクリプトは `ARGOS_DASHBOARD_VIEW_KEY` が設定されていれば起動URLへ自動で付与する。ダッシュボードHTMLには更新用Bearerトークンが埋め込まれるため、閲覧認証を通過した端末は更新系APIも利用できる点に注意する（端末別権限分離は分散ARGOS設計で扱う）。
+
 画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。インストーラーはARGOS本体の `.env` と `services/argos-reminder/.env` の `ARGOS_DASHBOARD_TOKEN` を同じ値に揃え、リマインダー通知が401で失敗しないようにする。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
 

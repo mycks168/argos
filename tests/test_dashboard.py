@@ -184,7 +184,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5, default_font_size="small")
+    server = DashboardServer(
+        state, "127.0.0.1", 0, "secret", camera_snapshot_path=snapshot_path, screensaver_seconds=12.5, default_font_size="small"
+    )
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -780,3 +782,65 @@ def test_prune_uploads_keeps_newest(tmp_path):
     dashboard_server._prune_uploads(tmp_path, keep=2)
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["2.jpg", "3.jpg"]
+
+
+def test_dashboard_view_key_guards_read_endpoints():
+    """閲覧キー設定時は画面・状態・SSEなど閲覧系に認証を要求する。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", view_key="viewkey")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        # キーなしはページも状態APIも拒否する
+        for path in ("/", "/api/state"):
+            try:
+                urlopen(base_url + path, timeout=2)
+            except HTTPError as exc:
+                assert exc.code == 401
+            else:
+                raise AssertionError(f"{path} が認証なしで閲覧できました")
+
+        # 誤ったキーも拒否する
+        try:
+            urlopen(base_url + "/?key=wrong", timeout=2)
+        except HTTPError as exc:
+            assert exc.code == 401
+        else:
+            raise AssertionError("誤ったキーで閲覧できました")
+
+        # ヘルスチェックは常に開放する
+        status, _ = _read_json(base_url + "/api/health")
+        assert status == 200
+
+        # 正しいキー付きはHTMLとCookieを返す
+        with urlopen(base_url + "/?key=viewkey", timeout=2) as response:
+            assert response.status == 200
+            cookie_header = response.headers.get("Set-Cookie", "")
+            assert "argos_view_key=viewkey" in cookie_header
+            assert "HttpOnly" in cookie_header
+            assert "ARGOS Dashboard" in response.read().decode("utf-8")
+
+        # 発行済みCookieだけで状態APIを読める
+        request = Request(base_url + "/api/state", headers={"Cookie": "argos_view_key=viewkey"})
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 200
+
+        # Bearerトークンでも閲覧できる（スクリプト用）
+        status, _ = _read_json(base_url + "/api/state", token="secret")
+        assert status == 200
+    finally:
+        server.stop()
+
+
+def test_dashboard_without_view_key_stays_open():
+    """閲覧キー未設定なら従来通り認証なしで閲覧できる。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        with urlopen(base_url + "/", timeout=2) as response:
+            assert response.status == 200
+            assert response.headers.get("Set-Cookie") is None
+        status, _ = _read_json(base_url + "/api/state")
+        assert status == 200
+    finally:
+        server.stop()

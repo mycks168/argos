@@ -569,6 +569,7 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_HOST", "0.0.0.0")
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
+    monkeypatch.setenv("ARGOS_DASHBOARD_VIEW_KEY", "viewkey")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
     monkeypatch.setenv("ARGOS_LOCATION_PROVIDER", "remote")
@@ -581,6 +582,7 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_host == "0.0.0.0"
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
+    assert settings.dashboard_view_key == "viewkey"
     assert settings.dashboard_screensaver_seconds == 12.5
     assert settings.dashboard_default_font_size == "small"
     assert settings.location_provider == "remote"
