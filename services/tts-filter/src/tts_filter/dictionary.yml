@@ -1,76 +1,78 @@
 acronyms:
   AI: エーアイ
   API: エーピーアイ
+  ARGOS: アルゴス
   AUTOSSH: オートエスエスエイチ
   CLI: シーエルアイ
   CPU: シーピーユー
   CSS: シーエスエス
-  GPU: ジーピーユー
-  GPSD: ジーピーエスディー
   GITEA: ギテア
   GITIGNORE: ギットイグノア
+  GPSD: ジーピーエスディー
+  GPU: ジーピーユー
   HTML: エイチティーエムエル
   HTTP: エイチティーティーピー
   HTTPS: エイチティーティーピーエス
   IMAGE: イメージ
   JPEG: ジェイペグ
   JSON: ジェイソン
+  KM: キロメートル
   LLM: エルエルエム
   MARKDOWN: マークダウン
   MCP: エムシーピー
-  "OFF": オフ
+  'OFF': オフ
+  OPENAI: オープンエーアイ
   OPENCLAW: オープンクロー
   PNG: ピング
-  PR: ピーアール
   POST: ポスト
+  PR: ピーアール
   PYTEST: パイテスト
   PYTHON: パイソン
   PYTHONPATH: パイソンパス
   README: リードミー
   REDMINE: レッドマイン
   REMINDER: リマインダー
+  ROM: ロム
+  RSYNC: アールシンク
   SAFENET: セーフネット
   SERVICE: サービス
   SKILL: スキル
   SRC: ソース
   SSH: エスエスエイチ
+  STATUS: ステータス
   TEMP: テンプ
   TMP: テンプ
   TMPFS: テンプエフエス
   TMUX: ティーマックス
   TTS: ティーティーエス
   TTYD: ティーティーワイディー
+  UI: ユーアイ
   URL: ユーアールエル
   UV: ユーブイ
-  UI: ユーアイ
   VOICEVOX: ボイスボックス
   YAML: ヤムル
-  KM: キロメートル
-  STATUS: ステータス
-  ARGOS: アルゴス
-  OPENAI: オープンエーアイ
-terms:
-  "5タップ": ごタップ
-  誤検知: ごけんち
-  誤変換: ごへんかん
-  鳥羽: とば
 extensions:
   conf: コンフ
   ini: イニ
-  js: ジェイエス
   jpeg: ジェイペグ
   jpg: ジェイペグ
+  js: ジェイエス
   json: ジェイソン
   md: エムディー
   png: ピング
   py: パイ
-  sh: シェル
   service: サービス
+  sh: シェル
   toml: トムル
   ts: ティーエス
   txt: テキスト
   yaml: ヤムル
   yml: ヤムル
 phrase_rules:
-  - pattern: "((?:テスト|検証|pytest|パイテスト)[^。、\\n]{0,12}?)通(っている|ってる|った|る|ります|りました)"
-    replacement: "\\1とお\\2"
+- pattern: ((?:テスト|検証|pytest|パイテスト)[^。、\n]{0,12}?)通(っている|ってる|った|る|ります|りました)
+  replacement: \1とお\2
+terms:
+  5タップ: ごタップ
+  誤変換: ごへんかん
+  誤検知: ごけんち
+  鳥羽: とば
