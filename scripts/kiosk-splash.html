@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>ARGOS 接続中</title>
+<style>
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: radial-gradient(ellipse at center, #101a33 0%, #070b18 70%);
+    color: #e6ecff;
+    font-family: "Noto Sans CJK JP", "Noto Sans JP", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }
+  .wrap { text-align: center; }
+  .logo {
+    font-size: 72px;
+    font-weight: 700;
+    letter-spacing: 0.35em;
+    margin-left: 0.35em; /* letter-spacing分の右寄り補正 */
+    color: #7fd4ff;
+    text-shadow: 0 0 28px rgba(127, 212, 255, 0.55);
+  }
+  .ring {
+    margin: 40px auto 0;
+    width: 56px;
+    height: 56px;
+    border: 4px solid rgba(127, 212, 255, 0.15);
+    border-top-color: #7fd4ff;
+    border-radius: 50%;
+    animation: spin 1.1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .msg { margin-top: 28px; font-size: 26px; color: #9fb0d8; }
+  .sub { margin-top: 10px; font-size: 16px; color: #5a6a94; }
+  .diag {
+    display: none;
+    margin: 28px auto 0;
+    padding: 14px 28px;
+    border: 1px solid rgba(127, 212, 255, 0.2);
+    border-radius: 12px;
+    font-size: 18px;
+    color: #9fb0d8;
+    text-align: left;
+    width: fit-content;
+    line-height: 1.9;
+  }
+  .diag .ok { color: #7dffb0; }
+  .diag .ng { color: #ff8f8f; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="logo">ARGOS</div>
+    <div class="ring"></div>
+    <div class="msg">母艦に接続しています…</div>
+    <div class="sub" id="status">接続を確認中</div>
+    <div class="diag" id="diag">
+      <div>Wi-Fi: <span id="diag-wifi">-</span></div>
+      <div>Tailscale: <span id="diag-ts">-</span></div>
+      <div>母艦: <span id="diag-hub">-</span></div>
+    </div>
+  </div>
+<script>
+  // ?target=<ダッシュボードURL> を受け取り、疎通が取れたらそこへ遷移する。
+  // 401でも「サーバ到達」とみなせるよう no-cors で応答有無だけを見る。
+  const params = new URLSearchParams(location.search);
+  const target = params.get("target") || "http://127.0.0.1:8765/";
+  const healthUrl = new URL("/api/health", target).href;
+  let tries = 0;
+
+  async function poll() {
+    tries += 1;
+    document.getElementById("status").textContent = "接続試行 " + tries + " 回目";
+    try {
+      await fetch(healthUrl, { mode: "no-cors", cache: "no-store" });
+      document.getElementById("status").textContent = "接続できたよ！画面を切り替えます";
+      location.replace(target);
+    } catch (err) {
+      setTimeout(poll, 2000);
+    }
+  }
+  poll();
+
+  // 端末ローカルの状態サーバ(argos-terminal内蔵)が居れば、
+  // Wi-Fi/Tailscale/母艦のどこで詰まっているかを表示する。
+  // 居ない環境（母艦自身のキオスク等）では欄ごと非表示のまま。
+  const statusUrl = "http://127.0.0.1:8899/status";
+  function mark(id, ok, label) {
+    const el = document.getElementById(id);
+    if (ok === null || ok === undefined) {
+      el.textContent = "不明";
+      el.className = "";
+    } else {
+      el.textContent = ok ? "接続OK" + (label ? "（" + label + "）" : "") : "未接続";
+      el.className = ok ? "ok" : "ng";
+    }
+  }
+  async function pollDiag() {
+    try {
+      const res = await fetch(statusUrl, { cache: "no-store" });
+      const s = await res.json();
+      document.getElementById("diag").style.display = "block";
+      mark("diag-wifi", s.wifi, s.ssid);
+      mark("diag-ts", s.tailscale);
+      mark("diag-hub", s.hub);
+    } catch (err) {
+      // 状態サーバ無し: 表示しない
+    }
+    setTimeout(pollDiag, 3000);
+  }
+  pollDiag();
+</script>
+</body>
+</html>

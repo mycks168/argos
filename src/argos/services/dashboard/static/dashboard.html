@@ -1608,6 +1608,94 @@
     const stream = new EventSource("/api/stream");
     stream.addEventListener("open", refresh);
     stream.addEventListener("update", refresh);
+
+    // ===== 接続断オーバーレイ =====
+    // SSEが切れたまま戻らないときに全画面の「再接続中」表示へ切り替え、
+    // 母艦へ届くようになったら自動でリロードして復帰する。
+    // キオスク端末(タッチ・キーボード無し)がChromiumのオフライン
+    // エラーページで詰まないようにするための仕組み。
+    (function () {
+      const style = document.createElement("style");
+      style.textContent = `
+        #conn-lost { position: fixed; inset: 0; z-index: 9999; display: none;
+          background: radial-gradient(ellipse at center, #101a33 0%, #070b18 70%);
+          color: #e6ecff; text-align: center; font-family: inherit; }
+        #conn-lost.show { display: flex; align-items: center; justify-content: center; }
+        #conn-lost .cl-logo { font-size: 64px; font-weight: 700; letter-spacing: .35em;
+          margin-left: .35em; color: #7fd4ff; text-shadow: 0 0 28px rgba(127,212,255,.55); }
+        #conn-lost .cl-ring { margin: 36px auto 0; width: 52px; height: 52px;
+          border: 4px solid rgba(127,212,255,.15); border-top-color: #7fd4ff;
+          border-radius: 50%; animation: clspin 1.1s linear infinite; }
+        @keyframes clspin { to { transform: rotate(360deg); } }
+        #conn-lost .cl-msg { margin-top: 24px; font-size: 24px; color: #9fb0d8; }
+        #conn-lost .cl-diag { display: none; margin: 24px auto 0; padding: 12px 26px;
+          border: 1px solid rgba(127,212,255,.2); border-radius: 12px; font-size: 17px;
+          color: #9fb0d8; text-align: left; width: fit-content; line-height: 1.9; }
+        #conn-lost .ok { color: #7dffb0; }
+        #conn-lost .ng { color: #ff8f8f; }
+      `;
+      document.head.appendChild(style);
+      const overlay = document.createElement("div");
+      overlay.id = "conn-lost";
+      overlay.innerHTML = `
+        <div>
+          <div class="cl-logo">ARGOS</div>
+          <div class="cl-ring"></div>
+          <div class="cl-msg">母艦との接続が切れたよ。再接続中…</div>
+          <div class="cl-diag" id="cl-diag">
+            <div>Wi-Fi: <span id="cl-wifi">-</span></div>
+            <div>Tailscale: <span id="cl-ts">-</span></div>
+            <div>母艦: <span id="cl-hub">-</span></div>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const GRACE_MS = 8000;   // 一時的なSSE再接続では表示しない猶予
+      let lostSince = null;
+      let reloading = false;
+      stream.addEventListener("open", () => {
+        lostSince = null;
+        overlay.classList.remove("show");
+      });
+      stream.addEventListener("error", () => {
+        if (lostSince === null) lostSince = Date.now();
+      });
+
+      function mark(id, ok, label) {
+        const el = document.getElementById(id);
+        if (ok === null || ok === undefined) { el.textContent = "不明"; el.className = ""; return; }
+        el.textContent = ok ? "接続OK" + (label ? "（" + label + "）" : "") : "未接続";
+        el.className = ok ? "ok" : "ng";
+      }
+      async function pollLocalDiag() {
+        // 端末ローカルの状態サーバ(argos-terminal内蔵)があれば詳細を出す
+        try {
+          const res = await fetch("http://127.0.0.1:8899/status", { cache: "no-store" });
+          const s = await res.json();
+          document.getElementById("cl-diag").style.display = "block";
+          mark("cl-wifi", s.wifi, s.ssid);
+          mark("cl-ts", s.tailscale);
+          mark("cl-hub", s.hub);
+        } catch (err) { /* 状態サーバ無し */ }
+      }
+      async function watch() {
+        if (lostSince !== null && Date.now() - lostSince > GRACE_MS) {
+          overlay.classList.add("show");
+          pollLocalDiag();
+          // 母艦へ届くのにSSEが戻らないときはリロードで復帰する
+          try {
+            const res = await fetch("/api/health", { cache: "no-store" });
+            if (res.ok && !reloading) {
+              reloading = true;
+              location.reload();
+              return;
+            }
+          } catch (err) { /* まだ届かない */ }
+        }
+        setTimeout(watch, 3000);
+      }
+      watch();
+    })();
   </script>
 </body>
 </html>

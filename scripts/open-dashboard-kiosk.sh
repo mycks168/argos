@@ -16,7 +16,7 @@ if command -v gsettings >/dev/null 2>&1; then
   gsettings set org.gnome.desktop.lockdown disable-lock-screen true || true
 fi
 
-if pgrep -f "[c]hromium.*--kiosk.*http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/" >/dev/null; then
+if pgrep -f "[c]hromium.*argos-dashboard-chromium-kiosk" >/dev/null; then
   exit 0
 fi
 
@@ -25,6 +25,10 @@ DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
   DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
 fi
+
+# 母艦起動直後はダッシュボードより先にChromiumが立ち上がるため、
+# 疎通が取れるまでローカルの接続待ち画面を表示し、取れたら自動遷移する。
+SPLASH_URL="file:///opt/argos/scripts/kiosk-splash.html?target=${DASHBOARD_URL}"
 
 exec chromium \
   --user-data-dir="${HOME}/.config/argos-dashboard-chromium-kiosk" \
@@ -45,4 +49,4 @@ exec chromium \
   --disable-infobars \
   --disable-session-crashed-bubble \
   --autoplay-policy=no-user-gesture-required \
-  "${DASHBOARD_URL}"
+  "${SPLASH_URL}"
