@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ARGOS TIMER</title>
+<style>
+  /* 車載ダッシュボード向けタイマー画面。締め切り絶対時刻(deadline)基準で描画するため表示遅延の影響を受けない */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: radial-gradient(ellipse at 50% 40%, #101828 0%, #05080f 70%);
+    color: #e2e8f0;
+    font-family: "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .wrap { position: relative; display: flex; flex-direction: column; align-items: center; gap: 2vmin; }
+  .title {
+    font-size: 3.2vmin; letter-spacing: 0.5em; text-indent: 0.5em;
+    color: #7dd3fc; text-transform: uppercase; opacity: 0.85;
+  }
+  .ring-box { position: relative; width: 62vmin; height: 62vmin; }
+  svg { width: 100%; height: 100%; transform: rotate(-90deg); }
+  .ring-bg { fill: none; stroke: #1e293b; stroke-width: 6; }
+  .ring-fg {
+    fill: none; stroke: var(--accent, #22d3ee); stroke-width: 6; stroke-linecap: round;
+    filter: drop-shadow(0 0 1.2vmin var(--accent, #22d3ee));
+    transition: stroke 0.5s;
+  }
+  .center {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1vmin;
+  }
+  .time {
+    font-size: 14vmin; font-weight: 200; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em; color: #f8fafc;
+    text-shadow: 0 0 3vmin color-mix(in srgb, var(--accent, #22d3ee) 60%, transparent);
+  }
+  .sub { font-size: 2.6vmin; color: #64748b; font-variant-numeric: tabular-nums; }
+  .done .time { animation: pulse 1s ease-in-out infinite; color: #fca5a5; }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  .scan {
+    position: fixed; left: 0; right: 0; height: 1px; top: 0;
+    background: linear-gradient(90deg, transparent, #38bdf880, transparent);
+    animation: scan 6s linear infinite; pointer-events: none;
+  }
+  @keyframes scan { from { top: -2%; } to { top: 102%; } }
+</style>
+</head>
+<body>
+<div class="scan"></div>
+<div class="wrap">
+  <div class="title" id="title">TIMER</div>
+  <div class="ring-box">
+    <svg viewBox="0 0 100 100">
+      <circle class="ring-bg" cx="50" cy="50" r="46"></circle>
+      <circle class="ring-fg" id="ring" cx="50" cy="50" r="46"></circle>
+    </svg>
+    <div class="center">
+      <div class="time" id="time">--:--</div>
+      <div class="sub" id="sub"></div>
+    </div>
+  </div>
+</div>
+<script>
+  // クエリパラメータで再利用可能: ?deadline=<epoch ms>&total=<秒>&title=<表示名>
+  const q = new URLSearchParams(location.search);
+  const deadline = Number(q.get("deadline") || 0);   // 締め切り（発話時刻＋設定時間）
+  const total = Number(q.get("total") || 180) * 1000; // 全体の長さ（進捗リング用）
+  document.getElementById("title").textContent = q.get("title") || "TIMER";
+
+  const ring = document.getElementById("ring");
+  const timeEl = document.getElementById("time");
+  const subEl = document.getElementById("sub");
+  const CIRC = 2 * Math.PI * 46;
+  ring.style.strokeDasharray = CIRC;
+
+  const endStr = new Date(deadline).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  subEl.textContent = "終了予定 " + endStr;
+
+  function tick() {
+    const remain = deadline - Date.now();
+    if (remain <= 0) {
+      timeEl.textContent = "00:00";
+      ring.style.strokeDashoffset = CIRC;
+      document.body.style.setProperty("--accent", "#ef4444");
+      document.body.classList.add("done");
+      subEl.textContent = "タイムアップ！";
+      return;
+    }
+    const s = Math.ceil(remain / 1000);
+    timeEl.textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+    ring.style.strokeDashoffset = CIRC * (1 - remain / total);
+    // 残り時間に応じてシアン→琥珀→赤へ変化させる
+    const accent = remain < 10000 ? "#ef4444" : remain < 30000 ? "#f59e0b" : "#22d3ee";
+    document.body.style.setProperty("--accent", accent);
+    requestAnimationFrame(tick);
+  }
+  tick();
+</script>
+</body>
+</html>
