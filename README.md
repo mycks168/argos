@@ -244,6 +244,7 @@ ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` 秒間操作がない場合は、ロック中も黒い全画面表示へ切り替わります。0以下にすると無効化できます。現段階ではバックライトやHDMI出力は消しません。タッチ操作に加えて、PTT録音開始でも黒表示を解除します。
 地図オーバーレイの現在地は、既定ではローカルのgpsdまたはGPSデバイスから取得します。外部端末のGPS APIを使う場合は、`.env` で `ARGOS_LOCATION_PROVIDER=remote` と `ARGOS_REMOTE_LOCATION_URL` を設定します。
 ARGOSロゴ直下のミュートボタンで読み上げを一時停止できます。ミュート中は再生中の音声を止め、解除後はキューに残っている読み上げから再開します。ミュート状態はボタン表示で示し、録音中などの動作表示はそのまま維持します。
+会話欄下部の入力欄からテキストを送ると、現在のエージェントスロットへ同じ会話の続きとして入力できます。この操作ではSTTとTTSを使わず、回答も会話欄へ文字で表示します。iPhoneやiPadなど、同じダッシュボードへ接続できるブラウザからも利用できます。
 同じ操作行のマイクOFFボタンで、PTTとウェイクワードの受付を一時停止できます。もう一度押すとマイク受付を再開します。Wi-Fi状態は接続中だけARGOSロゴ横に表示します。
 左側のフォントサイズボタンで、ダッシュボードの主要テキストを `小`、`中`、`大` から切り替えられます。選択値はブラウザのローカルストレージに保存され、キオスク画面の再読み込み後も維持されます。未保存時の初期値は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` で指定できます。
 `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`

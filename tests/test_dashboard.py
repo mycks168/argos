@@ -280,6 +280,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="iframe-right"' in html
         assert 'id="swap-button"' in html
         assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
+        assert 'id="text-composer"' in html
+        assert 'id="text-input"' in html
+        assert '"Content-Type": "text/plain; charset=utf-8"' in html
+        assert '"Accept": "text/event-stream"' in html
+        assert 'fetch("/api/terminal/turn"' in html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

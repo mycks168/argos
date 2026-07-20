@@ -518,13 +518,52 @@
     }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
-      height: calc(100vh - 43px);
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       overscroll-behavior-y: contain;
       scrollbar-width: none;
       touch-action: pan-y;
     }
     .messages::-webkit-scrollbar { display: none; }
+    #conversation-view { display: flex; flex-direction: column; }
+    .text-composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px;
+      gap: 8px;
+      padding-top: 10px;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+      border-top: 1px solid #26323b;
+      background: #0b1117;
+    }
+    .text-composer textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 120px;
+      resize: none;
+      box-sizing: border-box;
+      border: 1px solid #526775;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #101820;
+      color: #edf3f7;
+      font: inherit;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+    .text-composer textarea:focus { outline: 2px solid #69b7e4; outline-offset: 1px; }
+    .text-send-button {
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: #69b7e4;
+      color: #071018;
+      font-size: 22px;
+      font-weight: 900;
+      cursor: pointer !important;
+    }
+    .text-send-button:disabled { opacity: 0.45; cursor: default !important; }
     .message { border-left: 3px solid #526775; padding: 4px 0 4px 12px; }
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
@@ -551,6 +590,7 @@
       .dashboard { grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
       .notifications-panel { grid-column: 1 / -1; min-height: 180px; }
       .messages, .notifications { height: auto; max-height: 420px; }
+      #conversation-view { min-height: 480px; }
     }
     @media (min-width: 761px) and (max-width: 900px) {
       body { overflow: hidden; }
@@ -571,7 +611,7 @@
       .status { margin-top: 7px; gap: 7px; }
       .agent-usage { margin-top: 6px; padding: 5px 6px; }
       .notifications-panel { grid-column: auto; min-height: 0; }
-      .messages, .notifications { height: calc(100vh - 21px); max-height: none; }
+      .messages, .notifications { max-height: none; }
     }
     @media (max-width: 760px) {
       .dashboard { display: block; }
@@ -923,6 +963,10 @@
         <div id="conversation-view" class="slot-container">
           <p class="eyebrow">CONVERSATION</p>
           <div id="messages" class="messages"></div>
+          <form id="text-composer" class="text-composer">
+            <textarea id="text-input" rows="1" maxlength="4000" aria-label="メッセージ" placeholder="メッセージ"></textarea>
+            <button id="text-send-button" class="text-send-button" type="submit" aria-label="送信" title="送信">&#8593;</button>
+          </form>
         </div>
         <div id="overlay-center" class="slot-overlay">
           <div class="overlay-header">
@@ -958,6 +1002,9 @@
 
   <script>
     const messages = document.getElementById("messages");
+    const textComposer = document.getElementById("text-composer");
+    const textInput = document.getElementById("text-input");
+    const textSendButton = document.getElementById("text-send-button");
     const notifications = document.getElementById("notifications");
     const screensaver = document.getElementById("screensaver");
     const centerAlert = document.getElementById("center-alert");
@@ -1436,6 +1483,45 @@
         sessionResetButton.disabled = false;
       }
     }
+    async function sendTextTurn(value) {
+      const text = value.trim();
+      if (!text || textSendButton.disabled) return;
+      textInput.disabled = true;
+      textSendButton.disabled = true;
+      try {
+        const headers = {"Content-Type": "text/plain; charset=utf-8", "Accept": "text/event-stream"};
+        if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+        const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: text});
+        if (!response.ok) throw new Error(await response.text());
+        if (!response.body) throw new Error("応答ストリームを取得できませんでした");
+        const reader = response.body.getReader();
+        while (!(await reader.read()).done) {
+          // 会話表示は共通のダッシュボードSSEが更新する。
+        }
+        textInput.value = "";
+        textInput.style.height = "auto";
+      } catch (error) {
+        console.error("Failed to send text turn:", error);
+      } finally {
+        textInput.disabled = false;
+        textSendButton.disabled = false;
+        textInput.focus();
+      }
+    }
+    textComposer.addEventListener("submit", event => {
+      event.preventDefault();
+      sendTextTurn(textInput.value);
+    });
+    textInput.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        textComposer.requestSubmit();
+      }
+    });
+    textInput.addEventListener("input", () => {
+      textInput.style.height = "auto";
+      textInput.style.height = `${Math.min(textInput.scrollHeight, 120)}px`;
+    });
     function applyControlResult(result) {
       if (!result || typeof result !== "object") return;
       if (typeof result.muted === "boolean") {

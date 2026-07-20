@@ -812,11 +812,20 @@ class ArgosApp:
         log.info("端末操作でエージェントスロット切替: %s", name)
         return self._terminal_list_slots()
 
-    def _terminal_process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
-        """録音WAVをSTT→エージェント→TTSで処理し、SSE用イベントを順に生成する。
+    def _terminal_process_turn(
+        self,
+        wav_bytes: bytes | None = None,
+        *,
+        text: str | None = None,
+        want_audio: bool = True,
+    ) -> Iterator[dict[str, object]]:
+        """端末ターンを処理し、SSE用イベントを順に生成する。
 
-        母艦のスピーカーでは再生せず、応答テキストの差分と文単位の合成WAVを
-        端末へ返す。発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
+        入力は録音WAV(``wav_bytes``)またはテキスト(``text``)のどちらか一方。
+        音声入力のときはSTTで文字起こしし、テキスト入力のときはそのまま使う。
+        ``want_audio`` が True のときは応答をTTS合成したWAVも返し、False の
+        ときは応答テキストの差分だけを返す（母艦のスピーカーでは再生しない）。
+        発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
         """
         slot_name = self._agent.current_name
         slot_provider = self._agent.current_provider
@@ -827,31 +836,39 @@ class ArgosApp:
         self._dashboard_state.wake_display()
         tmp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
-                tmp.write(wav_bytes)
-                tmp_path = tmp.name
-            self._status.set(token, "transcribing", "文字起こし中")
-            try:
-                transcript = self._transcribe_wav(tmp_path)
-            except Exception as exc:
-                log.exception("端末ターンの文字起こしに失敗しました")
-                self._report_error("文字起こし", exc)
-                yield {"event": "error", "message": "文字起こしに失敗しました"}
-                return
-            if not transcript:
-                log.info("端末ターンの文字起こし結果が空でした")
-                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
-                yield {"event": "error", "message": "音声を認識できませんでした"}
-                return
+            # --- 入力段: テキストならそのまま、音声ならSTTで文字起こしする ---
+            if text is not None:
+                transcript = text.strip()
+                if not transcript:
+                    log.info("端末テキストターンの入力が空でした")
+                    yield {"event": "error", "message": "テキストが空です"}
+                    return
+            else:
+                with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
+                    tmp.write(wav_bytes or b"")
+                    tmp_path = tmp.name
+                self._status.set(token, "transcribing", "文字起こし中")
+                try:
+                    transcript = self._transcribe_wav(tmp_path)
+                except Exception as exc:
+                    log.exception("端末ターンの文字起こしに失敗しました")
+                    self._report_error("文字起こし", exc)
+                    yield {"event": "error", "message": "文字起こしに失敗しました"}
+                    return
+                if not transcript:
+                    log.info("端末ターンの文字起こし結果が空でした")
+                    self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                    yield {"event": "error", "message": "音声を認識できませんでした"}
+                    return
             yield {"event": "transcript", "text": transcript}
-            log.info("端末ユーザ発話: %s", transcript)
-            # ローカル録音と同じ本人確認ゲートを通す。ロック中は発話を本人確認扱いにし、
-            # 音声キーワード一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
+            log.info("端末ユーザ入力: %s", transcript)
+            # ローカル録音と同じ本人確認ゲートを通す。ロック中は入力を本人確認扱いにし、
+            # 合言葉一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
             if not self._auth_coord.ensure_authenticated(transcript, token):
                 if self._auth_coord.is_locked():
-                    yield {"event": "error", "message": "本人確認が必要です。合言葉を話してね。"}
+                    yield {"event": "error", "message": "本人確認が必要です。合言葉を入力してね。"}
                 else:
-                    # キーワードで解除できたが、この発話自体は本人確認用なのでエージェントへは渡さない。
+                    # キーワードで解除できたが、この入力自体は本人確認用なのでエージェントへは渡さない。
                     yield {"event": "text", "delta": "本人確認しました。"}
                     yield {"event": "done", "text": "本人確認しました。"}
                 return
@@ -862,20 +879,29 @@ class ArgosApp:
             seq = 0
             full_response = ""
             try:
-                for kind, payload in self._speech.synthesize_response_stream(
-                    self._agent.ask_stream(transcript), slot_key
-                ):
-                    if kind == "text":
-                        text = str(payload)
-                        if not full_response:
-                            self._status.set(token, "speaking", "読み上げ中")
-                        full_response += text
-                        self._dashboard_state.append_message(dashboard_message_id, text)
-                        yield {"event": "text", "delta": text}
-                    else:
-                        encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
-                        yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
-                        seq += 1
+                deltas = self._agent.ask_stream(transcript)
+                if want_audio:
+                    # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
+                    for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
+                        if kind == "text":
+                            chunk = str(payload)
+                            if not full_response:
+                                self._status.set(token, "speaking", "読み上げ中")
+                            full_response += chunk
+                            self._dashboard_state.append_message(dashboard_message_id, chunk)
+                            yield {"event": "text", "delta": chunk}
+                        else:
+                            encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
+                            yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
+                            seq += 1
+                else:
+                    # テキスト出力のみ。TTS合成を通さず応答差分だけを返す。
+                    for delta in deltas:
+                        if not delta:
+                            continue
+                        full_response += delta
+                        self._dashboard_state.append_message(dashboard_message_id, delta)
+                        yield {"event": "text", "delta": delta}
                 log.info("端末エージェント応答: %s", full_response[:300])
                 yield {"event": "done", "text": full_response}
             except RunnerSlotBusyError as exc:
@@ -1207,9 +1233,19 @@ class _TerminalGateway:
         """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
         return self._app._terminal_next_slot()
 
-    def process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
-        """録音WAVを処理し、SSE用イベントを順に生成する。"""
-        return self._app._terminal_process_turn(wav_bytes)
+    def process_turn(
+        self,
+        wav_bytes: bytes | None = None,
+        *,
+        text: str | None = None,
+        want_audio: bool = True,
+    ) -> Iterator[dict[str, object]]:
+        """録音WAVまたはテキストを処理し、SSE用イベントを順に生成する。
+
+        ``text`` を渡すとSTTをスキップしてそのままエージェントへ入力する。
+        ``want_audio`` が False のときはTTS合成を省き、応答テキストのみ返す。
+        """
+        return self._app._terminal_process_turn(wav_bytes, text=text, want_audio=want_audio)
 
 
 def _app_slot_key(name: str, provider: str) -> str:

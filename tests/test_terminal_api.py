@@ -37,6 +37,8 @@ class FakeTerminalHandler:
         """process_turnで返すイベント列を保持する。"""
         self._turn_events = turn_events
         self.received_wav = None
+        self.received_text = None
+        self.want_audio = None
 
     def list_slots(self):
         return {"slots": [{"name": "作業", "provider": "codex", "active": True}], "current": {"name": "作業", "provider": "codex"}}
@@ -44,8 +46,10 @@ class FakeTerminalHandler:
     def next_slot(self):
         return {"slots": [{"name": "次", "provider": "antigravity", "active": True}], "current": {"name": "次", "provider": "antigravity"}}
 
-    def process_turn(self, wav_bytes):
+    def process_turn(self, wav_bytes=None, *, text=None, want_audio=True):
         self.received_wav = wav_bytes
+        self.received_text = text
+        self.want_audio = want_audio
         yield from self._turn_events
 
 
@@ -57,13 +61,15 @@ def _start_server(handler, token="secret"):
     return server, base_url
 
 
-def _request(url, method="GET", body=None, token="secret", content_type="application/json"):
+def _request(url, method="GET", body=None, token="secret", content_type="application/json", accept=""):
     """Terminal APIへHTTPリクエストを送りレスポンスを返す。"""
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if body is not None and content_type:
         headers["Content-Type"] = content_type
+    if accept:
+        headers["Accept"] = accept
     return urlopen(Request(url, data=body, headers=headers, method=method), timeout=3)
 
 
@@ -157,6 +163,38 @@ def test_terminal_endpoints_disabled_without_handler():
 # --- ArgosApp 端末ターン処理 ---
 
 
+def test_terminal_turn_accepts_text_and_requests_text_response():
+    """テキスト入力と文字回答指定を端末ハンドラへ渡す。"""
+    handler = FakeTerminalHandler([{"event": "done", "text": "了解"}])
+    server, base_url = _start_server(handler)
+    try:
+        with _request(
+            base_url + "/api/terminal/turn",
+            method="POST",
+            body="こんにちは".encode(),
+            content_type="text/plain; charset=utf-8",
+            accept="text/event-stream",
+        ) as response:
+            assert _read_sse_events(response)[-1][0] == "done"
+        assert handler.received_wav is None
+        assert handler.received_text == "こんにちは"
+        assert handler.want_audio is False
+    finally:
+        server.stop()
+
+
+def test_terminal_turn_rejects_unsupported_content_type():
+    """未対応の入力形式は415で拒否する。"""
+    handler = FakeTerminalHandler([])
+    server, base_url = _start_server(handler)
+    try:
+        with pytest.raises(HTTPError) as exc:
+            _request(base_url + "/api/terminal/turn", method="POST", body=b"{}", content_type="application/json")
+        assert exc.value.code == 415
+    finally:
+        server.stop()
+
+
 def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     """端末ターンがSTT→応答→合成の順にイベントを生成し、ダッシュボードへ記録する。"""
     _patch_app(monkeypatch)
@@ -181,6 +219,18 @@ def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     assert ("assistant", "応答") in roles
     # 端末PTTでキオスク画面のスクリーンセーバーが解除される。
     assert snapshot["display_activity"]["sequence"] >= 1
+
+
+def test_app_terminal_process_text_turn_skips_stt_and_tts(monkeypatch):
+    """文字入出力ではSTTとTTSを呼ばず、応答差分を記録する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr(app, "_transcribe_wav", lambda path: pytest.fail("STTは呼ばない"))
+    monkeypatch.setattr(app._speech, "synthesize_response_stream", lambda *args: pytest.fail("TTSは呼ばない"))
+    events = list(app._terminal_process_turn(text=" 質問です ", want_audio=False))
+    assert [event["event"] for event in events] == ["transcript", "text", "done"]
+    assert events[0]["text"] == "質問です"
+    assert events[-1]["text"] == "応答"
 
 
 def test_app_terminal_process_turn_updates_dashboard_status(monkeypatch):
