@@ -251,7 +251,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 端末APIは以下のエンドポイントを提供する。いずれも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。
 
-- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。`Content-Type: audio/ogg`（または `audio/opus`）の場合はOgg Opusとして受け取り、母艦側でWAVへデコードしてから処理する（LTE等の低速回線向け）。デコード失敗は400を返す。イベント種別は次のとおり。
+- `POST /api/terminal/turn`：入力を母艦のエージェントへ渡し、そのターンの結果を **Server-Sent Events** でストリーム返却する。`Content-Type: audio/wav` はSTT→エージェント→TTS、`audio/ogg`（または `audio/opus`）はWAVへデコード後に同じ処理を行う。`Content-Type: text/plain; charset=utf-8` はSTTを省略して本文を直接エージェントへ渡す。`Accept: text/event-stream` を指定するとTTSを省略して文字イベントだけを返す。Accept未指定または `*/*` は後方互換のため音声イベントも返す。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。未対応の入力形式は415、Opusのデコード失敗は400を返す。イベント種別は次のとおり。
   - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
   - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
   - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。リクエストヘッダー `X-Argos-Audio: opus` を付けると、各チャンクをOgg Opusへ変換して `{"format": "opus", ...}` で返す（変換失敗時はWAVのまま返すフォールバック付き）。
@@ -263,6 +263,8 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 端末ターンはローカル録音と同じ本人確認ゲートを通す。母艦がロック中（本人確認が有効かつ未認証）の場合、端末の発話はLLMエージェントへ渡さず本人確認用として扱う。音声キーワードが一致すれば母艦と共有の認証状態を解除し、`text` で「本人確認しました。」を返して `done` で終える。解除できなければ `error` で本人確認を促す。顔認証は母艦のカメラに依存するため、遠隔端末からの実質的な解除手段は音声キーワードになる。認証状態は母艦と端末で共有するため、どちらで解除しても両方が解除される。本人確認が無効な場合はこのゲートを素通りする。
 
 母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンの合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+
+ダッシュボードの会話欄下部からテキストを送信できる。ブラウザは `text/plain` と `Accept: text/event-stream` を使うため、STTとTTSを実行せず、同じスロット・同じ会話コンテキストへ文字で質問し文字で回答を表示する。
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 

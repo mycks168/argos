@@ -425,26 +425,50 @@ def _create_handler(
                 state.unsubscribe(subscriber)
 
         def _send_terminal_turn(self, handler: Any, max_bytes: int) -> None:
-            """録音音声（WAVまたはOgg Opus）を受け取り、STT→エージェント→TTS結果をSSEで返す。"""
+            """端末ターンを受け取り、STT/直接テキスト→エージェント→(TTS)結果をSSEで返す。
+
+            入力形式はリクエストの Content-Type で決まる。
+              - ``audio/wav``（既定）: 録音WAV
+              - ``audio/ogg`` / ``audio/opus``: Ogg Opus（WAVへデコード）
+              - ``text/plain``: テキストをそのままエージェントへ（STTスキップ）
+            出力に音声を含めるかは Accept ヘッダでネゴシエートする。
+              - ``text/plain`` のみを要求 → 音声を返さずテキストのみ（母艦も端末も読み上げない）
+              - それ以外（既定）→ 従来通り音声チャンクも返す。コーデックは ``X-Argos-Audio`` を尊重
+            """
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 self._send_json({"error": "Content-Length が不正です"}, HTTPStatus.BAD_REQUEST)
                 return
             if length <= 0 or length > max_bytes:
-                self._send_json({"error": "音声サイズが不正です"}, HTTPStatus.BAD_REQUEST)
+                self._send_json({"error": "入力サイズが不正です"}, HTTPStatus.BAD_REQUEST)
                 return
-            wav_bytes = self.rfile.read(length)
+            body = self.rfile.read(length)
             content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
-            if content_type in {"audio/ogg", "audio/opus"}:
+            # Accept にテキストのみが指定されていれば、応答音声（TTS）を省く。
+            want_audio = not _accepts_text_only(self.headers.get("Accept", ""))
+            text_input: str | None = None
+            wav_bytes: bytes | None = None
+            if content_type == "text/plain":
                 try:
-                    wav_bytes = decode_opus_to_wav(wav_bytes)
+                    text_input = body.decode("utf-8")
+                except UnicodeDecodeError:
+                    self._send_json({"error": "テキストのデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
+                    return
+            elif content_type in {"audio/ogg", "audio/opus"}:
+                try:
+                    wav_bytes = decode_opus_to_wav(body)
                 except OpusCodecError as exc:
                     log.warning("端末ターンのOpusデコードに失敗しました: %s", exc)
                     self._send_json({"error": "Opusデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
                     return
+            elif content_type in {"", "audio/wav", "audio/x-wav"}:
+                wav_bytes = body
+            else:
+                self._send_json({"error": "対応していない入力形式です"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
             # X-Argos-Audio: opus のとき、応答音声チャンクをOpusへ変換して返す。
-            wants_opus = self.headers.get("X-Argos-Audio", "").strip().lower() == "opus"
+            wants_opus = want_audio and self.headers.get("X-Argos-Audio", "").strip().lower() == "opus"
             # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
             self.close_connection = True
             self.send_response(HTTPStatus.OK)
@@ -453,7 +477,7 @@ def _create_handler(
             self.send_header("Connection", "close")
             self.end_headers()
             try:
-                for event in handler.process_turn(wav_bytes):
+                for event in handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio):
                     if wants_opus and event.get("event") == "audio" and event.get("format") == "wav":
                         event = _encode_audio_event_to_opus(event)
                     name = str(event.get("event", "message"))
@@ -472,6 +496,22 @@ def _create_handler(
                     return
 
     return DashboardHandler
+
+
+def _accepts_text_only(accept: str) -> bool:
+    """Acceptヘッダが音声を含まずテキストのみを要求しているか判定する。
+
+    ``text/plain`` や ``text/event-stream`` などテキスト系だけが指定され、
+    ``*/*`` や ``audio/*`` を含まないときに True を返す。ヘッダ未指定や ``*/*``
+    を含む場合は従来通り音声も返す（False）。端末クライアントは Accept を
+    指定しない（requests既定は ``*/*``）ため、既存の音声ターンは影響を受けない。
+    """
+    types = [part.split(";")[0].strip().lower() for part in accept.split(",") if part.strip()]
+    if not types:
+        return False
+    if any(t == "*/*" or t.startswith("audio/") for t in types):
+        return False
+    return all(t.startswith("text/") for t in types)
 
 
 def _encode_audio_event_to_opus(event: dict[str, Any]) -> dict[str, Any]:
