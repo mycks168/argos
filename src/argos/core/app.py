@@ -807,17 +807,25 @@ class ArgosApp:
         スロットは母艦・ダッシュボード・端末で共有するため、切替は目の前の端末にも
         反映する。母艦側では読み上げず、表示だけ更新して切替後の現在スロットを返す。
         """
+        self._status.invalidate()
         name = self._agent.next_slot()
-        self._sync_agent_display()
+        self._complete_terminal_slot_switch()
         log.info("端末操作でエージェントスロット切替: %s", name)
         return self._terminal_list_slots()
 
     def _terminal_select_slot(self, name: str, provider: str) -> dict[str, object]:
         """端末操作で指定されたエージェントスロットへ切り替える。"""
         selected = self._agent.select_slot(name.strip(), provider.strip())
-        self._sync_agent_display()
+        self._status.invalidate()
+        self._complete_terminal_slot_switch()
         log.info("端末操作でエージェントスロット選択: %s (%s)", selected, provider)
         return self._terminal_list_slots()
+
+    def _complete_terminal_slot_switch(self) -> None:
+        """端末からの切替後に表示状態と未読応答を現在スロットへ同期する。"""
+        self._sync_agent_display()
+        self._set_ready_or_locked()
+        self._start_pending_slot_response()
 
     def _terminal_process_turn(
         self,
@@ -910,6 +918,13 @@ class ArgosApp:
                         self._dashboard_state.append_message(dashboard_message_id, delta)
                         yield {"event": "text", "delta": delta}
                 log.info("端末エージェント応答: %s", full_response[:300])
+                if full_response and not self._is_current_slot_key(slot_key):
+                    self._dashboard_state.set_slot_unread(slot_name, slot_provider, True)
+                    self._dashboard_state.add_notification(
+                        f"{slot_name} 応答完了",
+                        "スロットを切り替えると回答を確認できます。",
+                        source="ARGOS",
+                    )
                 yield {"event": "done", "text": full_response}
             except RunnerSlotBusyError as exc:
                 log.info("端末ターンでエージェントスロットが処理中です: %s", exc)
