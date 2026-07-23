@@ -217,7 +217,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'body[data-status-code="thinking"]::after' in html
         assert ".status[data-code=\"transcribing\"] .status-dot" in html
         assert "status-frame-flow" in html
-        assert 'document.body.dataset.statusCode = state.status.code || "ready";' in html
+        assert 'document.body.dataset.statusCode = displayStatus.code || "ready";' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert 'id="agent-usage"' in html
@@ -288,6 +288,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"Content-Type": "text/plain; charset=utf-8"' in html
         assert '"Accept": "text/event-stream"' in html
         assert 'fetch("/api/terminal/turn"' in html
+        assert "const inFlightTextSlots = new Set();" in html
+        assert "inFlightTextSlots.has(currentAgentSlotKey)" in html
+        assert "textInput.disabled = false;" in html
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:

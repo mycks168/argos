@@ -354,6 +354,37 @@ def test_app_terminal_list_and_next_slots(monkeypatch):
     assert selected["current"]["name"] == "作業"
 
 
+def test_terminal_slot_switch_resets_old_slot_status(monkeypatch):
+    """処理中に別スロットへ切り替えると選択先は待機表示になる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    token = app._status.current_generation()
+    app._status.set(token, "thinking", "考え中")
+
+    app._terminal_next_slot()
+
+    assert app._dashboard_state.status_code() == "ready"
+
+
+def test_terminal_turn_marks_completed_background_slot_unread(monkeypatch):
+    """切替後に元スロットの文字回答が完了すると未読表示にする。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    def switch_then_respond(prompt):
+        """応答中に別スロットへ切り替えて回答を返す。"""
+        app._terminal_next_slot()
+        yield "裏で完了"
+
+    monkeypatch.setattr(app._agent, "ask_stream", switch_then_respond)
+    events = list(app._terminal_process_turn(text="質問", want_audio=False))
+
+    assert events[-1] == {"event": "done", "text": "裏で完了"}
+    slots = {(slot["provider"], slot["name"]): slot for slot in app._dashboard_state.snapshot()["slots"]}
+    assert slots[("codex", "作業")]["unread"] is True
+    assert app._dashboard_state.status_code() == "ready"
+
+
 def test_terminal_gateway_delegates(monkeypatch):
     """_TerminalGatewayが各操作を本体へ委譲する。"""
     _patch_app(monkeypatch)

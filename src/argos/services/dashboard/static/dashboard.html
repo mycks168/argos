@@ -1208,6 +1208,9 @@
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    let currentAgentSlotKey = "";
+    let currentAgentSlotBusy = false;
+    const inFlightTextSlots = new Set();
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
     let latestNotifications = [];
     
@@ -1442,9 +1445,15 @@
     }
     centerAlert.addEventListener("click", closeCenterAlert);
     function render(state) {
-      status.dataset.code = state.status.code;
-      document.body.dataset.statusCode = state.status.code || "ready";
-      statusLabel.textContent = state.status.label;
+      const activeAgentSlot = (state.slots || []).find(slot => slot.active);
+      currentAgentSlotKey = activeAgentSlot
+        ? `${activeAgentSlot.provider || ""}\u0000${activeAgentSlot.name || ""}` : "";
+      currentAgentSlotBusy = Boolean(activeAgentSlot?.busy);
+      const displayStatus = currentAgentSlotBusy && state.status.code === "ready"
+        ? {code: "thinking", label: "考え中"} : state.status;
+      status.dataset.code = displayStatus.code;
+      document.body.dataset.statusCode = displayStatus.code || "ready";
+      statusLabel.textContent = displayStatus.label;
       agentName.textContent = state.agent?.name || "--";
       const provider = state.agent?.provider || "--";
       const model = state.agent?.model || "";
@@ -1472,11 +1481,12 @@
         volumeSlider.value = volume;
         volumeLabel.textContent = String(volume);
       }
-      if (state.status.code === "booting") {
+      updateTextComposerAvailability();
+      if (displayStatus.code === "booting") {
         showSplash();
       }
       const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening", "followup"]);
-      if (activeStates.has(state.status.code)) {
+      if (activeStates.has(displayStatus.code)) {
         resetScreensaver();
       }
       const displayActivitySequence = state.display_activity?.sequence ?? 0;
@@ -1681,9 +1691,12 @@
     });
     async function sendTextTurn(value) {
       const text = value.trim();
-      if (!text || textSendButton.disabled) return;
-      textInput.disabled = true;
-      textSendButton.disabled = true;
+      const slotKey = currentAgentSlotKey;
+      if (!text || !slotKey || currentAgentSlotBusy || inFlightTextSlots.has(slotKey)) return;
+      inFlightTextSlots.add(slotKey);
+      textInput.value = "";
+      textInput.style.height = "auto";
+      updateTextComposerAvailability();
       try {
         const headers = {"Content-Type": "text/plain; charset=utf-8", "Accept": "text/event-stream"};
         if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
@@ -1694,15 +1707,21 @@
         while (!(await reader.read()).done) {
           // 会話表示は共通のダッシュボードSSEが更新する。
         }
-        textInput.value = "";
-        textInput.style.height = "auto";
       } catch (error) {
         console.error("Failed to send text turn:", error);
+        if (currentAgentSlotKey === slotKey && !textInput.value) {
+          textInput.value = text;
+        }
       } finally {
-        textInput.disabled = false;
-        textSendButton.disabled = false;
-        textInput.focus();
+        inFlightTextSlots.delete(slotKey);
+        updateTextComposerAvailability();
+        if (currentAgentSlotKey === slotKey) textInput.focus();
       }
+    }
+    function updateTextComposerAvailability() {
+      const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || inFlightTextSlots.has(currentAgentSlotKey);
+      textInput.disabled = false;
+      textSendButton.disabled = unavailable;
     }
     textComposer.addEventListener("submit", event => {
       event.preventDefault();
