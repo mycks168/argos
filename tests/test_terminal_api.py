@@ -46,6 +46,11 @@ class FakeTerminalHandler:
     def next_slot(self):
         return {"slots": [{"name": "次", "provider": "antigravity", "active": True}], "current": {"name": "次", "provider": "antigravity"}}
 
+    def select_slot(self, name, provider):
+        if name == "なし":
+            raise ValueError("エージェントスロットが見つかりません")
+        return {"slots": [{"name": name, "provider": provider, "active": True}], "current": {"name": name, "provider": provider}}
+
     def process_turn(self, wav_bytes=None, *, text=None, want_audio=True):
         self.received_wav = wav_bytes
         self.received_text = text
@@ -109,6 +114,32 @@ def test_terminal_next_slot_cycles():
         with _request(base_url + "/api/terminal/slots/next", method="POST", body=b"") as response:
             payload = json.loads(response.read())
         assert payload["current"]["name"] == "次"
+    finally:
+        server.stop()
+
+
+def test_terminal_select_slot_by_name_and_provider():
+    """スロット選択APIは名前とproviderを指定して切り替える。"""
+    handler = FakeTerminalHandler([])
+    server, base_url = _start_server(handler)
+    try:
+        body = json.dumps({"name": "調査", "provider": "claude"}).encode()
+        with _request(base_url + "/api/terminal/slots/select", method="POST", body=body) as response:
+            payload = json.loads(response.read())
+        assert payload["current"] == {"name": "調査", "provider": "claude"}
+    finally:
+        server.stop()
+
+
+def test_terminal_select_slot_rejects_unknown_slot():
+    """存在しないスロットの選択は400を返す。"""
+    handler = FakeTerminalHandler([])
+    server, base_url = _start_server(handler)
+    try:
+        body = json.dumps({"name": "なし", "provider": "codex"}).encode()
+        with pytest.raises(HTTPError) as exc:
+            _request(base_url + "/api/terminal/slots/select", method="POST", body=body)
+        assert exc.value.code == 400
     finally:
         server.stop()
 
@@ -319,6 +350,8 @@ def test_app_terminal_list_and_next_slots(monkeypatch):
     assert listing["slots"][0]["active"] is True
     switched = app._terminal_next_slot()
     assert switched["current"]["name"] == "次"
+    selected = app._terminal_select_slot("作業", "codex")
+    assert selected["current"]["name"] == "作業"
 
 
 def test_terminal_gateway_delegates(monkeypatch):
@@ -328,6 +361,7 @@ def test_terminal_gateway_delegates(monkeypatch):
     gateway = _TerminalGateway(app)
     assert gateway.list_slots()["current"]["name"] == "作業"
     assert gateway.next_slot()["current"]["name"] == "次"
+    assert gateway.select_slot("作業", "codex")["current"]["name"] == "作業"
 
 
 # --- SpeechController.synthesize_response_stream ---

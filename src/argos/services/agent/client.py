@@ -35,6 +35,9 @@ class AgentClient(Protocol):
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
 
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替え、名前を返す。"""
+
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
 
@@ -89,6 +92,15 @@ class SystemPromptAgentClient:
         if self._slots:
             self._index = (self._index + 1) % len(self._slots)
         return name
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        selected = self._client.select_slot(name, provider)
+        for index, slot in enumerate(self._slots):
+            if slot.name == name and slot.provider == provider:
+                self._index = index
+                break
+        return selected
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
@@ -215,6 +227,14 @@ class RoutedAgentClient:
         """次の会話スロットへ切り替え、名前を返す。"""
         self._index = (self._index + 1) % len(self._routes)
         return self.current_name
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        for index, route in enumerate(self._routes):
+            if route.slot.name == name and route.slot.provider == provider:
+                self._index = index
+                return self.current_name
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""

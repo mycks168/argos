@@ -223,6 +223,24 @@ def _create_handler(
                     return
                 self._send_json(terminal_handler.next_slot())
                 return
+            if path == "/api/terminal/slots/select":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    payload = self._read_json(MAX_BODY_BYTES)
+                    name = str(payload.get("name", "")).strip()
+                    provider = str(payload.get("provider", "")).strip()
+                    if not name or not provider:
+                        raise ValueError("スロット名とproviderが必要です")
+                    response = terminal_handler.select_slot(name, provider)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(response)
+                return
             if path == "/api/terminal/turn":
                 if not self._require_token():
                     return
