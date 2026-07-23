@@ -50,6 +50,14 @@ class RunnerAgentClient:
         self._index = (self._index + 1) % len(self._slots)
         return self.current_name
 
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        for index, slot in enumerate(self._slots):
+            if slot.name == name and slot.provider == provider:
+                self._index = index
+                return self.current_name
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+
     def reset_current(self) -> None:
         """現在スロットの保存済みセッションをRunner側で削除する。"""
         slot = self._slots[self._index]

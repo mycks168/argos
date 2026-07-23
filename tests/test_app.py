@@ -182,6 +182,11 @@ class FakeCodex:
         self.current_provider = "antigravity"
         return "次"
 
+    def select_slot(self, name, provider):
+        self.current_name = name
+        self.current_provider = provider
+        return name
+
     def reset_current(self):
         self.reset = True
 

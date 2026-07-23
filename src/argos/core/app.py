@@ -812,6 +812,13 @@ class ArgosApp:
         log.info("端末操作でエージェントスロット切替: %s", name)
         return self._terminal_list_slots()
 
+    def _terminal_select_slot(self, name: str, provider: str) -> dict[str, object]:
+        """端末操作で指定されたエージェントスロットへ切り替える。"""
+        selected = self._agent.select_slot(name.strip(), provider.strip())
+        self._sync_agent_display()
+        log.info("端末操作でエージェントスロット選択: %s (%s)", selected, provider)
+        return self._terminal_list_slots()
+
     def _terminal_process_turn(
         self,
         wav_bytes: bytes | None = None,
@@ -1232,6 +1239,10 @@ class _TerminalGateway:
     def next_slot(self) -> dict[str, object]:
         """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
         return self._app._terminal_next_slot()
+
+    def select_slot(self, name: str, provider: str) -> dict[str, object]:
+        """指定されたエージェントスロットへ切り替え、切替後の状態を返す。"""
+        return self._app._terminal_select_slot(name, provider)
 
     def process_turn(
         self,

@@ -434,6 +434,9 @@ def test_runner_agent_client_switches_and_resets_current_slot(monkeypatch, tmp_p
     assert client.current_provider == "codex"
     assert client.next_slot() == "調査"
     assert client.current_provider == "hermes"
+    assert client.select_slot("作業", "codex") == "作業"
+    assert client.current_provider == "codex"
+    client.select_slot("調査", "hermes")
     client.reset_current()
 
     assert calls[-1][1].endswith("/api/slots/reset")

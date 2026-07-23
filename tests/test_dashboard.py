@@ -280,6 +280,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="iframe-right"' in html
         assert 'id="swap-button"' in html
         assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
+        assert 'data-name="${escapeHtml(slot.name || "")}"' in html
+        assert 'fetch("/api/terminal/slots/select"' in html
+        assert 'slots.addEventListener("click"' in html
         assert 'id="text-composer"' in html
         assert 'id="text-input"' in html
         assert '"Content-Type": "text/plain; charset=utf-8"' in html

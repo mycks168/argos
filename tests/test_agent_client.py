@@ -157,6 +157,15 @@ def test_routed_agent_client_delegates_to_current_slot(monkeypatch):
     assert client.ask("最初") == "作業:最初"
     assert client.next_slot() == "調査"
     assert list(client.ask_stream("次")) == ["調査:次"]
+    assert client.select_slot("作業", "codex") == "作業"
+    assert client.current_provider == "codex"
+    try:
+        client.select_slot("なし", "codex")
+    except ValueError as exc:
+        assert "見つかりません" in str(exc)
+    else:
+        raise AssertionError("ValueError が発生しませんでした")
+    client.select_slot("調査", "hermes")
     client.reset_current()
 
     assert providers[0].calls == [("ask", "最初")]

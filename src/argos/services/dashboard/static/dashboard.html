@@ -1280,7 +1280,9 @@
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `
-        <button class="slot-button" type="button" disabled
+        <button class="slot-button" type="button"
+          data-name="${escapeHtml(slot.name || "")}"
+          data-provider="${escapeHtml(slot.provider || "")}"
           data-active="${slot.active ? "true" : "false"}"
           data-unread="${slot.unread ? "true" : "false"}"
           data-busy="${slot.busy ? "true" : "false"}">
@@ -1483,6 +1485,25 @@
         sessionResetButton.disabled = false;
       }
     }
+    async function selectAgentSlot(name, provider) {
+      const headers = {"Content-Type": "application/json"};
+      if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+      const response = await fetch("/api/terminal/slots/select", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({name, provider}),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await refresh();
+    }
+    slots.addEventListener("click", event => {
+      const button = event.target.closest(".slot-button");
+      if (!button || button.dataset.active === "true") return;
+      button.disabled = true;
+      selectAgentSlot(button.dataset.name || "", button.dataset.provider || "")
+        .catch(error => console.error("Failed to select agent slot:", error))
+        .finally(() => { button.disabled = false; });
+    });
     async function sendTextTurn(value) {
       const text = value.trim();
       if (!text || textSendButton.disabled) return;
