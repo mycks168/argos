@@ -864,9 +864,147 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .sp-toolbar, .sp-drawer-backdrop { display: none; }
+    body[data-layout="sp"] {
+      position: fixed;
+      top: var(--sp-viewport-top, 0);
+      left: 0;
+      width: 100%;
+      height: var(--sp-viewport-height, 100dvh);
+      min-height: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+    }
+    body[data-layout="sp"] *, body[data-layout="sp"] *::before, body[data-layout="sp"] *::after {
+      cursor: auto !important;
+    }
+    body[data-layout="sp"] .sp-toolbar {
+      position: fixed;
+      z-index: 35;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 52px;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) 48px;
+      align-items: center;
+      padding: 4px 8px;
+      border-bottom: 1px solid #354855;
+      background: #0b1117;
+    }
+    .sp-toolbar-title {
+      overflow: hidden;
+      color: #edf3f7;
+      font-size: 16px;
+      font-weight: 800;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sp-toolbar-button {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #101820;
+      color: #edf3f7;
+      font: inherit;
+      font-size: 22px;
+      touch-action: manipulation;
+    }
+    .sp-notification-count {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      min-width: 17px;
+      height: 17px;
+      padding: 0 4px;
+      border-radius: 8px;
+      background: #e63946;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 17px;
+      text-align: center;
+    }
+    .sp-notification-count[hidden] { display: none; }
+    body[data-layout="sp"] .dashboard {
+      position: absolute;
+      inset: 52px 0 0;
+      display: block;
+      min-height: 0;
+      overflow: hidden;
+      background: #070b0f;
+    }
+    body[data-layout="sp"] #slot-center {
+      position: absolute;
+      inset: 0;
+      min-height: 0;
+      padding: 10px 12px;
+      overflow: hidden;
+    }
+    body[data-layout="sp"] #conversation-view {
+      height: 100%;
+      min-height: 0;
+    }
+    body[data-layout="sp"] .messages {
+      height: auto;
+      max-height: none;
+    }
+    body[data-layout="sp"] .status-panel,
+    body[data-layout="sp"] #slot-right {
+      position: fixed;
+      z-index: 34;
+      top: 52px;
+      bottom: 0;
+      display: flex !important;
+      width: min(84vw, 340px);
+      height: auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      transition: transform 180ms ease;
+      box-shadow: 0 0 28px rgba(0, 0, 0, 0.55);
+    }
+    body[data-layout="sp"] .status-panel {
+      left: 0;
+      transform: translateX(-105%);
+    }
+    body[data-layout="sp"] #slot-right {
+      right: 0;
+      padding: 14px 16px;
+      transform: translateX(105%);
+    }
+    body[data-layout="sp"].sp-left-open .status-panel,
+    body[data-layout="sp"].sp-right-open #slot-right {
+      transform: translateX(0);
+    }
+    body[data-layout="sp"] #notifications-view,
+    body[data-layout="sp"] .notifications {
+      height: 100%;
+      max-height: none;
+      min-height: 0;
+    }
+    body[data-layout="sp"] .sp-drawer-backdrop {
+      position: fixed;
+      z-index: 33;
+      inset: 52px 0 0;
+      background: rgba(0, 0, 0, 0.42);
+    }
+    body[data-layout="sp"].sp-left-open .sp-drawer-backdrop,
+    body[data-layout="sp"].sp-right-open .sp-drawer-backdrop {
+      display: block;
+    }
+    @media (max-width: 480px) {
+      body[data-layout="sp"] #slot-center { padding: 8px; }
+      body[data-layout="sp"] .status-panel,
+      body[data-layout="sp"] #slot-right { width: min(92vw, 340px); }
+      body[data-layout="sp"] .text-composer { padding-top: 7px; }
+    }
   </style>
 </head>
-<body>
+<body data-layout=__ARGOS_DASHBOARD_LAYOUT__>
   <div id="screensaver" class="screensaver" aria-hidden="true"></div>
   <div id="center-alert" class="center-alert" aria-hidden="true">
     <div class="center-alert-card">
@@ -912,6 +1050,15 @@
       </div>
     </div>
   </div>
+
+  <header class="sp-toolbar" aria-label="SPダッシュボード操作">
+    <button id="sp-status-button" class="sp-toolbar-button" type="button" aria-label="状態を開く" aria-expanded="false">&#9776;</button>
+    <div id="sp-toolbar-title" class="sp-toolbar-title">ARGOS</div>
+    <button id="sp-notifications-button" class="sp-toolbar-button" type="button" aria-label="通知を開く" aria-expanded="false">
+      &#128276;<span id="sp-notification-count" class="sp-notification-count" hidden>0</span>
+    </button>
+  </header>
+  <div id="sp-drawer-backdrop" class="sp-drawer-backdrop" aria-hidden="true"></div>
 
   <main class="dashboard">
     <section class="status-panel" style="display: flex; flex-direction: column;">
@@ -1006,6 +1153,12 @@
     const textInput = document.getElementById("text-input");
     const textSendButton = document.getElementById("text-send-button");
     const notifications = document.getElementById("notifications");
+    const dashboardLayout = document.body.dataset.layout || "standard";
+    const spStatusButton = document.getElementById("sp-status-button");
+    const spNotificationsButton = document.getElementById("sp-notifications-button");
+    const spNotificationCount = document.getElementById("sp-notification-count");
+    const spDrawerBackdrop = document.getElementById("sp-drawer-backdrop");
+    const spToolbarTitle = document.getElementById("sp-toolbar-title");
     const screensaver = document.getElementById("screensaver");
     const centerAlert = document.getElementById("center-alert");
     const centerAlertSource = document.getElementById("center-alert-source");
@@ -1050,10 +1203,13 @@
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
     const defaultFontSize = __ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__;
     const fontSizeStorageKey = "argos-dashboard-font-size";
+    const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
+    let latestNotifications = [];
     
     // スロットごとの表示キャッシュ
     let prevSlotsState = {
@@ -1069,6 +1225,22 @@
 
       const centerTop = stacks.center[stacks.center.length - 1];
       const rightTop = stacks.right[stacks.right.length - 1];
+
+      if (dashboardLayout === "sp") {
+        if (conversationView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(conversationView, overlayCenter);
+        }
+        if (notificationsView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(notificationsView, overlayRight);
+        }
+        const normalizedCenter = ["conversation", "notifications"].includes(centerTop.type)
+          ? {type: "conversation", title: "会話"} : centerTop;
+        const normalizedRight = ["conversation", "notifications"].includes(rightTop.type)
+          ? {type: "notifications", title: "通知"} : rightTop;
+        renderSlot("center", normalizedCenter, conversationView, overlayCenter, overlayTitleCenter, iframeCenter);
+        renderSlot("right", normalizedRight, notificationsView, overlayRight, overlayTitleRight, iframeRight);
+        return;
+      }
 
       // デフォルトビューの物理的な配置（アペンド先）をスタックに合わせて移動する
       if (centerTop.type === "conversation") {
@@ -1277,6 +1449,7 @@
       const provider = state.agent?.provider || "--";
       const model = state.agent?.model || "";
       agentProvider.textContent = model ? `${provider} · ${model}` : provider;
+      spToolbarTitle.textContent = state.agent?.name ? `ARGOS · ${state.agent.name}` : "ARGOS";
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
       slots.innerHTML = (state.slots || []).map(slot => `
@@ -1332,6 +1505,8 @@
         }
       }
       const recentNotices = state.notifications.slice().reverse();
+      latestNotifications = state.notifications;
+      updateSpNotificationBadge();
       const nextNotifications = JSON.stringify(recentNotices);
       if (nextNotifications !== previousNotifications) {
         notifications.innerHTML = recentNotices.length ? recentNotices.map(item => `
@@ -1543,6 +1718,49 @@
       textInput.style.height = "auto";
       textInput.style.height = `${Math.min(textInput.scrollHeight, 120)}px`;
     });
+    function setSpDrawer(side) {
+      if (dashboardLayout !== "sp") return;
+      const leftOpen = side === "left" && !document.body.classList.contains("sp-left-open");
+      const rightOpen = side === "right" && !document.body.classList.contains("sp-right-open");
+      if (rightOpen) markSpNotificationsSeen();
+      document.body.classList.toggle("sp-left-open", leftOpen);
+      document.body.classList.toggle("sp-right-open", rightOpen);
+      spStatusButton.setAttribute("aria-expanded", leftOpen ? "true" : "false");
+      spNotificationsButton.setAttribute("aria-expanded", rightOpen ? "true" : "false");
+    }
+    function updateSpNotificationBadge() {
+      if (dashboardLayout !== "sp") return;
+      const unreadCount = latestNotifications.filter(item => String(item.created_at || "") > spNotificationSeenAt).length;
+      spNotificationCount.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      spNotificationCount.hidden = unreadCount === 0;
+    }
+    function markSpNotificationsSeen() {
+      const latestCreatedAt = latestNotifications.reduce(
+        (latest, item) => String(item.created_at || "") > latest ? String(item.created_at || "") : latest,
+        spNotificationSeenAt,
+      );
+      spNotificationSeenAt = latestCreatedAt;
+      localStorage.setItem(spNotificationSeenAtStorageKey, spNotificationSeenAt);
+      updateSpNotificationBadge();
+    }
+    spStatusButton.addEventListener("click", () => setSpDrawer("left"));
+    spNotificationsButton.addEventListener("click", () => setSpDrawer("right"));
+    spDrawerBackdrop.addEventListener("click", () => setSpDrawer(""));
+    function updateSpViewport() {
+      if (dashboardLayout !== "sp") return;
+      const viewport = window.visualViewport;
+      const height = viewport ? viewport.height : window.innerHeight;
+      const offsetTop = viewport ? viewport.offsetTop : 0;
+      document.body.style.setProperty("--sp-viewport-height", `${height}px`);
+      document.body.style.setProperty("--sp-viewport-top", `${offsetTop}px`);
+      window.scrollTo(0, 0);
+    }
+    if (dashboardLayout === "sp") {
+      updateSpViewport();
+      window.visualViewport?.addEventListener("resize", updateSpViewport);
+      window.visualViewport?.addEventListener("scroll", updateSpViewport);
+      window.addEventListener("orientationchange", updateSpViewport);
+    }
     function applyControlResult(result) {
       if (!result || typeof result !== "object") return;
       if (typeof result.muted === "boolean") {

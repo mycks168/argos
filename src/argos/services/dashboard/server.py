@@ -175,7 +175,9 @@ def _create_handler(
             if path != "/api/health" and not self._require_view():
                 return
             if path == "/":
-                self._send_html()
+                self._send_html("standard")
+            elif path in {"/sp", "/sp/"}:
+                self._send_html("sp")
             elif path.startswith("/static/"):
                 self._send_static_file(path)
             elif path == "/api/health":
@@ -313,12 +315,13 @@ def _create_handler(
             _required_text(payload, "action", 40)
             return control_handler(payload)
 
-        def _send_html(self) -> None:
+        def _send_html(self, layout: str) -> None:
             """ダッシュボードHTMLを返す。"""
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
             html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_LAYOUT__", json.dumps(layout))
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")

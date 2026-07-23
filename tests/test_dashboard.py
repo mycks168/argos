@@ -288,6 +288,18 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"Content-Type": "text/plain; charset=utf-8"' in html
         assert '"Accept": "text/event-stream"' in html
         assert 'fetch("/api/terminal/turn"' in html
+        assert 'data-layout="standard"' in html
+
+        with urlopen(base_url + "/sp", timeout=2) as response:
+            sp_html = response.read().decode("utf-8")
+        assert 'data-layout="sp"' in sp_html
+        assert 'id="sp-status-button"' in sp_html
+        assert 'id="sp-notifications-button"' in sp_html
+        assert 'window.visualViewport?.addEventListener("resize", updateSpViewport)' in sp_html
+        assert 'body[data-layout="sp"] .dashboard' in sp_html
+        assert 'const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";' in sp_html
+        assert "if (rightOpen) markSpNotificationsSeen();" in sp_html
+        assert "latestNotifications.filter" in sp_html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
