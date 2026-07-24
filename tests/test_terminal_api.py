@@ -476,6 +476,24 @@ def test_terminal_turn_accepts_opus_upload():
         server.stop()
 
 
+def test_terminal_turn_accepts_browser_mp4_audio(monkeypatch):
+    """Safariのaudio/mp4録音はWAVへ変換してから処理する。"""
+    monkeypatch.setattr("argos.services.dashboard.server.decode_audio_to_wav", lambda data: b"RIFF" + data)
+    handler = FakeTerminalHandler([{"event": "done", "text": "OK"}])
+    server, base_url = _start_server(handler)
+    try:
+        with _request(
+            base_url + "/api/terminal/turn",
+            method="POST",
+            body=b"MP4DATA",
+            content_type="audio/mp4",
+        ) as response:
+            assert _read_sse_events(response)[-1][0] == "done"
+        assert handler.received_wav == b"RIFFMP4DATA"
+    finally:
+        server.stop()
+
+
 def test_terminal_turn_rejects_broken_opus():
     """Opusとして解釈できないボディは400を返す。"""
     handler = FakeTerminalHandler([])

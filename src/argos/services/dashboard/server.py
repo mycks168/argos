@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, urlparse
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.state import DashboardState
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
-from argos.services.opus_codec import OpusCodecError, decode_opus_to_wav, encode_wav_to_opus
+from argos.services.opus_codec import OpusCodecError, decode_audio_to_wav, encode_wav_to_opus
 
 
 log = logging.getLogger(__name__)
@@ -326,6 +326,8 @@ def _create_handler(
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
+            # 更新後の操作UIが端末ごとのブラウザキャッシュに残らないようにする。
+            self.send_header("Cache-Control", "no-store")
             if view_key:
                 # クエリキーで入った端末が以降キーなしで再読込できるようCookieを配る。
                 self.send_header(
@@ -451,6 +453,7 @@ def _create_handler(
             入力形式はリクエストの Content-Type で決まる。
               - ``audio/wav``（既定）: 録音WAV
               - ``audio/ogg`` / ``audio/opus``: Ogg Opus（WAVへデコード）
+              - ``audio/mp4`` / ``audio/webm``: ブラウザ録音（WAVへデコード）
               - ``text/plain``: テキストをそのままエージェントへ（STTスキップ）
             出力に音声を含めるかは Accept ヘッダでネゴシエートする。
               - ``text/plain`` のみを要求 → 音声を返さずテキストのみ（母艦も端末も読み上げない）
@@ -476,12 +479,12 @@ def _create_handler(
                 except UnicodeDecodeError:
                     self._send_json({"error": "テキストのデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
                     return
-            elif content_type in {"audio/ogg", "audio/opus"}:
+            elif content_type in {"audio/ogg", "audio/opus", "audio/mp4", "video/mp4", "audio/webm"}:
                 try:
-                    wav_bytes = decode_opus_to_wav(body)
+                    wav_bytes = decode_audio_to_wav(body)
                 except OpusCodecError as exc:
-                    log.warning("端末ターンのOpusデコードに失敗しました: %s", exc)
-                    self._send_json({"error": "Opusデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
+                    log.warning("端末ターンのブラウザ音声デコードに失敗しました: %s", exc)
+                    self._send_json({"error": "音声デコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
                     return
             elif content_type in {"", "audio/wav", "audio/x-wav"}:
                 wav_bytes = body

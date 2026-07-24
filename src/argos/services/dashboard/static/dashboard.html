@@ -576,6 +576,37 @@
       cursor: pointer !important;
     }
     .text-send-button:disabled { opacity: 0.45; cursor: default !important; }
+    .voice-input-button {
+      display: none;
+      width: 44px;
+      height: 44px;
+      border: 1px solid #526775;
+      border-radius: 8px;
+      background: #101820;
+      color: #edf3f7;
+      font-size: 20px;
+      touch-action: manipulation;
+    }
+    body[data-layout="sp"] .text-composer {
+      grid-template-columns: minmax(0, 1fr) 44px 44px;
+    }
+    body[data-layout="sp"] .voice-input-button { display: block; }
+    .voice-input-button[data-state="recording"] {
+      border-color: #ff4a1e;
+      background: #5a1b12;
+      color: #fff;
+      animation: listening-frame-pulse 1.05s ease-in-out infinite alternate;
+    }
+    .voice-input-button[data-state="processing"] {
+      border-color: #f4d35e;
+      color: #f4d35e;
+    }
+    .voice-input-button[data-state="playing"] {
+      border-color: #69b7e4;
+      background: #102131;
+      color: #69b7e4;
+    }
+    .voice-input-button:disabled { opacity: 0.45; }
     .message { border-left: 3px solid #526775; padding: 4px 0 4px 12px; }
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
@@ -947,6 +978,7 @@
       position: absolute;
       inset: 52px 0 0;
       display: block;
+      height: auto;
       min-height: 0;
       overflow: hidden;
       background: #070b0f;
@@ -1127,6 +1159,7 @@
           <form id="text-composer" class="text-composer">
             <p id="text-composer-error" class="text-composer-error" role="alert" hidden></p>
             <textarea id="text-input" rows="1" maxlength="4000" aria-label="メッセージ" placeholder="メッセージ"></textarea>
+            <button id="voice-input-button" class="voice-input-button" type="button" data-state="idle" aria-label="音声入力を開始" title="音声入力">&#127908;</button>
             <button id="text-send-button" class="text-send-button" type="submit" aria-label="送信" title="送信">&#8593;</button>
           </form>
         </div>
@@ -1168,6 +1201,7 @@
     const textInput = document.getElementById("text-input");
     const textSendButton = document.getElementById("text-send-button");
     const textComposerError = document.getElementById("text-composer-error");
+    const voiceInputButton = document.getElementById("voice-input-button");
     const notifications = document.getElementById("notifications");
     const dashboardLayout = document.body.dataset.layout || "standard";
     const spStatusButton = document.getElementById("sp-status-button");
@@ -1227,6 +1261,13 @@
     let currentAgentSlotKey = "";
     let currentAgentSlotBusy = false;
     const inFlightTextSlots = new Set();
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceChunks = [];
+    let voiceState = "idle";
+    let voiceSlotKey = "";
+    let voiceAudioContext = null;
+    let voicePlaybackChain = Promise.resolve();
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
     let latestNotifications = [];
     
@@ -1700,6 +1741,10 @@
     slots.addEventListener("click", event => {
       const button = event.target.closest(".slot-button");
       if (!button || button.dataset.active === "true") return;
+      if (voiceState === "recording") {
+        setTextComposerError("録音を停止してからスロットを切り替えてね");
+        return;
+      }
       button.disabled = true;
       selectAgentSlot(button.dataset.name || "", button.dataset.provider || "")
         .catch(error => console.error("Failed to select agent slot:", error))
@@ -1766,7 +1811,150 @@
       const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || inFlightTextSlots.has(currentAgentSlotKey);
       textInput.disabled = false;
       textSendButton.disabled = unavailable;
+      voiceInputButton.disabled = dashboardLayout !== "sp"
+        || (voiceState !== "recording" && unavailable)
+        || voiceState === "processing"
+        || voiceState === "playing";
     }
+    function setVoiceState(nextState) {
+      voiceState = nextState;
+      voiceInputButton.dataset.state = nextState;
+      const labels = {
+        idle: "音声入力を開始",
+        recording: "録音を停止して送信",
+        processing: "音声を処理中",
+        playing: "回答を再生中",
+      };
+      voiceInputButton.setAttribute("aria-label", labels[nextState]);
+      voiceInputButton.title = labels[nextState];
+      updateTextComposerAvailability();
+    }
+    function selectRecordingMimeType() {
+      if (!window.MediaRecorder) return "";
+      const candidates = [
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4",
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+      ];
+      return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
+    }
+    async function startVoiceRecording() {
+      if (dashboardLayout !== "sp" || !currentAgentSlotKey || currentAgentSlotBusy) return;
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        setTextComposerError("このブラウザは音声録音に対応していないよ");
+        return;
+      }
+      setTextComposerError("");
+      try {
+        voiceAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+        await voiceAudioContext.resume();
+        voiceStream = await navigator.mediaDevices.getUserMedia({
+          audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+        });
+        const mimeType = selectRecordingMimeType();
+        voiceRecorder = new MediaRecorder(voiceStream, mimeType ? {mimeType} : undefined);
+        voiceChunks = [];
+        voiceSlotKey = currentAgentSlotKey;
+        voicePlaybackChain = Promise.resolve();
+        voiceRecorder.addEventListener("dataavailable", event => {
+          if (event.data.size) voiceChunks.push(event.data);
+        });
+        voiceRecorder.start();
+        setVoiceState("recording");
+      } catch (error) {
+        stopVoiceStream();
+        setVoiceState("idle");
+        setTextComposerError(error?.name === "NotAllowedError"
+          ? "Safariのマイク利用を許可してね"
+          : "マイクを開始できなかったよ");
+      }
+    }
+    function stopVoiceStream() {
+      voiceStream?.getTracks().forEach(track => track.stop());
+      voiceStream = null;
+    }
+    async function stopVoiceRecording() {
+      if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+      const recorder = voiceRecorder;
+      const stopped = new Promise(resolve => recorder.addEventListener("stop", resolve, {once: true}));
+      recorder.stop();
+      await stopped;
+      stopVoiceStream();
+      const audio = new Blob(voiceChunks, {type: recorder.mimeType || "audio/webm"});
+      voiceRecorder = null;
+      voiceChunks = [];
+      if (!audio.size) {
+        setVoiceState("idle");
+        setTextComposerError("音声を録音できなかったよ");
+        return;
+      }
+      await sendVoiceTurn(audio, voiceSlotKey);
+    }
+    async function sendVoiceTurn(audio, slotKey) {
+      inFlightTextSlots.add(slotKey);
+      setVoiceState("processing");
+      setTextComposerError("");
+      try {
+        const headers = {"Content-Type": audio.type, "Accept": "text/event-stream, audio/wav"};
+        if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+        const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: audio});
+        if (!response.ok) throw new Error(await describeTurnResponseError(response));
+        if (!response.body) throw new Error("応答ストリームを取得できませんでした");
+        await consumeVoiceTurnEvents(response.body);
+        await voicePlaybackChain;
+      } catch (error) {
+        console.error("Failed to send voice turn:", error);
+        setTextComposerError(describeTurnSendError(error));
+      } finally {
+        inFlightTextSlots.delete(slotKey);
+        voiceSlotKey = "";
+        setVoiceState("idle");
+      }
+    }
+    async function consumeVoiceTurnEvents(streamBody) {
+      const reader = streamBody.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {stream: !done}).replace(/\r\n/g, "\n");
+        const blocks = buffer.split("\n\n");
+        buffer = done ? "" : blocks.pop();
+        for (const block of blocks) {
+          const dataLine = block.split("\n").find(line => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.event === "audio" && event.data) queueVoiceAudio(event.data);
+          if (event.event === "error") throw new Error(event.message || "音声処理に失敗したよ");
+        }
+        if (done) break;
+      }
+    }
+    function queueVoiceAudio(base64Data) {
+      setVoiceState("playing");
+      voicePlaybackChain = voicePlaybackChain.then(() => playVoiceWav(base64Data));
+    }
+    async function playVoiceWav(base64Data) {
+      const binary = atob(base64Data);
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+      const audioBuffer = await voiceAudioContext.decodeAudioData(bytes.buffer);
+      await new Promise(resolve => {
+        const source = voiceAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(voiceAudioContext.destination);
+        source.addEventListener("ended", resolve, {once: true});
+        source.start();
+      });
+    }
+    voiceInputButton.addEventListener("click", () => {
+      if (voiceState === "idle") {
+        startVoiceRecording();
+      } else if (voiceState === "recording") {
+        stopVoiceRecording();
+      }
+    });
     textComposer.addEventListener("submit", event => {
       event.preventDefault();
       sendTextTurn(textInput.value);

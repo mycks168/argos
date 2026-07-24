@@ -288,6 +288,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"Content-Type": "text/plain; charset=utf-8"' in html
         assert '"Accept": "text/event-stream"' in html
         assert 'fetch("/api/terminal/turn"' in html
+        assert 'id="voice-input-button"' in html
+        assert '"audio/mp4;codecs=mp4a.40.2"' in html
+        assert "navigator.mediaDevices.getUserMedia" in html
+        assert '\"Accept\": \"text/event-stream, audio/wav\"' in html
+        assert "consumeVoiceTurnEvents(response.body)" in html
         assert "const inFlightTextSlots = new Set();" in html
         assert "inFlightTextSlots.has(currentAgentSlotKey)" in html
         assert "textInput.disabled = false;" in html
@@ -299,12 +304,14 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:
+            assert response.headers["Cache-Control"] == "no-store"
             sp_html = response.read().decode("utf-8")
         assert 'data-layout="sp"' in sp_html
         assert 'id="sp-status-button"' in sp_html
         assert 'id="sp-notifications-button"' in sp_html
         assert 'window.visualViewport?.addEventListener("resize", updateSpViewport)' in sp_html
         assert 'body[data-layout="sp"] .dashboard' in sp_html
+        assert 'inset: 52px 0 0;\n      display: block;\n      height: auto;' in sp_html
         assert 'const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";' in sp_html
         assert "if (rightOpen) markSpNotificationsSeen();" in sp_html
         assert "latestNotifications.filter" in sp_html
