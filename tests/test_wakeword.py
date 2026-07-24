@@ -180,6 +180,69 @@ def test_wakeword_listener_records_after_detection(monkeypatch):
         assert wav_file.getnframes() == 1280 * 3
 
 
+def test_vad_listen_mode_records_without_wakeword(monkeypatch):
+    """VADモードでは連続発話を検知して呼びかけなしの録音を渡す。"""
+    loud = b"\x00\x40" * 1280
+    silence = b"\x00\x00" * 1280
+    reads = [loud, loud, silence]
+    detected = []
+    ready = []
+
+    class FakeStream:
+        """テスト音声を順番に返す入力ストリーム。"""
+
+        def read(self):
+            return reads.pop(0) if reads else b""
+
+        def close(self):
+            return None
+
+    class FakeVadModel:
+        """入力を常に発話として判定するVAD。"""
+
+        def predict(self, samples):
+            return np.ones(max(1, int(np.ceil(samples.size / 512))), dtype=np.float32)
+
+    def on_ready(path, followup=False):
+        ready.append((path, followup))
+        listener.stop()
+
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        listen_mode="vad",
+        chunk_ms=80,
+        vad_start_seconds=0.16,
+        vad_check_seconds=0.0,
+        record_min_seconds=0.0,
+        record_silence_seconds=0.0,
+        endpoint_mode="rms",
+        on_detected=lambda followup=False: detected.append(followup) or True,
+        on_recording_ready=on_ready,
+    )
+    monkeypatch.setattr(listener, "_open_input_stream", lambda: FakeStream())
+
+    listener._run_vad_stream(FakeVadModel())
+
+    assert detected == [True]
+    assert ready and ready[0][1] is True
+    with wave.open(ready[0][0], "rb") as wav_file:
+        assert wav_file.getnframes() == 1280 * 3
+
+
+def test_vad_listen_mode_rejects_unknown_mode():
+    """音声受付モードのタイプミスは起動時に明示する。"""
+    with np.testing.assert_raises_regex(ValueError, "未対応の音声受付モード"):
+        WakeWordListener(
+            devices=("mic",),
+            model_dir="/tmp/model",
+            threshold=0.5,
+            listen_mode="unknown",
+            on_recording_ready=lambda _path: None,
+        )
+
+
 def test_wakeword_listener_clears_buffer_when_detection_ignored(monkeypatch):
     """アプリ側が検知を無視したら残音声バッファを捨てる。"""
     loud = (b"\x00\x40" * 1280)

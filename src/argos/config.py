@@ -248,6 +248,7 @@ class Settings:
     agent_usage_command_timeout_seconds: float = 5.0
     wifi_status_refresh_seconds: float = 10.0
     wakeword_enabled: bool = False
+    listen_mode: str = "wakeword"
     wakeword_model_dir: str = "models/wakeword"
     wakeword_embedding_hef: str = ""
     wakeword_threshold: float = 0.5
@@ -263,6 +264,7 @@ class Settings:
     wakeword_endpoint_mode: str = "vad"
     wakeword_vad_model_path: str = ""
     wakeword_vad_threshold: float = 0.35
+    wakeword_vad_start_seconds: float = 0.16
     wakeword_vad_min_silence_seconds: float = 1.5
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
@@ -424,6 +426,7 @@ def load_settings() -> Settings:
         ),
         wifi_status_refresh_seconds=float(os.environ.get("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "10")),
         wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
+        listen_mode=os.environ.get("ARGOS_LISTEN_MODE", "wakeword").strip().lower(),
         wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
         wakeword_embedding_hef=os.environ.get("ARGOS_WAKEWORD_EMBEDDING_HEF", ""),
         wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),
@@ -439,6 +442,7 @@ def load_settings() -> Settings:
         wakeword_endpoint_mode=os.environ.get("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad"),
         wakeword_vad_model_path=os.environ.get("ARGOS_WAKEWORD_VAD_MODEL", ""),
         wakeword_vad_threshold=float(os.environ.get("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.35")),
+        wakeword_vad_start_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_START_SECONDS", "0.16")),
         wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
         wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
