@@ -373,6 +373,8 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 
 ウェイクワードは `ARGOS_WAKEWORD_ENABLED=true` の場合だけ有効になる。既定では無効で、PTT操作には影響しない。
 
+`ARGOS_LISTEN_MODE` は音声受付の開始方式を指定する。既定の `wakeword` はLiveKitモデルで呼びかけを検知する。`vad` は物理ミュート付きマイク向けで、ミュート解除後にSilero VADが `ARGOS_WAKEWORD_VAD_THRESHOLD` 以上の発話を `ARGOS_WAKEWORD_VAD_START_SECONDS` 継続して検出すると録音を開始する。録音後は呼びかけ必須判定と先頭呼びかけ除去を行わず、通常のSTT、本人確認、エージェント処理へ渡す。どちらも既存の共有マイク入力と発話終了判定を使う。
+
 - `ARGOS_WAKEWORD_MODEL_DIR` にLiveKit形式の `argos.onnx`、`melspectrogram.onnx`、`embedding_model.onnx` を置く
 - `ARGOS_WAKEWORD_EMBEDDING_HEF`が指定されている場合は、音声埋め込みモデルをHailoRT経由でHailo-8へオフロードする。メル特徴量生成と最終分類はONNX Runtimeを継続し、HEF設定が空なら全段をCPUで実行する
 - しきい値は `ARGOS_WAKEWORD_THRESHOLD` を最優先に使う。`argos_eval.json` の `optimal_threshold` や `threshold` は学習時の参考値で、常時監視では自動採用しない

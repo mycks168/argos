@@ -132,6 +132,8 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 ## ウェイクワード
 
 `ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
+
+物理ミュート付きマイクで呼びかけを省略する場合は、`ARGOS_LISTEN_MODE=vad` を設定します。ミュート解除後にSilero VADが発話を検知すると録音を開始し、無音で終了して通常の文字起こしと応答へ渡します。既定の `wakeword` モードには影響しません。
 自宅などSTTゲートウェイが近く誤検知を抑えたい環境では、`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` にすると、文字起こし結果が「アルゴス」などの呼びかけから始まる場合だけ処理します。ダッシュボードのマイクOFFボタンを押すと、PTTとウェイクワードの受付を一時停止できます。
 
 誤検知で破棄された録音は、既定で `/tmp/argos/wakeword-candidates/hard_negative/` に音声と判定理由を保存します。周囲の会話を誤検知候補として判別するには `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` も有効にします。内容を聞いて誤検知だと確認したものだけ、wakeword trainerの `raw-dataset/hard_negative/` へ移してください。保存を止める場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE=false`、保存先を変える場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_DIR` を設定します。`/tmp` 配下は再起動で消えるため、確認前に必要な候補を退避してください。

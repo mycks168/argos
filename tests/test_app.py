@@ -1361,6 +1361,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
             **_settings().__dict__,
             "dry_run": False,
             "wakeword_enabled": True,
+            "listen_mode": "vad",
             "wakeword_model_dir": "/tmp/wakeword",
             "wakeword_threshold": 0.6,
             "wakeword_capture_sample_rate": 48000,
@@ -1369,6 +1370,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
             "wakeword_endpoint_mode": "vad",
             "wakeword_vad_model_path": "/tmp/silero.onnx",
             "wakeword_vad_threshold": 0.4,
+            "wakeword_vad_start_seconds": 0.24,
             "wakeword_vad_min_silence_seconds": 1.2,
             "wakeword_vad_check_seconds": 0.2,
             "wakeword_score_log_path": "/tmp/argos/wakeword-score.log",
@@ -1379,6 +1381,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
     app._start_wakeword_listener()
 
     assert started
+    assert started[0]["listen_mode"] == "vad"
     assert started[0]["model_dir"] == "/tmp/wakeword"
     assert started[0]["threshold"] == 0.6
     assert started[0]["capture_sample_rate"] == 48000
@@ -1387,6 +1390,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
     assert started[0]["endpoint_mode"] == "vad"
     assert started[0]["vad_model_path"] == "/tmp/silero.onnx"
     assert started[0]["vad_threshold"] == 0.4
+    assert started[0]["vad_start_seconds"] == 0.24
     assert started[0]["vad_min_silence_seconds"] == 1.2
     assert started[0]["vad_check_seconds"] == 0.2
     assert started[0]["score_log_path"] == "/tmp/argos/wakeword-score.log"

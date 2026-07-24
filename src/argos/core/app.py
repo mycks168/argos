@@ -585,6 +585,7 @@ class ArgosApp:
             self._wakeword_listener = WakeWordListener(
                 devices=self._settings.audio_input_devices or (self._settings.audio_input_device,),
                 model_dir=self._settings.wakeword_model_dir,
+                listen_mode=self._settings.listen_mode,
                 embedding_hef_path=self._settings.wakeword_embedding_hef,
                 threshold=self._settings.wakeword_threshold,
                 audio_source=self._audio_input_stream,
@@ -602,6 +603,7 @@ class ArgosApp:
                 endpoint_mode=self._settings.wakeword_endpoint_mode,
                 vad_model_path=self._settings.wakeword_vad_model_path,
                 vad_threshold=self._settings.wakeword_vad_threshold,
+                vad_start_seconds=self._settings.wakeword_vad_start_seconds,
                 vad_min_silence_seconds=self._settings.wakeword_vad_min_silence_seconds,
                 vad_check_seconds=self._settings.wakeword_vad_check_seconds,
                 score_log_path=self._settings.wakeword_score_log_path,
@@ -611,7 +613,8 @@ class ArgosApp:
                 followup_seconds=self._settings.wakeword_followup_seconds,
             )
             self._wakeword_listener.start()
-            self._dashboard_state.add_notification("ウェイクワード", "ウェイクワード監視を開始しました。", source="ARGOS")
+            label = "VAD常時受付" if self._settings.listen_mode == "vad" else "ウェイクワード監視"
+            self._dashboard_state.add_notification("音声入力", f"{label}を開始しました。", source="ARGOS")
         except Exception as exc:
             log.exception("ウェイクワード監視を開始できません")
             self._report_error("ウェイクワード", exc)

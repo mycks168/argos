@@ -23,6 +23,17 @@ def test_load_wakeword_followup_seconds(monkeypatch):
     assert load_settings().wakeword_followup_seconds == 5.5
 
 
+def test_load_vad_listen_mode(monkeypatch):
+    """物理ミュート運用向けのVAD常時受付設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_LISTEN_MODE", "VAD")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_START_SECONDS", "0.24")
+
+    settings = load_settings()
+
+    assert settings.listen_mode == "vad"
+    assert settings.wakeword_vad_start_seconds == 0.24
+
+
 def test_load_wakeword_bargein_enabled(monkeypatch):
     """バージイン有効フラグを読み込む。既定は無効。"""
     monkeypatch.delenv("ARGOS_WAKEWORD_BARGEIN_ENABLED", raising=False)

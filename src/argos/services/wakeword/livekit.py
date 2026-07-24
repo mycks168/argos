@@ -212,6 +212,7 @@ class WakeWordListener:
         threshold: float,
         on_recording_ready: Callable[..., None],
         *,
+        listen_mode: str = "wakeword",
         on_detected: Callable[..., bool | None] | None = None,
         on_followup_expired: Callable[[], None] | None = None,
         followup_seconds: float = 0.0,
@@ -230,6 +231,7 @@ class WakeWordListener:
         endpoint_mode: str = "vad",
         vad_model_path: str = "",
         vad_threshold: float = 0.35,
+        vad_start_seconds: float = 0.16,
         vad_min_silence_seconds: float = 1.5,
         vad_check_seconds: float = 0.32,
         score_log_path: str = "",
@@ -240,6 +242,9 @@ class WakeWordListener:
         if not self._devices:
             raise ValueError("ウェイクワード入力デバイス候補が空です")
         self._model_dir = Path(model_dir).expanduser()
+        if listen_mode not in {"wakeword", "vad"}:
+            raise ValueError(f"未対応の音声受付モードです: {listen_mode}")
+        self._listen_mode = listen_mode
         self._threshold = threshold
         self._capture_sample_rate = max(1, int(capture_sample_rate))
         self._on_recording_ready = on_recording_ready
@@ -262,6 +267,7 @@ class WakeWordListener:
         self._endpoint_mode = endpoint_mode
         self._vad_model_path = vad_model_path
         self._vad_threshold = vad_threshold
+        self._vad_start_seconds = max(0.0, vad_start_seconds)
         self._vad_min_silence_seconds = vad_min_silence_seconds
         self._vad_check_seconds = vad_check_seconds
         self._score_log_path = Path(score_log_path).expanduser() if score_log_path.strip() else None
@@ -298,6 +304,9 @@ class WakeWordListener:
 
     def _run(self) -> None:
         """モデルを読み込んで、停止要求まで監視を続ける。"""
+        if self._listen_mode == "vad":
+            self._run_vad()
+            return
         try:
             model = LiveKitWakeWordModel(
                 classifier_path=self._model_dir / "argos.onnx",
@@ -317,6 +326,55 @@ class WakeWordListener:
                 log.exception("ウェイクワード監視が失敗しました。再試行します")
                 if self._stop.wait(2.0):
                     return
+
+    def _run_vad(self) -> None:
+        """Silero VADで発話開始を監視し、ウェイクワードなしで録音する。"""
+        vad_model = self._load_vad_model()
+        if vad_model is None:
+            log.error("VADモデルを初期化できないため常時受付を開始できません")
+            return
+        while not self._stop.is_set():
+            try:
+                self._run_vad_stream(vad_model)
+            except Exception:
+                log.exception("VAD常時受付が失敗しました。再試行します")
+                if self._stop.wait(2.0):
+                    return
+
+    def _run_vad_stream(self, vad_model: object) -> None:
+        """rawストリームを読み、VAD発話開始後の音声を既存処理へ渡す。"""
+        stream = self._open_input_stream()
+        pre_roll_chunks = max(1, int(self._pre_roll_seconds * 1000 / self._chunk_ms))
+        raw_ring = deque(maxlen=pre_roll_chunks)
+        detect_chunks = max(1, math.ceil(self._vad_start_seconds * 1000 / self._chunk_ms))
+        detect_ring = deque(maxlen=detect_chunks)
+        last_check = 0.0
+        try:
+            while not self._stop.is_set():
+                data = stream.read()
+                if not data:
+                    continue
+                raw_ring.append(data)
+                detect_ring.append(data)
+                now = time.monotonic()
+                if len(detect_ring) < detect_chunks or now - last_check < self._vad_check_seconds:
+                    continue
+                last_check = now
+                probabilities = vad_model.predict(_pcm16_frames_to_float(list(detect_ring)))
+                if probabilities.size == 0 or not bool((probabilities >= self._vad_threshold).all()):
+                    continue
+                log.info("VAD常時受付で発話を検知しました")
+                accepted = self._on_detected is None or self._on_detected(followup=True) is not False
+                pre_roll = list(raw_ring)
+                raw_ring.clear()
+                detect_ring.clear()
+                if not accepted:
+                    continue
+                wav_path = self._record_utterance(stream.read, pre_roll_frames=pre_roll)
+                if wav_path:
+                    self._on_recording_ready(wav_path, followup=True)
+        finally:
+            stream.close()
 
     def _run_stream(self, model: LiveKitWakeWordModel, threshold: float) -> None:
         """rawストリームを読みながら検知する。"""
