@@ -258,7 +258,9 @@
       display: grid;
       grid-template-columns: minmax(250px, 0.82fr) minmax(660px, 2fr) minmax(320px, 1fr);
       gap: 1px;
-      min-height: 100vh;
+      /* 会話欄を画面内でスクロールさせるため、高さを画面に固定する。
+         min-height だと中身に応じて伸び、会話欄の flex による高さ制約が外れる。 */
+      height: 100vh;
       background: #26323b;
     }
     section { min-width: 0; background: #0b1117; padding: 14px 18px; overflow: hidden; }
@@ -597,14 +599,16 @@
 
     @media (max-width: 1200px) {
       body { overflow: auto; }
-      .dashboard { grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
+      /* この幅ではページ全体をスクロールさせるので、画面高さへの固定を解く。 */
+      .dashboard { height: auto; min-height: 100vh; grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
       .notifications-panel { grid-column: 1 / -1; min-height: 180px; }
       .messages, .notifications { height: auto; max-height: 420px; }
       #conversation-view { min-height: 480px; }
     }
     @media (min-width: 761px) and (max-width: 900px) {
       body { overflow: hidden; }
-      .dashboard { grid-template-columns: minmax(178px, 0.74fr) minmax(345px, 1.55fr) minmax(235px, 0.95fr); }
+      /* ページを固定表示に戻すため、会話欄の高さ制約も画面高さへ戻す。 */
+      .dashboard { height: 100vh; min-height: 0; grid-template-columns: minmax(178px, 0.74fr) minmax(345px, 1.55fr) minmax(235px, 0.95fr); }
       section { padding: 10px 12px; }
       .status-panel { padding-left: 44px; }
       .volume-control { left: 8px; top: 12px; bottom: 12px; width: 30px; gap: 5px; }
