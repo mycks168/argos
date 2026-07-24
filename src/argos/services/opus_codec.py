@@ -1,4 +1,4 @@
-"""ffmpeg を用いた Opus コーデック。
+"""ffmpeg を用いたブラウザ音声・Opusコーデック。
 
 stt-gateway への送信サイズ削減と、Opus 対応 VOICEVOX ラッパーからの
 応答デコードのために、WAV と Ogg Opus を相互変換する。
@@ -26,8 +26,13 @@ def encode_wav_to_opus(wav_data: bytes, bitrate: str = "24k") -> bytes:
 
 def decode_opus_to_wav(opus_data: bytes) -> bytes:
     """Ogg Opus バイト列を 16bit PCM WAV にデコードして返す。"""
+    return decode_audio_to_wav(opus_data)
+
+
+def decode_audio_to_wav(audio_data: bytes) -> bytes:
+    """ffmpegが対応する音声バイト列を16bit PCM WAVにデコードして返す。"""
     return _run_ffmpeg(
-        opus_data,
+        audio_data,
         ["-c:a", "pcm_s16le", "-f", "wav"],
         suffix=".wav",
     )

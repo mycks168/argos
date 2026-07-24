@@ -6,7 +6,7 @@ import wave
 
 import pytest
 
-from argos.services.opus_codec import OpusCodecError, decode_opus_to_wav, encode_wav_to_opus
+from argos.services.opus_codec import OpusCodecError, decode_audio_to_wav, decode_opus_to_wav, encode_wav_to_opus
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg が必要")
 
@@ -46,3 +46,11 @@ def test_encode_invalid_input_raises():
     """壊れた入力では OpusCodecError を送出する。"""
     with pytest.raises(OpusCodecError):
         encode_wav_to_opus(b"not-a-wav-file")
+
+
+def test_decode_audio_to_wav_accepts_browser_audio():
+    """汎用デコーダーがffmpeg対応音声をWAVへ変換する。"""
+    wav_data = _make_wav()
+    opus_data = encode_wav_to_opus(wav_data)
+    decoded = decode_audio_to_wav(opus_data)
+    assert decoded.startswith(b"RIFF")
