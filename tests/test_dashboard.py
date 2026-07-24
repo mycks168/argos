@@ -291,6 +291,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "const inFlightTextSlots = new Set();" in html
         assert "inFlightTextSlots.has(currentAgentSlotKey)" in html
         assert "textInput.disabled = false;" in html
+        # 送信が母艦へ届かなかったときに理由を画面へ出す（端末のエラー表示に合わせる）。
+        assert 'id="text-composer-error"' in html
+        assert "setTextComposerError(describeTurnSendError(error));" in html
+        assert '"母艦に繋がらないみたい"' in html
+        assert "await describeTurnResponseError(response)" in html
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:

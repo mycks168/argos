@@ -552,6 +552,16 @@
       line-height: 1.35;
     }
     .text-composer textarea:focus { outline: 2px solid #69b7e4; outline-offset: 1px; }
+    /* 送信が母艦へ届かなかったことに気づけるよう、入力欄のすぐ上へ理由を出す。 */
+    .text-composer-error {
+      grid-column: 1 / -1;
+      margin: 0 0 2px;
+      color: #ff9d9d;
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .text-composer-error[hidden] { display: none; }
     .text-send-button {
       width: 44px;
       height: 44px;
@@ -1111,6 +1121,7 @@
           <p class="eyebrow">CONVERSATION</p>
           <div id="messages" class="messages"></div>
           <form id="text-composer" class="text-composer">
+            <p id="text-composer-error" class="text-composer-error" role="alert" hidden></p>
             <textarea id="text-input" rows="1" maxlength="4000" aria-label="メッセージ" placeholder="メッセージ"></textarea>
             <button id="text-send-button" class="text-send-button" type="submit" aria-label="送信" title="送信">&#8593;</button>
           </form>
@@ -1152,6 +1163,7 @@
     const textComposer = document.getElementById("text-composer");
     const textInput = document.getElementById("text-input");
     const textSendButton = document.getElementById("text-send-button");
+    const textComposerError = document.getElementById("text-composer-error");
     const notifications = document.getElementById("notifications");
     const dashboardLayout = document.body.dataset.layout || "standard";
     const spStatusButton = document.getElementById("sp-status-button");
@@ -1696,12 +1708,13 @@
       inFlightTextSlots.add(slotKey);
       textInput.value = "";
       textInput.style.height = "auto";
+      setTextComposerError("");
       updateTextComposerAvailability();
       try {
         const headers = {"Content-Type": "text/plain; charset=utf-8", "Accept": "text/event-stream"};
         if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
         const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: text});
-        if (!response.ok) throw new Error(await response.text());
+        if (!response.ok) throw new Error(await describeTurnResponseError(response));
         if (!response.body) throw new Error("応答ストリームを取得できませんでした");
         const reader = response.body.getReader();
         while (!(await reader.read()).done) {
@@ -1709,6 +1722,7 @@
         }
       } catch (error) {
         console.error("Failed to send text turn:", error);
+        setTextComposerError(describeTurnSendError(error));
         if (currentAgentSlotKey === slotKey && !textInput.value) {
           textInput.value = text;
         }
@@ -1717,6 +1731,32 @@
         updateTextComposerAvailability();
         if (currentAgentSlotKey === slotKey) textInput.focus();
       }
+    }
+    function setTextComposerError(message) {
+      // 空文字なら消す。次の送信まで表示は残す（端末のエラー表示と同じ振る舞い）。
+      textComposerError.textContent = message;
+      textComposerError.hidden = !message;
+    }
+    async function describeTurnResponseError(response) {
+      // 母艦は {"error": "..."} を返すので、その理由をそのまま見せる。
+      let detail = "";
+      try {
+        const body = await response.text();
+        try {
+          detail = String(JSON.parse(body).error || "");
+        } catch (parseError) {
+          detail = body.trim();
+        }
+      } catch (readError) {
+        detail = "";
+      }
+      if (response.status === 401) return detail || "母艦の認証に失敗したよ";
+      return detail || `母艦がエラーを返したよ (${response.status})`;
+    }
+    function describeTurnSendError(error) {
+      // fetch自体が失敗したときは母艦へ届いていない（TypeError）。
+      if (error instanceof TypeError) return "母艦に繋がらないみたい";
+      return error && error.message ? error.message : "送信できなかったよ";
     }
     function updateTextComposerAvailability() {
       const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || inFlightTextSlots.has(currentAgentSlotKey);
