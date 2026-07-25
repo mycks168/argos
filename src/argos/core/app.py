@@ -493,6 +493,18 @@ class ArgosApp:
             self._agent.current_provider,
             self._current_agent_model(),
         )
+        load_history = getattr(self._agent, "load_current_history", None)
+        if callable(load_history) and self._agent.current_provider == "remote":
+            try:
+                messages = load_history()
+                if isinstance(messages, list):
+                    self._dashboard_state.replace_slot_messages(
+                        self._agent.current_name,
+                        self._agent.current_provider,
+                        messages,
+                    )
+            except Exception:
+                log.exception("リモートArgosの会話履歴を取得できませんでした")
         self._publish_agent_usage_pending()
         self._refresh_current_agent_usage()
 
@@ -869,6 +881,13 @@ class ArgosApp:
         self._complete_terminal_slot_switch()
         log.info("端末操作でエージェントスロット選択: %s (%s)", selected, provider)
         return self._terminal_list_slots()
+
+    def _terminal_slot_history(self, name: str, provider: str) -> dict[str, object]:
+        """Argos間同期向けに指定スロットの会話履歴を返す。"""
+        known = any(slot.name == name and slot.provider == provider for slot in self._settings.agent_slots)
+        if not known:
+            raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+        return {"messages": self._dashboard_state.slot_messages(name, provider)}
 
     def _complete_terminal_slot_switch(self) -> None:
         """端末からの切替後に表示状態と未読応答を現在スロットへ同期する。"""
@@ -1314,6 +1333,10 @@ class _TerminalGateway:
     def select_slot(self, name: str, provider: str) -> dict[str, object]:
         """指定されたエージェントスロットへ切り替え、切替後の状態を返す。"""
         return self._app._terminal_select_slot(name, provider)
+
+    def slot_history(self, name: str, provider: str) -> dict[str, object]:
+        """指定スロットの会話履歴を返す。"""
+        return self._app._terminal_slot_history(name, provider)
 
     def process_turn(
         self,

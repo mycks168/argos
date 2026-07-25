@@ -76,14 +76,21 @@ journalctl -u argos.service -f
 
 ## 更新する場合
 
-更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
+更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `config.yaml` は上書きしません。
 
 ```bash
 cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --update
 ```
 
-設定を変更した場合は `.env` を更新してから再起動します。tts-filter を使う場合は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` が一致している必要があります。`argos-install --apply` または `--update` はこの値を自動で揃えます。
+設定を変更した場合は `config.yaml` を更新してから再起動します。環境変数は一時的な上書きに使え、旧 `.env` も移行互換として読み込まれます。詳しい形式と優先順位は [docs/basic_design.md](docs/basic_design.md#設定ファイル) を参照してください。
+
+既存の `.env` だけを `config.yaml` へ変換する場合は、次を実行します。インストール、依存更新、サービス再起動は行わず、既存の `config.yaml` がある場合は上書きせず終了します。
+
+```bash
+cd /opt/argos
+uv run argos-install --migrate-config
+```
 
 ```bash
 sudo systemctl restart argos.service
@@ -98,7 +105,7 @@ uv run argos-install
 uv run argos-install --json
 ```
 
-既存環境で `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
+既存環境で `config.yaml` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
 
 ```bash
 uv run argos-install --configure --apply
@@ -106,15 +113,20 @@ uv run argos-install --configure --apply
 
 `--bootstrap` は `argos` ユーザーがなければ作成し、`ffmpeg`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、kioskを含む構成ではXorg、LightDM、Openboxも導入して`argos`ユーザーで画面セッションへ自動ログインし、`/opt/argos` の所有者も `argos:argos` に揃えます。`ffmpeg` はSTT Gateway向けのOpus変換にも使用します。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
 
-`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
+`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `config.yaml` へ設定します。旧 `.env` がある場合は内容を失わず自動移行します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
+
+別のARGOSを会話スロットとして使う場合は、`config.yaml`の`agent.slots`へ`type: remote`のスロットを追加します。ローカルスロットと同じ配列へ任意の順番で配置できます。設定例は [docs/basic_design.md](docs/basic_design.md#リモートargosスロット) を参照してください。
 
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
 ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
 
-複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
+複数のマイク候補を使う場合は、`config.yaml` の `audio.input_devices` に配列で指定します。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 
-```text
-AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
+```yaml
+audio:
+  input_devices:
+    - default
+    - plughw:CARD=USBMic,DEV=0
 ```
 
 ## PTT 操作

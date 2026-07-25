@@ -129,6 +129,8 @@ class SystemPromptAgentClient:
 
     def _prepare_prompt(self, prompt: str) -> tuple[str, bool]:
         """現在スロットが未注入ならシステム指示を付与する。"""
+        if self.current_provider == "remote":
+            return prompt, False
         key = self._current_key()
         if self._store.is_injected(key):
             return prompt, False
@@ -248,6 +250,11 @@ class RoutedAgentClient:
         """現在の会話スロットへプロンプトを送り、応答差分を順に返す。"""
         return self._routes[self._index].client.ask_stream(prompt)
 
+    def load_current_history(self) -> list[dict[str, object]]:
+        """現在スロットが対応していれば外部会話履歴を返す。"""
+        loader = getattr(self._routes[self._index].client, "load_current_history", None)
+        return loader() if callable(loader) else []
+
 
 def create_agent_client(settings: Settings) -> AgentClient:
     """設定に応じてLLMエージェントクライアントを作成する。"""
@@ -270,6 +277,10 @@ def create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
         return HermesCliClient(slot_settings)
     if provider in {"claude", "claudecode"}:
         return ClaudeCliClient(slot_settings)
+    if provider == "remote":
+        from argos.services.agent.remote_argos import RemoteArgosClient
+
+        return RemoteArgosClient(settings, slot)
     raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")
 
 

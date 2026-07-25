@@ -234,6 +234,38 @@ class DashboardState:
             self._publish_locked()
         return message_id
 
+    def slot_messages(self, name: str, provider: str) -> list[dict[str, Any]]:
+        """指定スロットの会話履歴を返す。"""
+        key = _slot_key(name, provider)
+        with self._lock:
+            return deepcopy(list(self._messages_by_slot.get(key, ())))
+
+    def replace_slot_messages(self, name: str, provider: str, messages: list[dict[str, Any]]) -> None:
+        """指定スロットの会話履歴を外部履歴で置き換える。"""
+        key = _slot_key(name, provider)
+        normalized = deque(maxlen=self._max_messages)
+        with self._lock:
+            self._ensure_slot_locked(name, provider)
+            for item in messages[-self._max_messages :]:
+                role = str(item.get("role", "")).strip()
+                text = str(item.get("text", ""))
+                if role not in {"user", "assistant"} or not text:
+                    continue
+                message_id = str(item.get("id", "")).strip() or uuid.uuid4().hex
+                normalized.append(
+                    {
+                        "id": message_id,
+                        "role": role,
+                        "text": text,
+                        "streaming": False,
+                        "created_at": str(item.get("created_at", "")).strip() or _now_iso(),
+                    }
+                )
+                self._message_slots[message_id] = key
+            self._messages_by_slot[key] = normalized
+            self._cleanup_message_slots_locked()
+            self._publish_locked()
+
     def append_message(self, message_id: str, delta: str) -> None:
         """指定メッセージへ応答差分を追記する。"""
         if not delta:

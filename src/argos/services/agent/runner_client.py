@@ -150,6 +150,15 @@ class RunnerAgentClient:
         self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
         self._active_job_ids.discard(job_id)
 
+    def load_current_history(self) -> list[dict[str, object]]:
+        """リモート仮想スロットの会話履歴を接続先Argosから取得する。"""
+        slot = self._slots[self._index]
+        if slot.slot_type != "remote":
+            return []
+        from argos.services.agent.remote_argos import RemoteArgosClient
+
+        return RemoteArgosClient(self._settings, slot).load_current_history()
+
     def _request(self, method: str, path: str, **kwargs: object) -> dict[str, object]:
         """Runner APIへHTTPリクエストを送る。"""
         headers = dict(kwargs.pop("headers", {}) or {})

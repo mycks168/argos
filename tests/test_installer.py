@@ -2,6 +2,8 @@ import json
 import tomllib
 from pathlib import Path
 
+import pytest
+
 from argos.installer import (
     DEFAULT_OS_PACKAGES,
     KIOSK_OS_PACKAGES,
@@ -11,6 +13,7 @@ from argos.installer import (
     configure_env,
     load_manifest,
     main,
+    migrate_config,
     plan_to_dict,
     render_unit_template,
     update_project,
@@ -23,9 +26,13 @@ from argos.installer import (
     _ensure_reminder_dashboard_token,
     _ensure_tts_filter_shared_token,
     _install_chromium_policy,
+    _merge_yaml_into_compat_env,
+    _prepare_unified_slots_for_configure,
     _reload_systemd,
     _remove_inaccessible_venv,
     _configure_kiosk_display,
+    _restore_unified_slots_after_configure,
+    _sync_config_yaml,
 )
 
 
@@ -71,6 +78,124 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert ("wakeword-models", "check") in actions
     assert ("stt-gateway", "configure") in actions
     assert plan.service_user == "argos"
+
+
+def test_sync_config_yaml_migrates_all_env_values(tmp_path):
+    """インストーラーは既存.envを階層YAMLへ欠落なく同期する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text(
+        "ARGOS_DASHBOARD_PORT=8765\n"
+        "ARGOS_AGENT_SLOT_1=作業,codex,/opt/argos,2,gpt-test\n"
+        "CUSTOM_SECRET=secret\n",
+        encoding="utf-8",
+    )
+
+    _sync_config_yaml(tmp_path)
+
+    from argos.yaml_config import load_yaml_environment
+
+    values = load_yaml_environment(tmp_path / "config.yaml")
+    assert values["ARGOS_DASHBOARD_PORT"] == "8765"
+    slots = json.loads(values["ARGOS_AGENT_SLOTS_JSON"])
+    assert slots[0] == {
+        "type": "local",
+        "name": "作業",
+        "provider": "codex",
+        "cwd": "/opt/argos",
+        "voicevox_speaker": 2,
+        "model": "gpt-test",
+    }
+    assert values["CUSTOM_SECRET"] == "secret"
+
+
+def test_sync_config_yaml_preserves_existing_file_without_overwrite(tmp_path):
+    """通常更新では利用者が編集したconfig.yamlを上書きしない。"""
+    (tmp_path / ".env").write_text("ARGOS_DASHBOARD_PORT=8765\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
+
+    _sync_config_yaml(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == "dashboard:\n  port: 9999\n"
+
+
+def test_migrate_config_creates_yaml_without_install(tmp_path):
+    """設定移行コマンドは.envだけをYAMLへ変換する。"""
+    (tmp_path / ".env").write_text(
+        "ARGOS_DASHBOARD_PORT=8765\nARGOS_AGENT_SLOT_1=作業,codex,/opt/argos\n",
+        encoding="utf-8",
+    )
+
+    config_path = migrate_config(tmp_path)
+
+    assert config_path == tmp_path / "config.yaml"
+    assert config_path.exists()
+    assert config_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_migrate_config_refuses_existing_yaml(tmp_path):
+    """既存config.yamlは移行コマンドで上書きしない。"""
+    (tmp_path / ".env").write_text("ARGOS_DASHBOARD_PORT=8765\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="上書きしません"):
+        migrate_config(tmp_path)
+
+    assert config_path.read_text(encoding="utf-8") == "dashboard:\n  port: 9999\n"
+
+
+def test_main_migrate_config_skips_manifest_and_plan(capsys, tmp_path):
+    """CLIの設定移行はマニフェスト読込や計画表示を行わない。"""
+    (tmp_path / ".env").write_text("ARGOS_DASHBOARD_PORT=8765\n", encoding="utf-8")
+
+    result = main(["--project-dir", str(tmp_path), "--migrate-config"])
+
+    assert result == 0
+    assert (tmp_path / "config.yaml").exists()
+    assert "設定を移行しました" in capsys.readouterr().out
+
+
+def test_merge_yaml_into_compat_env_uses_yaml_as_configure_base(tmp_path):
+    """対話設定時は古い.envより既存YAMLを優先する。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_DASHBOARD_PORT=8765\nLEGACY_VALUE=keep\n", encoding="utf-8")
+    (tmp_path / "config.yaml").write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
+
+    _merge_yaml_into_compat_env(tmp_path)
+
+    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines())
+    assert values["ARGOS_DASHBOARD_PORT"] == "9999"
+    assert values["LEGACY_VALUE"] == "keep"
+
+
+def test_configure_helpers_preserve_remote_slot_position():
+    """対話設定でローカルを更新してもリモートの配置を維持する。"""
+    values = {
+        "ARGOS_AGENT_PROVIDER": "codex",
+        "ARGOS_AGENT_SLOTS_JSON": json.dumps(
+            [
+                {"type": "local", "name": "旧", "provider": "codex", "cwd": "/old"},
+                {
+                    "type": "remote",
+                    "name": "自宅",
+                    "url": "https://home.example",
+                    "remote_name": "作業",
+                    "remote_provider": "codex",
+                },
+            ]
+        ),
+    }
+
+    template = _prepare_unified_slots_for_configure(values)
+    values["ARGOS_AGENT_SLOT_1"] = "新,claude,/opt/argos,,sonnet"
+    _restore_unified_slots_after_configure(values, template)
+
+    slots = json.loads(values["ARGOS_AGENT_SLOTS_JSON"])
+    assert [slot["name"] for slot in slots] == ["新", "自宅"]
+    assert slots[0]["model"] == "sonnet"
+    assert slots[1]["type"] == "remote"
+    assert "ARGOS_AGENT_SLOT_1" not in values
 
 
 def test_bundled_wakeword_models_exist():

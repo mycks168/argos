@@ -1,5 +1,47 @@
 # 基本設計
 
+## 設定ファイル
+
+ARGOS本体の正規設定ファイルは、プロジェクト直下の `config.yaml` とする。雛形は `config.yaml.example` に置く。別の場所を使う場合は、実プロセスの環境変数 `ARGOS_CONFIG_FILE` でパスを指定する。
+
+設定値の優先順位は、実プロセスの環境変数、`config.yaml`、旧 `.env`、プログラム既定値の順とする。環境変数名は既存の外部連携と一時上書きの互換性のため維持する。旧 `.env` も移行期間中は読み込むが、通常の編集対象にはしない。
+
+設定は機能別のYAMLマッピングに分ける。複数値と会話スロットは配列で表現する。
+
+```yaml
+agent:
+  provider: codex
+  slots:
+    - type: local
+      name: Codex
+      provider: codex
+      cwd: /opt/argos
+      voicevox_speaker: 13
+      model: default
+    - type: remote
+      name: 自宅Codex
+      url: https://home.example.ts.net
+      token: 接続先のARGOS_DASHBOARD_TOKEN
+      remote_name: 作業
+      remote_provider: codex
+remote_argos:
+  timeout_seconds: 600
+audio:
+  input_devices:
+    - default
+    - plughw:CARD=USBMic,DEV=0
+location:
+  provider: remote
+  remote:
+    url: https://example.invalid/location
+```
+
+`argos-install --configure --apply` は対話結果を `config.yaml` へ保存する。既存の `.env` がある場合は既知の項目を階層化し、未分類の項目も `environment` 配下に文字列のまま保存して移行する。Bearerトークンを含むため、生成ファイルの権限は600にする。tts-filterやargos-reminderなど、独立プロセスが専用に読む `services/*/.env` は引き続きインストーラーが生成・同期する。
+
+`argos-install --migrate-config` は、プロジェクト直下の `.env` から `config.yaml`を生成する設定移行専用コマンドとする。依存更新、systemd unit生成、サービス再起動は行わない。既存の`config.yaml`がある場合は上書きせずエラーにする。
+
+`agent.slots`は記載順がそのままダッシュボードとPTT切替の順番になる。`type: local`は同じホストのエージェントCLIを使う。`type: remote`は別のARGOSへ接続し、`url`、`remote_name`、`remote_provider`を必須とする。
+
 ## 外部仕様
 
 ### stt-gateway
@@ -54,7 +96,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 ```
 
 ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
-`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む `.env` は、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
+`argos-install --apply` または `--update` は、ARGOS本体の `config.yaml` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む設定ファイルは、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
 
 ### VOICEVOX
 
@@ -87,7 +129,7 @@ HDMIダッシュボードは、現在の状態、現在のエージェントス�
 
 ### LLM エージェント
 
-ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。`codex`、`antigravity`、`hermes`、`claude` を指定できる。未対応のプロバイダーが指定された場合は起動時にエラーにする。
+ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。`codex`、`antigravity`、`hermes`、`claude`をローカルproviderとして利用できる。別のARGOSへ接続するスロットは内部的に`remote` providerとして扱う。未対応のプロバイダーが指定された場合は起動時にエラーにする。
 
 Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
@@ -102,6 +144,14 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
 初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。ただし `response_target=terminal` のジョブは、端末接続が途中で切れても完成回答を確認できるよう母艦の会話履歴と通知へ反映する一方、母艦TTSへは流さない。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
+
+### リモートARGOSスロット
+
+`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、SSEの応答差分を通常のエージェント応答として扱う。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
+
+切替時には`GET /api/terminal/history`から接続先の会話履歴を取得し、接続元のリモートスロット表示へ反映する。接続先の現在スロットも共有するため、リモート選択は接続先ダッシュボードのアクティブスロットにも反映される。
+
+GPS、マイク、PTT、音声再生、車両制御は接続元ARGOSのローカル機能として動作する。GPSを会話していない間も接続先へ毎秒転送することはせず、車載ダッシュボードの地図更新はローカルで完結させる。
 
 ### Codex CLI
 
@@ -264,6 +314,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
   - `done`：ターン完了。`{"text": "<応答全文>"}`。
   - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
 - `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
+- `GET /api/terminal/history?name=<name>&provider=<provider>`：指定スロットの会話履歴を返す。ARGOS間のリモートスロット切替時に使用する。
 - `POST /api/terminal/slots/next`：次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。端末のPTTダブルクリックに対応する。
 - `POST /api/terminal/slots/select`：`{"name": "...", "provider": "..."}` で指定したスロットへ切り替え、切替後の現在スロットを返す。ダッシュボード左側のスロットボタンから利用する。母艦のスロット状態を共有するため、切替はダッシュボードや目の前の端末にも一貫して反映される。
 
@@ -335,7 +386,7 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 - `User`、`Group` は `ARGOS_SERVICE_USER` と `ARGOS_SERVICE_GROUP` で指定し、未指定時は `argos` とする
 - systemdユニットを有効化する前に、指定したサービスユーザーとグループをOS側に作成する
 - `WorkingDirectory=/opt/argos` を本番の既定作業ディレクトリにする
-- `EnvironmentFile=/opt/argos/.env` から設定を読み込む
+- `EnvironmentFile=-/opt/argos/.env` は旧設定とsystemd環境変数の互換用として任意で読み込み、ARGOS本体は `WorkingDirectory` の `config.yaml` を直接読み込む。先頭の `-` により `.env` がなくても起動できる
 - `ExecStart=/opt/argos/.venv/bin/argos` でプロジェクトの仮想環境内コマンドを起動する
 - `PATH` にサービスユーザーの `.local/bin` と `.cargo/bin` を含め、Codex CLI を解決できるようにする
 - `network-online.target`、`tailscale-online.target`、`sound.target` の後に起動する
@@ -350,9 +401,9 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 
 Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
-`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `.env` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
+`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `config.yaml` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
 
-実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
+実運用前に `uv sync` で `.venv/bin/argos` を作成し、`config.yaml` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 
 ## 音声入力の設定
 

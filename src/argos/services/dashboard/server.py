@@ -223,6 +223,23 @@ def _create_handler(
                     self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 self._send_json(terminal_handler.list_slots())
+            elif path == "/api/terminal/history":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                query = parse_qs(urlparse(self.path).query)
+                name = str(query.get("name", [""])[0]).strip()
+                provider = str(query.get("provider", [""])[0]).strip()
+                try:
+                    if not name or not provider:
+                        raise ValueError("スロット名とproviderが必要です")
+                    response = terminal_handler.slot_history(name, provider)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(response)
             elif path == "/camera/latest.jpg":
                 self._send_camera_snapshot()
             elif path.startswith("/uploads/"):

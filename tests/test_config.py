@@ -1,4 +1,14 @@
+import json
+
+import pytest
+
 from argos.config import AgentSlot, load_settings, resolve_agent_slot_model
+
+
+@pytest.fixture(autouse=True)
+def _clear_unified_slots(monkeypatch):
+    """各テストが実機config.yamlのスロット設定に影響されないようにする。"""
+    monkeypatch.delenv("ARGOS_AGENT_SLOTS_JSON", raising=False)
 
 
 def test_load_default_slot(monkeypatch):
@@ -171,6 +181,34 @@ def test_load_numbered_slots(monkeypatch):
     assert settings.agent_slots[0].provider == "codex"
     assert settings.agent_slots[1].provider == "antigravity"
     assert settings.agent_slots[1].cwd == "/tmp/b"
+
+
+def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
+    """YAML由来の統合スロットはローカル・リモートの順序を維持する。"""
+    monkeypatch.setenv(
+        "ARGOS_AGENT_SLOTS_JSON",
+        json.dumps(
+            [
+                {
+                    "type": "remote",
+                    "name": "自宅",
+                    "url": "https://home.example/",
+                    "token": "secret",
+                    "remote_name": "作業",
+                    "remote_provider": "codex",
+                },
+                {"type": "local", "name": "車載", "provider": "claude", "cwd": "/opt/argos"},
+            ]
+        ),
+    )
+
+    settings = load_settings()
+
+    assert [slot.name for slot in settings.agent_slots] == ["自宅", "車載"]
+    assert settings.agent_slots[0].provider == "remote"
+    assert settings.agent_slots[0].remote_url == "https://home.example"
+    assert settings.agent_slots[0].remote_token == "secret"
+    assert settings.agent_slots[1].provider == "claude"
 
 
 def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):

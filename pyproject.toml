@@ -15,6 +15,7 @@ dependencies = [
     "pillow",
     "python-dotenv",
     "requests",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
