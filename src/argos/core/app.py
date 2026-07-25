@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 
 from argos.config import (
@@ -380,18 +381,38 @@ class ArgosApp:
                     status = str(job.get("status", ""))
                     result = str(job.get("result", "")).strip()
                     error = str(job.get("error", "")).strip()
+                    response_target = str(job.get("response_target", "local"))
                     if status == "completed" and result:
-                        self._deliver_runner_result(job_id, slot_name, provider, result)
+                        self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
                         mark_delivered(job_id)
                     elif status == "failed":
-                        self._deliver_runner_error(job_id, slot_name, provider, error)
+                        self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
                         mark_delivered(job_id)
             except Exception:
                 log.exception("Agent Runner未配信ジョブの確認に失敗しました")
             self._shutdown.wait(5)
 
-    def _deliver_runner_result(self, job_id: str, slot_name: str, provider: str, result: str) -> None:
+    def _deliver_runner_result(
+        self,
+        job_id: str,
+        slot_name: str,
+        provider: str,
+        result: str,
+        response_target: str = "local",
+    ) -> None:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        if response_target == "terminal":
+            slot_key = _app_slot_key(slot_name, provider)
+            self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+            if not self._is_current_slot_key(slot_key):
+                self._dashboard_state.set_slot_unread(slot_name, provider, True)
+            self._dashboard_state.add_notification(
+                f"{slot_name} 端末応答完了",
+                "端末へ返せなかった応答を会話履歴に反映しました。",
+                source="ARGOS",
+            )
+            log.info("Terminal向け未配信応答を画面だけへ反映しました: job_id=%s", job_id)
+            return
         slot_key = _app_slot_key(slot_name, provider)
         self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
         self._pending_slot_speech[slot_key] = result
@@ -406,8 +427,18 @@ class ArgosApp:
         )
         log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
 
-    def _deliver_runner_error(self, job_id: str, slot_name: str, provider: str, error: str) -> None:
+    def _deliver_runner_error(
+        self,
+        job_id: str,
+        slot_name: str,
+        provider: str,
+        error: str,
+        response_target: str = "local",
+    ) -> None:
         """Runnerで失敗したジョブを通知へ反映する。"""
+        if response_target == "terminal":
+            log.info("Terminal向け未配信エラーの母艦通知を抑止しました: job_id=%s", job_id)
+            return
         text = error or "Agent Runnerジョブに失敗しました"
         self._dashboard_state.add_error_notification(f"{slot_name} Runner", text[:300])
         log.info("Agent Runner未配信エラーを反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
@@ -897,7 +928,7 @@ class ArgosApp:
             seq = 0
             full_response = ""
             try:
-                deltas = self._agent.ask_stream(transcript)
+                deltas = self._terminal_agent_stream(transcript)
                 if want_audio:
                     # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
                     for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
@@ -944,6 +975,13 @@ class ArgosApp:
             self._status.finish(token)
             if tmp_path:
                 self._remove_recording_file(tmp_path)
+
+    def _terminal_agent_stream(self, prompt: str) -> Iterator[str]:
+        """Terminal起点のRunnerジョブへ応答先を付けて差分を返す。"""
+        response_target = getattr(self._agent, "response_target", None)
+        context = response_target("terminal") if callable(response_target) else nullcontext()
+        with context:
+            yield from self._agent.ask_stream(prompt)
 
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
