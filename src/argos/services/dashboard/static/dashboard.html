@@ -919,6 +919,7 @@
       min-height: 0;
       overflow: hidden;
       overscroll-behavior: none;
+      --sp-left-width: min(84vw, 340px);
     }
     body[data-layout="sp"] *, body[data-layout="sp"] *::before, body[data-layout="sp"] *::after {
       cursor: auto !important;
@@ -1042,7 +1043,23 @@
     body[data-layout="sp"].sp-right-open .sp-drawer-backdrop {
       display: block;
     }
+    body[data-layout="sp"].sp-left-pinned .status-panel {
+      transform: translateX(0);
+      border-right: 1px solid #354855;
+      box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4);
+    }
+    body[data-layout="sp"].sp-left-pinned #slot-center {
+      left: var(--sp-left-width);
+      width: calc(100% - var(--sp-left-width));
+    }
+    body[data-layout="sp"].sp-left-pinned .sp-drawer-backdrop {
+      left: var(--sp-left-width);
+    }
+    body[data-layout="sp"].sp-left-pinned:not(.sp-right-open) .sp-drawer-backdrop {
+      display: none !important;
+    }
     @media (max-width: 480px) {
+      body[data-layout="sp"] { --sp-left-width: min(92vw, 340px); }
       body[data-layout="sp"] #slot-center { padding: 8px; }
       body[data-layout="sp"] .status-panel,
       body[data-layout="sp"] #slot-right { width: min(92vw, 340px); }
@@ -1078,7 +1095,21 @@
       </div>
       <div class="settings-modal-body">
         <div class="settings-row">
-          <span class="settings-label">画面レイアウト</span>
+          <span class="settings-label">画面レイアウト切替</span>
+          <div class="font-size-control" role="group" aria-label="画面レイアウト">
+            <button id="layout-switch-standard" class="font-size-button" type="button">通常</button>
+            <button id="layout-switch-sp" class="font-size-button" type="button">SP</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">初期表示デフォルト</span>
+          <div class="font-size-control" role="group" aria-label="デフォルトレイアウト">
+            <button class="default-layout-button" type="button" data-default-layout-option="standard" aria-pressed="true">通常</button>
+            <button class="default-layout-button" type="button" data-default-layout-option="sp" aria-pressed="false">SP</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">画面配置</span>
           <button id="swap-button" class="control-button" type="button" style="width: 100%;">左右入れ替え</button>
         </div>
         <div class="settings-row">
@@ -1098,7 +1129,7 @@
   </div>
 
   <header class="sp-toolbar" aria-label="SPダッシュボード操作">
-    <button id="sp-status-button" class="sp-toolbar-button" type="button" aria-label="状態を開く" aria-expanded="false">&#9776;</button>
+    <button id="sp-status-button" class="sp-toolbar-button" type="button" aria-label="左枠を固定/解除" aria-expanded="false" aria-pressed="false">&#9776;</button>
     <div id="sp-toolbar-title" class="sp-toolbar-title">ARGOS</div>
     <button id="sp-notifications-button" class="sp-toolbar-button" type="button" aria-label="通知を開く" aria-expanded="false">
       &#128276;<span id="sp-notification-count" class="sp-notification-count" hidden>0</span>
@@ -1209,6 +1240,9 @@
     const spNotificationCount = document.getElementById("sp-notification-count");
     const spDrawerBackdrop = document.getElementById("sp-drawer-backdrop");
     const spToolbarTitle = document.getElementById("sp-toolbar-title");
+    const layoutSwitchStandard = document.getElementById("layout-switch-standard");
+    const layoutSwitchSp = document.getElementById("layout-switch-sp");
+    const defaultLayoutButtons = Array.from(document.querySelectorAll("[data-default-layout-option]"));
     const screensaver = document.getElementById("screensaver");
     const centerAlert = document.getElementById("center-alert");
     const centerAlertSource = document.getElementById("center-alert-source");
@@ -1969,6 +2003,13 @@
       textInput.style.height = "auto";
       textInput.style.height = `${Math.min(textInput.scrollHeight, 120)}px`;
     });
+    const defaultLayoutStorageKey = "argos-dashboard-default-layout";
+    const spPinnedStorageKey = "argos-sp-left-pinned";
+
+    function setCookie(name, value, days = 365) {
+      document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${days * 86400}; SameSite=Lax`;
+    }
+
     function setSpDrawer(side) {
       if (dashboardLayout !== "sp") return;
       const leftOpen = side === "left" && !document.body.classList.contains("sp-left-open");
@@ -1994,9 +2035,50 @@
       localStorage.setItem(spNotificationSeenAtStorageKey, spNotificationSeenAt);
       updateSpNotificationBadge();
     }
-    spStatusButton.addEventListener("click", () => setSpDrawer("left"));
+    spStatusButton.addEventListener("click", () => {
+      if (dashboardLayout !== "sp") return;
+      const isPinned = document.body.classList.toggle("sp-left-pinned");
+      spStatusButton.setAttribute("aria-pressed", isPinned ? "true" : "false");
+      spStatusButton.setAttribute("aria-expanded", isPinned ? "true" : "false");
+      localStorage.setItem(spPinnedStorageKey, isPinned ? "true" : "false");
+    });
     spNotificationsButton.addEventListener("click", () => setSpDrawer("right"));
     spDrawerBackdrop.addEventListener("click", () => setSpDrawer(""));
+
+    if (layoutSwitchStandard) {
+      layoutSwitchStandard.addEventListener("click", () => {
+        setCookie("argos_layout", "standard");
+        localStorage.setItem(defaultLayoutStorageKey, "standard");
+        window.location.href = "/";
+      });
+    }
+    if (layoutSwitchSp) {
+      layoutSwitchSp.addEventListener("click", () => {
+        setCookie("argos_layout", "sp");
+        localStorage.setItem(defaultLayoutStorageKey, "sp");
+        window.location.href = "/sp";
+      });
+    }
+
+    function updateDefaultLayoutUI(selected) {
+      defaultLayoutButtons.forEach(btn => {
+        const opt = btn.dataset.defaultLayoutOption;
+        const active = opt === selected;
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+    const currentDefaultLayout = localStorage.getItem(defaultLayoutStorageKey) || "standard";
+    updateDefaultLayoutUI(currentDefaultLayout);
+
+    defaultLayoutButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const opt = btn.dataset.defaultLayoutOption;
+        localStorage.setItem(defaultLayoutStorageKey, opt);
+        setCookie("argos_layout", opt);
+        updateDefaultLayoutUI(opt);
+      });
+    });
+
     function updateSpViewport() {
       if (dashboardLayout !== "sp") return;
       const viewport = window.visualViewport;
@@ -2007,6 +2089,12 @@
       window.scrollTo(0, 0);
     }
     if (dashboardLayout === "sp") {
+      const isPinned = localStorage.getItem(spPinnedStorageKey) === "true";
+      if (isPinned) {
+        document.body.classList.add("sp-left-pinned");
+        spStatusButton.setAttribute("aria-pressed", "true");
+        spStatusButton.setAttribute("aria-expanded", "true");
+      }
       updateSpViewport();
       window.visualViewport?.addEventListener("resize", updateSpViewport);
       window.visualViewport?.addEventListener("scroll", updateSpViewport);

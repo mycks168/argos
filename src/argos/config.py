@@ -89,6 +89,15 @@ def _split_aliases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return aliases or default
 
 
+def _normalize_layout(value: str) -> str:
+    """ダッシュボードレイアウト名を正規化する ("standard" または "sp")。"""
+    val = (value or "").strip().lower()
+    if val in ("sp", "mobile"):
+        return "sp"
+    return "standard"
+
+
+
 @dataclass(frozen=True)
 class AgentSlot:
     """LLMエージェントの会話スロット設定。"""
@@ -222,6 +231,7 @@ class Settings:
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
     dashboard_default_font_size: str = "medium"
+    dashboard_default_layout: str = "standard"
     dashboard_upload_dir: str = "/tmp/argos/uploads"
     dashboard_upload_max_bytes: int = 5 * 1024 * 1024
     dashboard_upload_keep: int = 50
@@ -499,6 +509,7 @@ def load_settings() -> Settings:
         dashboard_view_key=os.environ.get("ARGOS_DASHBOARD_VIEW_KEY", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
+        dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),
         dashboard_upload_max_bytes=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024))),
         dashboard_upload_keep=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_KEEP", "50")),

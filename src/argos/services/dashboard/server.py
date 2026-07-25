@@ -32,6 +32,7 @@ DEFAULT_UPLOAD_KEEP = 50
 FONT_SIZE_OPTIONS = {"small", "medium", "large"}
 # 閲覧認証で使うCookie名。値には閲覧キーそのものを保持する。
 VIEW_KEY_COOKIE = "argos_view_key"
+LAYOUT_COOKIE = "argos_layout"
 # アップロード画像のMIMEタイプと保存拡張子の対応。
 UPLOAD_MIME_EXTENSIONS = {
     "image/png": ".png",
@@ -56,6 +57,13 @@ def _normalize_font_size(value: str) -> str:
     return normalized if normalized in FONT_SIZE_OPTIONS else "medium"
 
 
+def _normalize_layout(value: str) -> str:
+    """ダッシュボードのレイアウト設定を正規化する。"""
+    normalized = str(value or "").strip().lower()
+    return "sp" if normalized in ("sp", "mobile") else "standard"
+
+
+
 class DashboardServer:
     """ダッシュボード画面、API、SSEを別スレッドで提供する。"""
 
@@ -70,6 +78,7 @@ class DashboardServer:
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
         default_font_size: str = "medium",
+        default_layout: str = "standard",
         location_provider: str = "local",
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
@@ -94,6 +103,7 @@ class DashboardServer:
         self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
+        self._default_layout = _normalize_layout(default_layout)
         self._location_provider = location_provider
         self._remote_location_url = remote_location_url
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
@@ -121,6 +131,7 @@ class DashboardServer:
             self._gps_device_path,
             self._screensaver_seconds,
             self._default_font_size,
+            self._default_layout,
             self._location_provider,
             self._remote_location_url,
             self._remote_location_timeout_seconds,
@@ -157,6 +168,7 @@ def _create_handler(
     gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
     default_font_size: str = "medium",
+    default_layout: str = "standard",
     location_provider: str = "local",
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
@@ -179,7 +191,11 @@ def _create_handler(
             if path != "/api/health" and not self._require_view():
                 return
             if path == "/":
-                self._send_html("standard")
+                cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                layout_morsel = cookie.get(LAYOUT_COOKIE)
+                cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
+                target_layout = cookie_layout if cookie_layout else default_layout
+                self._send_html(target_layout)
             elif path in {"/sp", "/sp/"}:
                 self._send_html("sp")
             elif path.startswith("/static/"):
