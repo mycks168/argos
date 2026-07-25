@@ -15,6 +15,7 @@ from argos.services.antigravity import AntigravityCliClient
 from argos.services.claude.cli import ClaudeCliClient
 from argos.services.codex.cli import CodexCliClient
 from argos.services.hermes import HermesCliClient
+from argos.services.conversation_store import ConversationStore
 
 
 class AgentClient(Protocol):
@@ -66,6 +67,10 @@ class SystemPromptAgentClient:
         self._slots = settings.agent_slots
         self._index = 0
         self._store = SystemPromptStateStore(Path(settings.agent_system_prompt_state_path).expanduser())
+        self._memory_store = ConversationStore(
+            Path(settings.conversation_memory_path).expanduser(),
+            settings.conversation_memory_enabled,
+        )
 
     def __getattr__(self, name: str) -> object:
         """共通インターフェース外の機能は実クライアントへ委譲する。"""
@@ -89,8 +94,10 @@ class SystemPromptAgentClient:
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
         name = self._client.next_slot()
-        if self._slots:
-            self._index = (self._index + 1) % len(self._slots)
+        for index, slot in enumerate(self._slots):
+            if slot.name == self.current_name and slot.provider == self.current_provider:
+                self._index = index
+                break
         return name
 
     def select_slot(self, name: str, provider: str) -> str:
@@ -109,33 +116,48 @@ class SystemPromptAgentClient:
 
     def ask(self, prompt: str) -> str:
         """必要な場合だけ共通指示を付与して最終応答を返す。"""
-        prompt_to_send, injected = self._prepare_prompt(prompt)
+        prompt_to_send, system_injected, memory_injected = self._prepare_prompt(prompt)
         response = self._client.ask(prompt_to_send)
-        if injected:
+        if system_injected:
             self._store.mark_injected(self._current_key())
+        if memory_injected:
+            self._memory_store.clear_memory(self._current_key())
         return response
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """必要な場合だけ共通指示を付与して応答差分を順に返す。"""
-        prompt_to_send, injected = self._prepare_prompt(prompt)
+        prompt_to_send, system_injected, memory_injected = self._prepare_prompt(prompt)
         completed = False
         try:
             for chunk in self._client.ask_stream(prompt_to_send):
                 yield chunk
             completed = True
         finally:
-            if injected and completed:
+            if system_injected and completed:
                 self._store.mark_injected(self._current_key())
+            if memory_injected and completed:
+                self._memory_store.clear_memory(self._current_key())
 
-    def _prepare_prompt(self, prompt: str) -> tuple[str, bool]:
-        """現在スロットが未注入ならシステム指示を付与する。"""
-        if self.current_provider == "remote":
-            return prompt, False
+    def save_resume_memory(self, summary: str) -> None:
+        """現在スロットの次回セッションへ渡す要約を保存する。"""
+        self._memory_store.save_memory(self._current_key(), summary)
+
+    def _prepare_prompt(self, prompt: str) -> tuple[str, bool, bool]:
+        """未注入の共通指示と引き継ぎ要約をプロンプトへ付与する。"""
         key = self._current_key()
-        if self._store.is_injected(key):
-            return prompt, False
-        prompt_to_send = build_agent_prompt(prompt, self._settings)
-        return prompt_to_send, prompt_to_send != prompt
+        system_injected = False
+        prompt_to_send = prompt
+        if self.current_provider != "remote" and not self._store.is_injected(key):
+            prompt_to_send = build_agent_prompt(prompt_to_send, self._settings)
+            system_injected = prompt_to_send != prompt
+        memory = self._memory_store.load_memory(key)
+        if memory:
+            prompt_to_send = (
+                "以下は以前のセッションから引き継いだ要約です。事実として参照し、"
+                "現在の依頼を優先してください。\n\n"
+                f"{memory}\n\n現在の依頼:\n{prompt_to_send}"
+            )
+        return prompt_to_send, system_injected, bool(memory)
 
     def _current_key(self) -> str:
         """現在スロットの注入済み状態キーを返す。"""
@@ -227,7 +249,13 @@ class RoutedAgentClient:
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
-        self._index = (self._index + 1) % len(self._routes)
+        candidates = [index for index, route in enumerate(self._routes) if route.slot.ptt_cycle]
+        if not candidates:
+            candidates = list(range(len(self._routes)))
+        self._index = next(
+            (index for index in candidates if index > self._index),
+            candidates[0],
+        )
         return self.current_name
 
     def select_slot(self, name: str, provider: str) -> str:

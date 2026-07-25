@@ -418,38 +418,20 @@
       transition: width 0.3s ease;
     }
     .slots {
-      display: flex;
-      gap: 6px;
+      display: block;
+      width: 100%;
       margin-top: 8px;
-      min-height: 30px;
+      min-height: 34px;
       max-width: 100%;
-      overflow-x: auto;
-      overflow-y: hidden;
-      overscroll-behavior-x: contain;
-      scrollbar-width: none;
-      touch-action: pan-x;
-    }
-    .slots::-webkit-scrollbar { display: none; }
-    .slot-button {
-      flex: 0 0 auto;
-      max-width: 132px;
       border: 1px solid #354855;
-      border-radius: 999px;
+      border-radius: 4px;
       background: #0d151c;
-      color: #aebdc6;
-      padding: 5px 9px;
+      color: #edf3f7;
+      padding: 6px 8px;
       font: inherit;
       font-size: var(--slot-font-size);
       font-weight: 800;
-      line-height: 1.2;
-      text-align: center;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
     }
-    .slot-button[data-active="true"] { border-color: #69b7e4; color: #edf3f7; background: #102131; }
-    .slot-button[data-unread="true"] { border-color: #f4d35e; color: #f4d35e; background: #211d0e; }
-    .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 10px;
       font-size: var(--status-font-size); font-weight: 700;
@@ -1123,6 +1105,7 @@
         <div class="settings-row">
           <span class="settings-label">会話セッション</span>
           <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
+          <button id="session-compact-button" class="control-button" type="button">履歴を引き継いで新規セッション</button>
         </div>
       </div>
     </div>
@@ -1177,7 +1160,7 @@
 
       <div class="slots-container">
         <p class="eyebrow" style="margin-top: 10px; margin-bottom: 4px;">SLOTS</p>
-        <div id="slots" class="slots" aria-label="エージェントスロット"></div>
+        <select id="slots" class="slots" aria-label="エージェントスロット"></select>
       </div>
     </section>
     
@@ -1261,10 +1244,12 @@
     const muteButton = document.getElementById("mute-button");
     const microphoneButton = document.getElementById("microphone-button");
     const sessionResetButton = document.getElementById("session-reset-button");
+    const sessionCompactButton = document.getElementById("session-compact-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
     const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+    let availableSlots = [];
 
     const swapButton = document.getElementById("swap-button");
 
@@ -1552,21 +1537,19 @@
       spToolbarTitle.textContent = state.agent?.name ? `ARGOS · ${state.agent.name}` : "ARGOS";
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
-      slots.innerHTML = (state.slots || []).map(slot => `
-        <button class="slot-button" type="button"
-          data-name="${escapeHtml(slot.name || "")}"
-          data-provider="${escapeHtml(slot.provider || "")}"
-          data-active="${slot.active ? "true" : "false"}"
-          data-unread="${slot.unread ? "true" : "false"}"
-          data-busy="${slot.busy ? "true" : "false"}">
+      availableSlots = state.slots || [];
+      slots.innerHTML = availableSlots.map((slot, index) => `
+        <option value="${index}" ${slot.active ? "selected" : ""}>
           ${escapeHtml(slot.name || "--")}${slot.busy ? " ..." : ""}${slot.unread ? " / 未読" : ""}
-        </button>`).join("");
+        </option>`).join("");
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
       microphoneEnabled = state.microphone?.enabled !== false;
       microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
       microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
+      sessionCompactButton.disabled = !state.capabilities?.conversation_memory;
+      sessionCompactButton.title = sessionCompactButton.disabled ? "config.yamlで会話引き継ぎを有効にしてください" : "";
       const volume = Number.isFinite(Number(state.audio?.volume)) ? Number(state.audio.volume) : Number(volumeSlider.value);
       if (!changingVolume) {
         volumeSlider.value = volume;
@@ -1772,17 +1755,17 @@
       if (!response.ok) throw new Error(await response.text());
       await refresh();
     }
-    slots.addEventListener("click", event => {
-      const button = event.target.closest(".slot-button");
-      if (!button || button.dataset.active === "true") return;
+    slots.addEventListener("change", () => {
+      const selected = availableSlots[Number(slots.value)];
+      if (!selected || selected.active) return;
       if (voiceState === "recording") {
         setTextComposerError("録音を停止してからスロットを切り替えてね");
         return;
       }
-      button.disabled = true;
-      selectAgentSlot(button.dataset.name || "", button.dataset.provider || "")
+      slots.disabled = true;
+      selectAgentSlot(selected.name || "", selected.provider || "")
         .catch(error => console.error("Failed to select agent slot:", error))
-        .finally(() => { button.disabled = false; });
+        .finally(() => { slots.disabled = false; });
     });
     async function sendTextTurn(value) {
       const text = value.trim();
@@ -2139,6 +2122,12 @@
       sessionResetButton.dataset.confirm = "false";
       sessionResetButton.textContent = "セッションリセット";
       sendControl("reset_agent_session").catch(error => console.error(error));
+    });
+    sessionCompactButton.addEventListener("click", () => {
+      sessionCompactButton.disabled = true;
+      sendControl("compact_agent_session")
+        .catch(error => console.error(error))
+        .finally(() => { sessionCompactButton.disabled = false; });
     });
     volumeSlider.addEventListener("input", () => {
       changingVolume = true;

@@ -443,6 +443,40 @@ def test_system_prompt_agent_client_injects_per_slot(tmp_path):
     assert fake.prompts[2] == "作業2"
 
 
+def test_resume_memory_is_injected_once(tmp_path):
+    """保存した引き継ぎ要約は次の依頼へ一度だけ付与する。"""
+
+    class FakeAgent:
+        """受け取ったプロンプトを記録する。"""
+
+        current_name = "作業"
+        current_provider = "codex"
+
+        def ask(self, prompt):
+            """プロンプトを記録して応答する。"""
+            self.prompt = prompt
+            return "応答"
+
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_system_prompt": "",
+            "agent_default_system_prompt": "",
+            "conversation_memory_enabled": True,
+            "conversation_memory_path": str(tmp_path / "memory.json"),
+            "agent_slots": (AgentSlot("作業", "codex", "/tmp/a"),),
+        }
+    )
+    fake = FakeAgent()
+    client = SystemPromptAgentClient(fake, settings)
+    client.save_resume_memory("未完了はテスト実行")
+
+    assert client.ask("続きをして") == "応答"
+    assert "未完了はテスト実行" in fake.prompt
+    assert "続きをして" in fake.prompt
+    assert client._memory_store.load_memory(client._current_key()) == ""
+
+
 def test_system_prompt_agent_client_delegates_runner_delivery_methods(tmp_path):
     """Runner用の未配信回収メソッドはラップ後も実クライアントへ委譲する。"""
 

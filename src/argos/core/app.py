@@ -35,6 +35,7 @@ from argos.services.agent.runner_client import RunnerSlotBusyError
 from argos.services.agent_usage import AgentUsageProvider
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
+from argos.services.conversation_store import ConversationStore
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
@@ -180,11 +181,18 @@ class ArgosApp:
         initial_volume = saved_audio_state.volume if saved_audio_state.volume is not None else settings.audio_output_volume
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, initial_volume)
         self._lcd = self._create_lcd_display(settings)
-        self._dashboard_state = DashboardState()
+        self._dashboard_state = DashboardState(max_messages=settings.conversation_history_max_messages)
+        self._conversation_store = ConversationStore(
+            Path(settings.conversation_history_path).expanduser(),
+            settings.conversation_history_enabled,
+            settings.conversation_history_max_messages,
+        )
         self._dashboard_state.set_audio_volume(self._audio.volume)
+        self._dashboard_state.set_conversation_memory_enabled(settings.conversation_memory_enabled)
         self._dashboard_state.set_slots(
             [(slot.name, slot.provider, resolve_agent_slot_model(settings, slot)) for slot in settings.agent_slots]
         )
+        self._dashboard_state.restore_histories(self._conversation_store.load_histories())
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -414,6 +422,7 @@ class ArgosApp:
                 source="ARGOS",
             )
             log.info("Terminal向け未配信応答を画面だけへ反映しました: job_id=%s", job_id)
+            self._save_conversation_history()
             return
         slot_key = _app_slot_key(slot_name, provider)
         self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
@@ -440,6 +449,7 @@ class ArgosApp:
             "Runnerで完了した応答を会話履歴に反映しました。",
             source="ARGOS",
         )
+        self._save_conversation_history()
         log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
 
     def _deliver_runner_error(
@@ -498,11 +508,12 @@ class ArgosApp:
             try:
                 messages = load_history()
                 if isinstance(messages, list):
-                    self._dashboard_state.replace_slot_messages(
+                    self._dashboard_state.merge_slot_messages(
                         self._agent.current_name,
                         self._agent.current_provider,
                         messages,
                     )
+                    self._save_conversation_history()
             except Exception:
                 log.exception("リモートArgosの会話履歴を取得できませんでした")
         self._publish_agent_usage_pending()
@@ -1004,6 +1015,7 @@ class ArgosApp:
             finally:
                 self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
                 self._dashboard_state.finish_message(dashboard_message_id)
+                self._save_conversation_history()
         finally:
             # 全経路で母艦の状態枠を休止（待機中）へ戻す。stale世代なら無視される。
             self._status.finish(token)
@@ -1050,6 +1062,15 @@ class ArgosApp:
                 "volume": self._audio.volume,
                 "session_reset": True,
                 "slot": {"name": slot_name, "provider": slot_provider},
+            }
+        elif action == "compact_agent_session":
+            if not self._settings.conversation_memory_enabled:
+                raise ValueError("会話履歴の引き継ぎが無効です")
+            self._start_session_compaction()
+            return {
+                "muted": self._speech.is_muted(),
+                "volume": self._audio.volume,
+                "session_compaction_started": True,
             }
         else:
             raise ValueError(f"未対応の操作です: {action}")
@@ -1178,9 +1199,58 @@ class ArgosApp:
         finally:
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
             self._dashboard_state.finish_message(dashboard_message_id)
+            self._save_conversation_history()
             if announcer is not None:
                 announcer.stop()
             self._status.finish(handle_generation)
+
+    def _save_conversation_history(self) -> None:
+        """有効時だけ現在の全スロット表示履歴を永続化する。"""
+        try:
+            self._conversation_store.save_histories(self._dashboard_state.export_histories())
+        except OSError:
+            log.exception("会話表示履歴を保存できませんでした")
+
+    def _start_session_compaction(self) -> None:
+        """現在スロットの履歴要約と新規セッション準備をバックグラウンドで始める。"""
+        slot_name = self._agent.current_name
+        slot_provider = self._agent.current_provider
+        messages = self._dashboard_state.slot_messages(slot_name, slot_provider)
+        if not messages:
+            raise ValueError("引き継ぐ会話履歴がありません")
+
+        def compact() -> None:
+            """現在履歴を要約し、次回だけ注入する状態でセッションをリセットする。"""
+            self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
+            try:
+                history = "\n".join(
+                    f"{'ユーザー' if item.get('role') == 'user' else 'アシスタント'}: {item.get('text', '')}"
+                    for item in messages
+                )
+                prompt = (
+                    "次の会話履歴を、新しいセッションへ引き継ぐために簡潔に要約してください。"
+                    "確定事項、未完了の作業、重要な固有名詞やパスを優先し、推測は加えないでください。"
+                    "要約本文だけを返してください。\n\n"
+                    f"{history}"
+                )
+                summary = self._agent.ask(prompt).strip()
+                save_memory = getattr(self._agent, "save_resume_memory", None)
+                if not summary or not callable(save_memory):
+                    raise RuntimeError("引き継ぎ要約を保存できませんでした")
+                save_memory(summary)
+                self._agent.reset_current()
+                self._dashboard_state.add_notification(
+                    "会話を引き継ぎ",
+                    f"{slot_name} の要約を保存し、新しいセッションを準備しました。",
+                    source="ARGOS",
+                )
+            except Exception as exc:
+                log.exception("会話履歴の引き継ぎに失敗しました")
+                self._report_error("会話引き継ぎ", exc)
+            finally:
+                self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
+
+        threading.Thread(target=compact, name="conversation-compaction", daemon=True).start()
 
     def _start_agent_progress(self, user_text: str = "", slot_key: str = "") -> AgentProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""

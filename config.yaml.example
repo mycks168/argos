@@ -52,12 +52,14 @@ agent:
   slots:
     - type: local
       name: Codex
+      ptt_cycle: true
       provider: codex
       cwd: /opt/argos
       voicevox_speaker: 2
       model: ''
     - type: remote
       name: 自宅Codex
+      ptt_cycle: false
       url: https://home.example.ts.net
       token: ''
       remote_name: 作業
@@ -71,6 +73,13 @@ agent:
     hermes: cat /opt/argos/services/agent-limit/hermes.json
 remote_argos:
   timeout_seconds: 600
+conversation_history:
+  enabled: false
+  path: ~/.local/state/argos/conversation-history.json
+  max_messages: 100
+conversation_memory:
+  enabled: false
+  path: ~/.local/state/argos/conversation-memory.json
 agents:
   codex:
     extra_args: []

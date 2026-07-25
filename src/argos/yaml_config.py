@@ -35,6 +35,8 @@ SECTION_PREFIXES = {
     "startup": "ARGOS_STARTUP_",
     "runner": "ARGOS_AGENT_RUNNER_",
     "remote_argos": "ARGOS_REMOTE_ARGOS_",
+    "conversation_history": "ARGOS_CONVERSATION_HISTORY_",
+    "conversation_memory": "ARGOS_CONVERSATION_MEMORY_",
     "stt": "STT_GATEWAY_",
     "tts": "TTS_FILTER_",
     "voicevox": "VOICEVOX_",

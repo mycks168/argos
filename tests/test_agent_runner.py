@@ -481,6 +481,7 @@ def test_runner_agent_client_switches_and_resets_current_slot(monkeypatch, tmp_p
             **_settings(tmp_path).__dict__,
             "agent_slots": (
                 AgentSlot("作業", "codex", "/tmp/a"),
+                AgentSlot("除外", "claude", "/tmp/c", ptt_cycle=False),
                 AgentSlot("調査", "hermes", "/tmp/b"),
             ),
         }

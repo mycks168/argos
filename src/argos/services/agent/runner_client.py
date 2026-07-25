@@ -50,7 +50,13 @@ class RunnerAgentClient:
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
-        self._index = (self._index + 1) % len(self._slots)
+        candidates = [index for index, slot in enumerate(self._slots) if slot.ptt_cycle]
+        if not candidates:
+            candidates = list(range(len(self._slots)))
+        self._index = next(
+            (index for index in candidates if index > self._index),
+            candidates[0],
+        )
         return self.current_name
 
     def select_slot(self, name: str, provider: str) -> str:
