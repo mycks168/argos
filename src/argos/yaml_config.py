@@ -55,6 +55,22 @@ LIST_MAPPINGS = {
     ("agents.hermes", "extra_args"): ("ARGOS_HERMES_EXTRA_ARGS", " "),
 }
 
+EXACT_MAPPINGS = {
+    ("audio", "state_path"): "ARGOS_AUDIO_STATE_PATH",
+    ("audio", "listen_mode"): "ARGOS_LISTEN_MODE",
+    ("audio", "silence_rms_threshold"): "SILENCE_RMS_THRESHOLD",
+    ("ptt", "gpio"): "ARGOS_PTT_GPIO",
+    ("tts", "delimiters"): "ARGOS_TTS_DELIMITERS",
+    ("tts.cache", "enabled"): "ARGOS_TTS_CACHE_ENABLED",
+    ("tts.cache", "max_chars"): "ARGOS_TTS_CACHE_MAX_CHARS",
+    ("tts.cache", "max_size_mb"): "ARGOS_TTS_CACHE_MAX_SIZE_MB",
+    ("tts.cache", "dir"): "ARGOS_TTS_CACHE_DIR",
+    ("network", "wifi_status_refresh_seconds"): "ARGOS_WIFI_STATUS_REFRESH_SECONDS",
+    ("dashboard", "camera_snapshot_path"): "ARGOS_CAMERA_SNAPSHOT_PATH",
+    ("runtime", "dry_run"): "DRY_RUN",
+    ("location", "osrm_url"): "OSRM_URL",
+}
+
 
 def default_config_path() -> Path:
     """環境変数またはカレントディレクトリから設定ファイルを返す。"""
@@ -88,8 +104,11 @@ def load_yaml_environment(path: Path | None = None) -> dict[str, str]:
         for key, value in table.items():
             if isinstance(value, dict) or isinstance(value, list):
                 continue
+            if (section, str(key)) in EXACT_MAPPINGS:
+                continue
             values[prefix + str(key).upper()] = _stringify(value)
 
+    _load_exact_values(data, values)
     _load_agent_slots(data, values)
     _load_named_commands(data, values)
     _load_list_values(data, values)
@@ -139,6 +158,10 @@ def write_yaml_from_environment(values: dict[str, str], path: Path) -> None:
                 slots.append({"type": "remote", **item})
     if slots:
         _ensure_table(data, "agent")["slots"] = slots
+
+    for (section, key), name in EXACT_MAPPINGS.items():
+        if name in remaining:
+            _ensure_table(data, section)[key] = _typed_value(remaining.pop(name))
 
     for (section, key), (name, separator) in LIST_MAPPINGS.items():
         if name not in remaining:
@@ -200,6 +223,14 @@ def _load_agent_slots(data: dict[str, Any], values: dict[str, str]) -> None:
         normalized.append(item)
     if normalized:
         values["ARGOS_AGENT_SLOTS_JSON"] = json.dumps(normalized, ensure_ascii=False)
+
+
+def _load_exact_values(data: dict[str, Any], values: dict[str, str]) -> None:
+    """接頭辞だけでは表現できないYAML項目を既存設定名へ変換する。"""
+    for (section, key), name in EXACT_MAPPINGS.items():
+        table = _nested_table(data, section)
+        if isinstance(table, dict) and key in table:
+            values[name] = _stringify(table[key])
 
 
 def _load_named_commands(data: dict[str, Any], values: dict[str, str]) -> None:

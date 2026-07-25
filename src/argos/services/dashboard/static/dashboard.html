@@ -357,14 +357,76 @@
       border-left: 3px solid #69b7e4;
       background: #101820;
     }
-    .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
-    .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; overflow-wrap: anywhere; }
+    .agent-label { display: block; color: #8ca0ad; font-size: 11px; font-weight: 700; }
+    .agent-name { display: block; margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
+    .agent-provider { display: block; margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; overflow-wrap: anywhere; }
     .agent {
       margin-top: 10px;
       padding: 6px 8px;
       border-left: 3px solid #69b7e4;
+      border-top: 0;
+      border-right: 0;
+      border-bottom: 0;
       background: #101820;
+      width: 100%;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer !important;
+      position: relative;
+    }
+    .agent::after {
+      content: "▾";
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      color: #8ca0ad;
+      transform: translateY(-50%);
+    }
+    .agent[aria-expanded="true"]::after { content: "▴"; color: #69b7e4; }
+    .agent-selector-wrap { position: relative; }
+    .slot-menu {
+      display: none;
+      position: absolute;
+      z-index: 30;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      max-height: min(48vh, 320px);
+      overflow-y: auto;
+      padding: 4px;
+      border: 1px solid #526775;
+      border-radius: 4px;
+      background: #0d151c;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+    }
+    .slot-menu[data-open="true"] { display: block; }
+    .slot-menu-button {
+      display: block;
+      width: 100%;
+      min-height: 38px;
+      padding: 6px 8px;
+      border: 0;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: #edf3f7;
+      font: inherit;
+      font-size: var(--slot-font-size);
+      font-weight: 800;
+      text-align: left;
+      cursor: pointer !important;
+    }
+    .slot-menu-button[data-active="true"] {
+      border-left-color: #69b7e4;
+      background: #102131;
+    }
+    .slot-menu-button[data-unread="true"] { color: #f4d35e; }
+    .slot-menu-provider {
+      display: block;
+      margin-top: 1px;
+      color: #8ca0ad;
+      font-size: 10px;
+      text-transform: uppercase;
     }
     .agent-usage {
       display: none;
@@ -416,21 +478,6 @@
       height: 100%;
       border-radius: 3px;
       transition: width 0.3s ease;
-    }
-    .slots {
-      display: block;
-      width: 100%;
-      margin-top: 8px;
-      min-height: 34px;
-      max-width: 100%;
-      border: 1px solid #354855;
-      border-radius: 4px;
-      background: #0d151c;
-      color: #edf3f7;
-      padding: 6px 8px;
-      font: inherit;
-      font-size: var(--slot-font-size);
-      font-weight: 800;
     }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 10px;
@@ -633,8 +680,6 @@
       .brand-controls .control-button { padding: 5px 3px; font-size: 10px; border-radius: 6px; }
       .clock-date-row { margin-top: 8px; gap: 6px; }
       .agent { margin-top: 7px; padding: 5px 6px; }
-      .slots { margin-top: 6px; min-height: 26px; gap: 4px; }
-      .slot-button { max-width: 102px; padding: 4px 6px; }
       .status { margin-top: 7px; gap: 7px; }
       .agent-usage { margin-top: 6px; padding: 5px 6px; }
       .notifications-panel { grid-column: auto; min-height: 0; }
@@ -814,10 +859,6 @@
     .weather-label {
       color: #69b7e4;
     }
-    .slots-container {
-      margin-top: auto;
-    }
-
     /* 画面の高さが低い（ウルトラワイド画面など）場合のコンパクトレイアウト */
     @media (max-height: 500px) {
       section { padding: 2px 18px; }
@@ -834,9 +875,6 @@
       .agent-usage-title { margin-bottom: 1px; }
       .agent-usage-row-wrapper { margin-top: 2px; }
       .agent-usage-progress-container { height: 4px; margin-top: 2px; }
-      .slots { margin-top: 4px; min-height: 24px; gap: 4px; }
-      .slot-button { padding: 3px 6px; line-height: 1.1; }
-      .slots-container p.eyebrow { margin-top: 3px !important; margin-bottom: 2px !important; }
       .session-reset-button { margin-top: 4px; padding-top: 5px; padding-bottom: 5px; }
       .font-size-control { margin-top: 4px; gap: 4px; }
       .font-size-button { padding: 3px 0; }
@@ -1150,18 +1188,16 @@
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
 
-      <div class="agent">
-        <div class="agent-label">CURRENT SLOT</div>
-        <div id="agent-name" class="agent-name">--</div>
-        <div id="agent-provider" class="agent-provider">--</div>
+      <div class="agent-selector-wrap">
+        <button id="agent-selector" class="agent" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="agent-label">CURRENT SLOT</span>
+          <span id="agent-name" class="agent-name">--</span>
+          <span id="agent-provider" class="agent-provider">--</span>
+        </button>
+        <div id="slot-menu" class="slot-menu" role="listbox" aria-label="エージェントスロット" data-open="false"></div>
       </div>
 
       <div id="agent-usage" class="agent-usage" aria-live="polite"></div>
-
-      <div class="slots-container">
-        <p class="eyebrow" style="margin-top: 10px; margin-bottom: 4px;">SLOTS</p>
-        <select id="slots" class="slots" aria-label="エージェントスロット"></select>
-      </div>
     </section>
     
     <!-- 中央スロット (スロット1) -->
@@ -1240,7 +1276,8 @@
     const agentUsage = document.getElementById("agent-usage");
     const networkStatus = document.getElementById("network-status");
     const networkLabel = document.getElementById("network-label");
-    const slots = document.getElementById("slots");
+    const agentSelector = document.getElementById("agent-selector");
+    const slotMenu = document.getElementById("slot-menu");
     const muteButton = document.getElementById("mute-button");
     const microphoneButton = document.getElementById("microphone-button");
     const sessionResetButton = document.getElementById("session-reset-button");
@@ -1538,10 +1575,15 @@
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
       availableSlots = state.slots || [];
-      slots.innerHTML = availableSlots.map((slot, index) => `
-        <option value="${index}" ${slot.active ? "selected" : ""}>
+      slotMenu.innerHTML = availableSlots.map((slot, index) => `
+        <button class="slot-menu-button" type="button" role="option"
+          data-index="${index}"
+          data-active="${slot.active ? "true" : "false"}"
+          data-unread="${slot.unread ? "true" : "false"}"
+          aria-selected="${slot.active ? "true" : "false"}">
           ${escapeHtml(slot.name || "--")}${slot.busy ? " ..." : ""}${slot.unread ? " / 未読" : ""}
-        </option>`).join("");
+          <span class="slot-menu-provider">${escapeHtml(slot.provider || "")}${slot.model ? ` · ${escapeHtml(slot.model)}` : ""}</span>
+        </button>`).join("");
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
       muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
@@ -1755,17 +1797,37 @@
       if (!response.ok) throw new Error(await response.text());
       await refresh();
     }
-    slots.addEventListener("change", () => {
-      const selected = availableSlots[Number(slots.value)];
-      if (!selected || selected.active) return;
+    function setSlotMenuOpen(open) {
+      slotMenu.dataset.open = open ? "true" : "false";
+      agentSelector.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    agentSelector.addEventListener("click", () => {
+      setSlotMenuOpen(slotMenu.dataset.open !== "true");
+    });
+    slotMenu.addEventListener("click", event => {
+      const button = event.target.closest(".slot-menu-button");
+      if (!button) return;
+      const selected = availableSlots[Number(button.dataset.index)];
+      if (!selected) return;
+      if (selected.active) {
+        setSlotMenuOpen(false);
+        return;
+      }
       if (voiceState === "recording") {
         setTextComposerError("録音を停止してからスロットを切り替えてね");
         return;
       }
-      slots.disabled = true;
+      setSlotMenuOpen(false);
+      agentSelector.disabled = true;
       selectAgentSlot(selected.name || "", selected.provider || "")
         .catch(error => console.error("Failed to select agent slot:", error))
-        .finally(() => { slots.disabled = false; });
+        .finally(() => { agentSelector.disabled = false; });
+    });
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".agent-selector-wrap")) setSlotMenuOpen(false);
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") setSlotMenuOpen(false);
     });
     async function sendTextTurn(value) {
       const text = value.trim();

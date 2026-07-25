@@ -223,9 +223,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="agent-usage"' in html
         assert "renderAgentUsage(state.agent_usage?.current)" in html
         assert "formatUsageBucket(bucket)" in html
-        assert 'id="slots"' in html
-        assert '<select id="slots"' in html
-        assert 'slots.addEventListener("change"' in html
+        assert 'id="agent-selector"' in html
+        assert 'id="slot-menu"' in html
+        assert 'agentSelector.addEventListener("click"' in html
+        assert 'slotMenu.addEventListener("click"' in html
         assert 'id="session-compact-button"' in html
         assert "state.capabilities?.conversation_memory" in html
         assert "availableSlots = state.slots || []" in html
