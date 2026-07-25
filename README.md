@@ -51,6 +51,10 @@ cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
+Ubuntu 26など、システムのPythonが3.13以降の場合も同じコマンドを使用できます。ARGOSは
+`lgpio`の公式wheelが提供されるPython 3.11/3.12を対象としており、互換Pythonがない場合は
+`uv`が自動的にダウンロードして使用します。通常、システムPythonの入れ替えは不要です。
+
 `develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
 
 インストール後はARGOS実行ユーザーで、利用するエージェントCLIの初回ログインを済ませます。
@@ -100,7 +104,7 @@ uv run argos-install --json
 uv run argos-install --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`ffmpeg`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、kioskを含む構成ではXorg、LightDM、Openboxも導入して`argos`ユーザーで画面セッションへ自動ログインし、`/opt/argos` の所有者も `argos:argos` に揃えます。`ffmpeg` はSTT Gateway向けのOpus変換にも使用します。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
 
 `--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
 
