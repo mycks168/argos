@@ -1,7 +1,10 @@
 import json
+import tomllib
+from pathlib import Path
 
 from argos.installer import (
     DEFAULT_OS_PACKAGES,
+    KIOSK_OS_PACKAGES,
     DEFAULT_MANIFEST,
     apply_plan,
     build_install_plan,
@@ -21,7 +24,16 @@ from argos.installer import (
     _ensure_tts_filter_shared_token,
     _install_chromium_policy,
     _reload_systemd,
+    _remove_inaccessible_venv,
+    _configure_kiosk_display,
 )
+
+
+def test_project_python_range_stays_compatible_with_lgpio_wheels():
+    """インストーラ起動前にlgpioのソースビルドが必要にならないPython範囲を使う。"""
+    project = tomllib.loads((Path(__file__).parents[1] / "pyproject.toml").read_text(encoding="utf-8"))
+
+    assert project["project"]["requires-python"] == ">=3.11,<3.13"
 
 
 def test_load_manifest_lists_core_and_planned_services():
@@ -137,7 +149,33 @@ def test_build_install_plan_bootstrap_includes_dedicated_user_steps(tmp_path):
     assert "build-essential" in plan.os_packages
     assert "liblgpio-dev" in plan.os_packages
     assert "chromium-browser|chromium" in plan.os_packages
+    assert set(KIOSK_OS_PACKAGES).issubset(plan.os_packages)
 
+
+
+def test_configure_kiosk_display_sets_lightdm_autologin(tmp_path, monkeypatch):
+    """kiosk端末はARGOSユーザーの軽量Xセッションへ自動ログインする。"""
+    captured = {}
+    monkeypatch.setattr(
+        "argos.installer._write_unit",
+        lambda path, content, runner: captured.update(path=path, content=content),
+    )
+    kiosk = next(service for service in load_manifest() if service.name == "argos-dashboard-kiosk")
+    plan = build_install_plan(
+        [kiosk],
+        project_dir=tmp_path,
+        system_unit_dir=tmp_path / "system",
+        user_unit_dir=tmp_path / "user",
+        service_user="argos",
+        service_group="argos",
+        bootstrap=True,
+    )
+
+    _configure_kiosk_display(plan)
+
+    assert captured["path"] == Path("/etc/lightdm/lightdm.conf.d/50-argos-kiosk.conf")
+    assert "autologin-user=argos" in captured["content"]
+    assert "autologin-session=openbox" in captured["content"]
 
 def test_default_os_packages_include_runtime_and_build_dependencies():
     """標準OSパッケージに実機で必要な依存を含める。"""
@@ -150,6 +188,7 @@ def test_default_os_packages_include_runtime_and_build_dependencies():
         "liblgpio-dev",
         "cron",
         "curl",
+        "ffmpeg",
         "fonts-ipafont-gothic",
         "fonts-ipafont-mincho",
     }.issubset(packages)
@@ -245,6 +284,27 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
     )
     assert not any("enable" in command[0] for command in commands)
 
+
+
+def test_remove_inaccessible_venv_recreates_root_managed_environment(tmp_path):
+    """root配下のPythonを指すvenvはサービスユーザーの同期前に削除する。"""
+    venv = tmp_path / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    commands = []
+
+    class Result:
+        returncode = 1
+
+    def fake_runner(command, **kwargs):
+        commands.append(command)
+        return Result()
+
+    _remove_inaccessible_venv(tmp_path, "argos", runner=fake_runner)
+
+    assert commands == [
+        ["sudo", "-u", "argos", "test", "-x", str(venv / "bin" / "python")],
+        ["sudo", "rm", "-rf", str(venv)],
+    ]
 
 def test_apply_plan_syncs_subprojects_as_service_user(tmp_path):
     """サブプロジェクトのvenvもARGOS実行ユーザーのuvで作成する。"""
@@ -368,6 +428,9 @@ def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
     ] in commands
     assert ["sudo", "loginctl", "enable-linger", "argos-test"] in commands
     assert ["sudo", "chown", "-R", "argos-test:argos-test", str(project)] in commands
+    chown_index = commands.index(["sudo", "chown", "-R", "argos-test:argos-test", str(project)])
+    sync_index = next(i for i, command in enumerate(commands) if "uv" in command and "sync" in command)
+    assert chown_index < sync_index
 
 
 def test_ensure_uv_for_user_skips_when_available():

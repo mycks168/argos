@@ -22,6 +22,7 @@ DEFAULT_OS_PACKAGES = (
     "chromium-browser|chromium",
     "cron",
     "curl",
+    "ffmpeg",
     "fonts-ipafont-gothic",
     "fonts-ipafont-mincho",
     "git",
@@ -31,6 +32,7 @@ DEFAULT_OS_PACKAGES = (
     "tmux",
     "x11-xserver-utils",
 )
+KIOSK_OS_PACKAGES = ("xserver-xorg", "lightdm", "openbox")
 DEFAULT_PROJECT_EXTRAS = ("face",)
 
 AGENT_LIMIT_CRON_MARKER = "# ARGOS agent-limit updater"
@@ -140,6 +142,9 @@ def build_install_plan(
     """サービス定義からインストール計画を作る。"""
     home = service_home or Path("/home") / service_user
     packages = list(os_packages or DEFAULT_OS_PACKAGES)
+    has_kiosk = any(service.name == "argos-dashboard-kiosk" for service in services)
+    if bootstrap and os_packages is None and has_kiosk:
+        packages.extend(package for package in KIOSK_OS_PACKAGES if package not in packages)
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
         InstallStep("sync", str(project_dir), "uv sync --extra faceでARGOS本体の仮想環境を作成する"),
@@ -155,7 +160,7 @@ def build_install_plan(
             InstallStep("chown", str(project_dir), "ARGOSプロジェクトを専用ユーザー所有にする"),
             *steps,
         ]
-    if any(service.name == "argos-dashboard-kiosk" for service in services):
+    if has_kiosk:
         steps.append(InstallStep("policy", "chromium", "Chromium kiosk向け管理ポリシーを配置する"))
     if any(service.kind == "user" for service in services):
         steps.append(InstallStep("home", service_user, "user serviceが使うホーム内設定ディレクトリの所有者を補正する"))
@@ -275,6 +280,11 @@ def apply_plan(
     _ensure_core_env_defaults(project_dir / ".env")
     if configure:
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
+    if plan.bootstrap:
+        # sudo uv run may have created a root-owned .venv before the installer starts.
+        # Hand the project to the service user before syncing into that environment.
+        _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
+        _remove_inaccessible_venv(project_dir, plan.service_user, runner=runner)
     _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home, extras=DEFAULT_PROJECT_EXTRAS)
     if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
         _install_chromium_policy(project_dir, runner=runner)
@@ -287,6 +297,8 @@ def apply_plan(
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
+        if plan.bootstrap and any(service.name == "argos-dashboard-kiosk" for service in plan.services):
+            runner(["systemctl", "enable", "--now", "lightdm.service"], check=True)
         if any(service.name == "agent-limit" for service in plan.services):
             _try_ensure_agent_limit_cron(plan, runner=runner, output_func=output_func)
         _reload_systemd(plan, runner=runner)
@@ -773,6 +785,19 @@ def _bootstrap_host(plan: InstallPlan, *, runner=subprocess.run) -> None:
     _ensure_uv_for_user(plan.service_user, plan.service_home, runner=runner)
     _add_service_groups(plan.service_user, runner=runner)
     _enable_linger(plan.service_user, runner=runner)
+    if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
+        _configure_kiosk_display(plan, runner=runner)
+
+
+def _configure_kiosk_display(plan: InstallPlan, *, runner=subprocess.run) -> None:
+    """LightDMでARGOS専用のXセッションへ自動ログインする。"""
+    content = (
+        "[Seat:*]\n"
+        f"autologin-user={plan.service_user}\n"
+        "autologin-user-timeout=0\n"
+        "autologin-session=openbox\n"
+    )
+    _write_unit(Path("/etc/lightdm/lightdm.conf.d/50-argos-kiosk.conf"), content, runner=runner)
 
 
 def _ensure_service_user(plan: InstallPlan, *, runner=subprocess.run) -> None:
@@ -889,6 +914,23 @@ def _enable_linger(user: str, *, runner=subprocess.run) -> None:
 def _ensure_project_owner(project_dir: Path, user: str, group: str, *, runner=subprocess.run) -> None:
     """systemd実行ユーザーが状態ファイルや仮想環境を書けるよう所有者を揃える。"""
     runner(["sudo", "chown", "-R", f"{user}:{group}", str(project_dir)], check=True)
+
+
+def _remove_inaccessible_venv(project_dir: Path, user: str, *, runner=subprocess.run) -> None:
+    """サービスユーザーが使えない起動用venvを同期前に破棄する。"""
+    venv_dir = project_dir / ".venv"
+    python = venv_dir / "bin" / "python"
+    if not venv_dir.exists():
+        return
+    check = runner(
+        ["sudo", "-u", user, "test", "-x", str(python)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if getattr(check, "returncode", 0) == 0:
+        return
+    runner(["sudo", "rm", "-rf", str(venv_dir)], check=True)
 
 
 def _ensure_service_home_dirs(plan: InstallPlan, *, runner=subprocess.run) -> None:

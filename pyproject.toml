@@ -2,7 +2,10 @@
 name = "argos"
 version = "0.1.0"
 description = "ARGOS: Autonomous Road Guardian & Observation System"
-requires-python = ">=3.11"
+# lgpio 0.2.2.0 only publishes wheels through CPython 3.12. Keeping the
+# project below 3.13 lets uv select/download a compatible interpreter before
+# bootstrap needs to install the source-build toolchain.
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "adafruit-circuitpython-rgb-display",
     "gpiozero",
