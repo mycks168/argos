@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
+
 
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
@@ -143,7 +145,7 @@ def build_install_plan(
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
         InstallStep("sync", str(project_dir), "uv sync --extra faceでARGOS本体の仮想環境を作成する"),
-        InstallStep("env", str(project_dir / ".env"), ".envがなければ.env.exampleから作成する"),
+        InstallStep("config", str(project_dir / "config.yaml"), "既存.envを含む全設定をYAMLへ同期する"),
     ]
     if bootstrap:
         steps = [
@@ -274,6 +276,7 @@ def apply_plan(
     _copy_env_example(project_dir, runner=runner)
     _ensure_core_env_defaults(project_dir / ".env")
     if configure:
+        _merge_yaml_into_compat_env(project_dir)
         configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
     _uv_sync(project_dir, runner=runner, user=plan.service_user, home=plan.service_home, extras=DEFAULT_PROJECT_EXTRAS)
     if any(service.name == "argos-dashboard-kiosk" for service in plan.services):
@@ -284,6 +287,7 @@ def apply_plan(
         _apply_service(service, plan, runner=runner)
     _ensure_tts_filter_shared_token(project_dir)
     _ensure_reminder_dashboard_token(project_dir)
+    _sync_config_yaml(project_dir, overwrite=configure)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
@@ -364,12 +368,69 @@ def configure_env(
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
+    slot_template = _prepare_unified_slots_for_configure(values)
     _ask_agent_slots(values, input_func=input_func, output_func=output_func)
+    _restore_unified_slots_after_configure(values, slot_template)
     _ask_text(values, "ARGOS_PTT_GPIO", "PTT GPIO BCM番号。GPIOなしなら空欄", input_func=input_func)
     _ask_audio_device(values, "AUDIO_INPUT_DEVICES", "入力マイク", ["arecord", "-L"], runner=runner, input_func=input_func, output_func=output_func)
     _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
 
     _write_env_values(env_path, values)
+
+
+def _prepare_unified_slots_for_configure(values: dict[str, str]) -> list[dict[str, Any]] | None:
+    """統合スロットのローカル部分を既存の対話設定形式へ展開する。"""
+    raw = values.pop("ARGOS_AGENT_SLOTS_JSON", "").strip()
+    if not raw:
+        return None
+    payload = json.loads(raw)
+    if not isinstance(payload, list):
+        raise ValueError("agent.slotsはYAMLの配列で指定してください")
+    template = [item for item in payload if isinstance(item, dict)]
+    local_slots = [item for item in template if str(item.get("type", "local")).lower() != "remote"]
+    for index, item in enumerate(local_slots, start=1):
+        values[f"ARGOS_AGENT_SLOT_{index}"] = ",".join(
+            (
+                str(item.get("name", "")),
+                str(item.get("provider", "")),
+                str(item.get("cwd", "")),
+                str(item.get("voicevox_speaker", "")),
+                str(item.get("model", "")),
+            )
+        )
+    return template
+
+
+def _restore_unified_slots_after_configure(
+    values: dict[str, str],
+    template: list[dict[str, Any]] | None,
+) -> None:
+    """対話更新したローカルスロットを元のリモート配置へ戻す。"""
+    if template is None:
+        return
+    configured = [
+        {
+            "type": "local",
+            "name": item["name"],
+            "provider": item["provider"],
+            "cwd": item["cwd"],
+            **({"voicevox_speaker": int(item["voice"])} if item.get("voice") else {}),
+            **({"model": item["model"]} if item.get("model") else {}),
+        }
+        for item in _read_agent_slot_values(values)
+    ]
+    merged: list[dict[str, Any]] = []
+    local_index = 0
+    for item in template:
+        if str(item.get("type", "local")).lower() == "remote":
+            merged.append(item)
+        elif local_index < len(configured):
+            merged.append(configured[local_index])
+            local_index += 1
+    merged.extend(configured[local_index:])
+    values["ARGOS_AGENT_SLOTS_JSON"] = json.dumps(merged, ensure_ascii=False)
+    for index in _agent_slot_indices(values):
+        values.pop(f"ARGOS_AGENT_SLOT_{index}", None)
 
 
 def _ensure_core_env_defaults(env_path: Path) -> None:
@@ -511,6 +572,38 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
     for key in sorted(set(values) - written):
         output.append(f"{key}={values[key]}")
     path.write_text("\n".join(output) + "\n", encoding="utf-8")
+
+
+def _merge_yaml_into_compat_env(project_dir: Path) -> None:
+    """対話設定前にYAMLを互換.envへ反映する。"""
+    config_path = project_dir / "config.yaml"
+    env_path = project_dir / ".env"
+    if not config_path.exists():
+        return
+    values = _read_env_values(env_path) if env_path.exists() else {}
+    values.update(load_yaml_environment(config_path))
+    _write_env_values(env_path, values)
+
+
+def _sync_config_yaml(project_dir: Path, *, overwrite: bool = False) -> None:
+    """互換.envの全設定を階層化したconfig.yamlへ初回移行する。"""
+    env_path = project_dir / ".env"
+    config_path = project_dir / "config.yaml"
+    if not env_path.exists() or (config_path.exists() and not overwrite):
+        return
+    write_yaml_from_environment(_read_env_values(env_path), config_path)
+
+
+def migrate_config(project_dir: Path) -> Path:
+    """既存.envだけをconfig.yamlへ安全に移行する。"""
+    env_path = project_dir / ".env"
+    config_path = project_dir / "config.yaml"
+    if not env_path.is_file():
+        raise FileNotFoundError(f"移行元が見つかりません: {env_path}")
+    if config_path.exists():
+        raise FileExistsError(f"既存設定は上書きしません: {config_path}")
+    write_yaml_from_environment(_read_env_values(env_path), config_path)
+    return config_path
 
 
 def _ask_url(values: dict[str, str], key: str, label: str, *, input_func: Callable[[str], str]) -> None:
@@ -1103,9 +1196,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="計画をJSONで出力する")
     parser.add_argument("--apply", action="store_true", help="計画を実行する")
     parser.add_argument("--update", action="store_true", help="Git pull後に再インストールし、既定サービスを再起動する")
-    parser.add_argument("--configure", action="store_true", help=".envを対話式に設定する")
+    parser.add_argument("--configure", action="store_true", help="config.yamlを対話式に設定する")
+    parser.add_argument(
+        "--migrate-config",
+        action="store_true",
+        help=".envをconfig.yamlへ変換する。インストールやサービス再起動は行わない",
+    )
     parser.add_argument("--no-enable", action="store_true", help="unit生成だけ行い、enable/startは行わない")
     args = parser.parse_args(argv)
+
+    if args.migrate_config:
+        try:
+            config_path = migrate_config(args.project_dir.resolve())
+        except (FileNotFoundError, FileExistsError, ValueError) as exc:
+            parser.error(str(exc))
+        print(f"設定を移行しました: {config_path}")
+        return 0
 
     services = load_manifest(args.manifest)
     service_home = args.home or Path("/home") / args.user

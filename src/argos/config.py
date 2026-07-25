@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from argos.yaml_config import apply_yaml_environment
 
 
+_PROCESS_ENVIRONMENT = set(os.environ)
 load_dotenv()
+apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
 
 
 # エージェント待機中に読み上げる進捗音声の既定フレーズ。
@@ -98,6 +102,11 @@ class AgentSlot:
     cwd: str
     voicevox_speaker: int | None = None
     model: str = ""
+    slot_type: str = "local"
+    remote_url: str = ""
+    remote_token: str = ""
+    remote_name: str = ""
+    remote_provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -235,6 +244,7 @@ class Settings:
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    remote_argos_timeout_seconds: float = 600.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
     voicevox_accept_opus: bool = False
@@ -301,6 +311,10 @@ def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
+    unified = os.environ.get("ARGOS_AGENT_SLOTS_JSON", "").strip()
+    if unified:
+        return _parse_unified_agent_slots(unified, default_provider)
+
     slots: list[AgentSlot] = []
     default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
     index = 1
@@ -333,6 +347,57 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
             voicevox_speaker=_optional_int(os.environ.get("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER")),
         ),
     )
+
+
+def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSlot, ...]:
+    """YAMLから変換されたローカル・リモート共通スロットを読み込む。"""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("agent.slotsはYAMLの配列で指定してください") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("agent.slotsには1件以上のスロットが必要です")
+
+    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
+    slots: list[AgentSlot] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("agent.slotsの各要素はテーブルで指定してください")
+        slot_type = str(item.get("type", "local")).strip().lower()
+        name = str(item.get("name", "")).strip()
+        if not name or slot_type not in {"local", "remote"}:
+            raise ValueError("agent.slotsにはnameと有効なtypeが必要です")
+        if slot_type == "remote":
+            remote_url = str(item.get("url", "")).strip().rstrip("/")
+            remote_name = str(item.get("remote_name", "")).strip()
+            remote_provider = str(item.get("remote_provider", "")).strip()
+            if not all((remote_url, remote_name, remote_provider)):
+                raise ValueError("リモートスロットにはurl、remote_name、remote_providerが必要です")
+            slots.append(
+                AgentSlot(
+                    name=name,
+                    provider="remote",
+                    cwd=remote_url,
+                    voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
+                    model=str(item.get("model", "")).strip(),
+                    slot_type="remote",
+                    remote_url=remote_url,
+                    remote_token=str(item.get("token", "")).strip(),
+                    remote_name=remote_name,
+                    remote_provider=remote_provider,
+                )
+            )
+            continue
+        slots.append(
+            AgentSlot(
+                name=name,
+                provider=str(item.get("provider", default_provider)).strip() or default_provider,
+                cwd=str(item.get("cwd", default_cwd)).strip() or default_cwd,
+                voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
+                model=str(item.get("model", "")).strip(),
+            )
+        )
+    return tuple(slots)
 
 
 def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[AgentSlot, ...]:
@@ -480,6 +545,7 @@ def load_settings() -> Settings:
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
+        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "600")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),

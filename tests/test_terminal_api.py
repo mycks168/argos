@@ -4,6 +4,7 @@ import base64
 import json
 import threading
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pytest
@@ -50,6 +51,12 @@ class FakeTerminalHandler:
         if name == "なし":
             raise ValueError("エージェントスロットが見つかりません")
         return {"slots": [{"name": name, "provider": provider, "active": True}], "current": {"name": name, "provider": provider}}
+
+    def slot_history(self, name, provider):
+        """指定スロットの履歴を返す。"""
+        if name == "なし":
+            raise ValueError("エージェントスロットが見つかりません")
+        return {"messages": [{"role": "assistant", "text": f"{name}:{provider}"}]}
 
     def process_turn(self, wav_bytes=None, *, text=None, want_audio=True):
         self.received_wav = wav_bytes
@@ -102,6 +109,19 @@ def test_terminal_slots_returns_current():
             payload = json.loads(response.read())
         assert payload["current"]["name"] == "作業"
         assert payload["slots"][0]["active"] is True
+    finally:
+        server.stop()
+
+
+def test_terminal_history_returns_selected_slot_messages():
+    """履歴APIは指定スロットの会話をBearer認証付きで返す。"""
+    handler = FakeTerminalHandler([])
+    server, base_url = _start_server(handler)
+    try:
+        query = urlencode({"name": "作業", "provider": "codex"})
+        with _request(base_url + f"/api/terminal/history?{query}") as response:
+            payload = json.loads(response.read())
+        assert payload["messages"] == [{"role": "assistant", "text": "作業:codex"}]
     finally:
         server.stop()
 

@@ -6,5 +6,8 @@ __pycache__/
 cache/
 
 .env
+.env.*
+config.toml
+config.yaml
 services/agent-limit/*.json
 hailort.log

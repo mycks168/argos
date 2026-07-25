@@ -9,7 +9,7 @@ Type=simple
 User=@ARGOS_USER@
 Group=@ARGOS_GROUP@
 WorkingDirectory=@PROJECT_DIR@
-EnvironmentFile=@PROJECT_DIR@/.env
+EnvironmentFile=-@PROJECT_DIR@/.env
 Environment=HOME=@USER_HOME@
 Environment=PATH=@USER_HOME@/.local/bin:@USER_HOME@/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=@PROJECT_DIR@/.venv/bin/argos-agent-runner
