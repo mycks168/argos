@@ -32,7 +32,7 @@ class DashboardState:
         self._subscribers: set[queue.Queue[int]] = set()
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
-        self._agent = {"name": "", "provider": "", "updated_at": _now_iso()}
+        self._agent = {"name": "", "provider": "", "usage_provider": "", "updated_at": _now_iso()}
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
@@ -58,13 +58,14 @@ class DashboardState:
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
         with self._lock:
+            usage_provider = str(self._agent.get("usage_provider") or self._agent["provider"]).lower()
             return {
                 "revision": self._revision,
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
                 "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
                 "agent_usage": {
-                    "current": deepcopy(self._agent_usage.get(str(self._agent["provider"]).lower())),
+                    "current": deepcopy(self._agent_usage.get(usage_provider)),
                     "providers": deepcopy(self._agent_usage),
                 },
                 "audio": deepcopy(self._audio),
@@ -93,7 +94,7 @@ class DashboardState:
         with self._lock:
             return str(self._status["code"])
 
-    def set_agent(self, name: str, provider: str, model: str = "") -> None:
+    def set_agent(self, name: str, provider: str, model: str = "", usage_provider: str = "") -> None:
         """現在のエージェントスロット表示を更新する。"""
         with self._lock:
             self._current_slot_key = _slot_key(name, provider)
@@ -111,6 +112,7 @@ class DashboardState:
                 "name": name,
                 "provider": provider,
                 "model": model,
+                "usage_provider": usage_provider.strip().lower() or provider.strip().lower(),
                 "updated_at": _now_iso(),
             }
             self._publish_locked()

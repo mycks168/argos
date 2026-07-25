@@ -103,6 +103,25 @@ def _settings():
     )
 
 
+def test_current_agent_usage_provider_uses_remote_provider():
+    """リモートスロットでは接続先プロバイダのローカル利用枠を参照する。"""
+    remote_slot = AgentSlot(
+        "mint-codex",
+        "remote",
+        "",
+        slot_type="remote",
+        remote_url="https://mint.example",
+        remote_token="token",
+        remote_name="作業",
+        remote_provider="codex",
+    )
+    app = object.__new__(ArgosApp)
+    app._settings = Settings(**{**_settings().__dict__, "agent_slots": (remote_slot,)})
+    app._agent = type("Agent", (), {"current_name": "mint-codex", "current_provider": "remote"})()
+
+    assert app._current_agent_usage_provider() == "codex"
+
+
 class FakeRecorder:
     def __init__(self, *args):
         self.started = False

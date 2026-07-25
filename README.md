@@ -271,7 +271,7 @@ ARGOSロゴ直下のミュートボタンで読み上げを一時停止できま
 HTTPSで開いた `/sp` では、入力欄横のマイクボタンをタップして録音を開始し、もう一度タップして音声を送信できます。回答音声は同じブラウザで順次再生されます。初回はSafariなどのマイク利用許可が必要です。
 同じ操作行のマイクOFFボタンで、PTTとウェイクワードの受付を一時停止できます。もう一度押すとマイク受付を再開します。Wi-Fi状態は接続中だけARGOSロゴ横に表示します。
 左側のフォントサイズボタンで、ダッシュボードの主要テキストを `小`、`中`、`大` から切り替えられます。選択値はブラウザのローカルストレージに保存され、キオスク画面の再読み込み後も維持されます。未保存時の初期値は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` で指定できます。
-`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
+`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。リモートスロットでは `remote_provider` のローカル利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
 文字起こし、Codex、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、右側の通知欄へ赤色で表示します。同じエラーが連続した場合は1件にまとめます。
 
 `/tmp/argos/camera-latest.jpg` に静止画を置くと、`/camera/latest.jpg` で配信できます。通知の `image_url` にこのURLを指定すると、カメラ画像も表示できます。

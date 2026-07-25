@@ -502,6 +502,7 @@ class ArgosApp:
             self._agent.current_name,
             self._agent.current_provider,
             self._current_agent_model(),
+            self._current_agent_usage_provider(),
         )
         load_history = getattr(self._agent, "load_current_history", None)
         if callable(load_history) and self._agent.current_provider == "remote":
@@ -526,6 +527,15 @@ class ArgosApp:
                 return resolve_agent_slot_model(self._settings, slot)
         return ""
 
+    def _current_agent_usage_provider(self) -> str:
+        """現在スロットの利用枠取得に使うプロバイダを返す。"""
+        for slot in self._settings.agent_slots:
+            if slot.name == self._agent.current_name and slot.provider == self._agent.current_provider:
+                if slot.slot_type == "remote" and slot.remote_provider.strip():
+                    return slot.remote_provider.strip().lower()
+                return slot.provider.strip().lower()
+        return self._agent.current_provider.strip().lower()
+
     def _start_agent_usage_monitor(self) -> None:
         """現在エージェントの利用枠を定期的に取得する。"""
         if not self._agent_usage.providers:
@@ -540,7 +550,7 @@ class ArgosApp:
 
     def _publish_agent_usage_pending(self) -> None:
         """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
-        provider = self._agent.current_provider
+        provider = self._current_agent_usage_provider()
         if not self._agent_usage.has_provider(provider) or self._dashboard_state.has_agent_usage(provider):
             return
         self._dashboard_state.set_agent_usage(
@@ -558,7 +568,7 @@ class ArgosApp:
 
     def _refresh_current_agent_usage(self) -> None:
         """現在プロバイダの利用枠を取得してダッシュボードへ反映する。"""
-        provider = self._agent.current_provider
+        provider = self._current_agent_usage_provider()
         if not self._agent_usage.has_provider(provider):
             return
         snapshot = self._agent_usage.fetch(provider)

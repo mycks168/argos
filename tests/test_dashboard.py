@@ -77,6 +77,19 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["notifications"][0]["title"] == "メール"
 
 
+def test_dashboard_state_uses_remote_slot_usage_provider():
+    """リモートスロットでも接続先プロバイダの利用枠を現在値として返す。"""
+    state = DashboardState()
+    state.set_agent_usage("codex", {"available": True, "label": "Codex"})
+
+    state.set_agent("mint-codex", "remote", usage_provider="codex")
+
+    snapshot = state.snapshot()
+    assert snapshot["agent"]["provider"] == "remote"
+    assert snapshot["agent"]["usage_provider"] == "codex"
+    assert snapshot["agent_usage"]["current"]["provider"] == "codex"
+
+
 def test_dashboard_state_wake_display_updates_activity():
     """音声再生などで画面を起こすためのアクティビティを更新できる。"""
     state = DashboardState()
