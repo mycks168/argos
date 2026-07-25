@@ -1,5 +1,6 @@
 import json
 import logging
+from contextlib import contextmanager
 
 from argos.config import AgentSlot, Settings
 from argos.core.app import (
@@ -343,6 +344,39 @@ def test_deliver_runner_result_keeps_other_slot_unread(monkeypatch):
 
     app._dashboard_state.set_agent("調査", "antigravity")
     assert app._dashboard_state.snapshot()["messages"][-1]["text"] == "Runner応答"
+
+
+def test_deliver_terminal_runner_result_only_updates_dashboard(monkeypatch):
+    """Terminal向け未配信応答は画面へ残すが母艦TTSへ二重配信しない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._deliver_runner_result("job-1", "作業", "codex", "Terminal応答", "terminal")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["messages"][-1]["text"] == "Terminal応答"
+    assert snapshot["notifications"][-1]["title"] == "作業 端末応答完了"
+    assert app._pending_slot_speech == {}
+
+
+def test_terminal_agent_stream_sets_terminal_response_target(monkeypatch):
+    """端末ターンのエージェント実行中だけ応答先をterminalへ切り替える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    targets = []
+
+    @contextmanager
+    def response_target(target):
+        targets.append(("enter", target))
+        try:
+            yield
+        finally:
+            targets.append(("exit", target))
+
+    app._agent.response_target = response_target
+
+    assert list(app._terminal_agent_stream("端末入力")) == ["応答"]
+    assert targets == [("enter", "terminal"), ("exit", "terminal")]
 
 
 def test_deliver_runner_error_adds_notification(monkeypatch):

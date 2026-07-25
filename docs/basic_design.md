@@ -93,7 +93,7 @@ Codex、Antigravity、Hermes、将来の別エージェントはこの層の実�
 
 `ARGOS_AGENT_RUNNER_URL` が設定されている場合、ARGOS 本体は Codex、Antigravity、Hermes を直接起動せず、Agent Runner HTTP APIへジョブを作成する。Runnerは `argos-agent-runner` コマンドで別プロセスとして起動し、`ARGOS_AGENT_RUNNER_HOST`、`ARGOS_AGENT_RUNNER_PORT` で待ち受ける。更新系APIは `ARGOS_AGENT_RUNNER_TOKEN` によるBearer認証に対応する。
 
-Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。
+Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。`job.json` の `response_target` は応答先を表し、既定の `local` と遠隔端末向けの `terminal` を使う。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。旧ジョブに同項目がない場合は `local` として扱う。
 
 `output.txt` は実行中も逐次flushされ、`GET /api/jobs/<job_id>` のレスポンスに `output` フィールドとして含まれる。ARGOS本体側の `RunnerAgentClient.ask_stream` は0.2秒ごとにポーリングし、前回までに受け取った `output` との差分だけを読み上げ用チャンクとして返す。これにより、Runner経由でもCLI側のトークン単位ストリーミングをほぼそのまま中継できる。
 
@@ -101,7 +101,7 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
-初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
+初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。ただし `response_target=terminal` のジョブは、端末接続が途中で切れても完成回答を確認できるよう母艦の会話履歴と通知へ反映する一方、母艦TTSへは流さない。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
 
 ### Codex CLI
 
@@ -134,7 +134,7 @@ ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取�
 - `stream`（既定）: 上記の差分を逐次読み上げる。完了後に `-o` で受け取った最終出力は、途中経過を一切取得できなかった場合のフォールバックとしてのみ使う。
 - `final`: 途中経過は読み上げず、完了後に `-o` で受け取った最終出力をまとめて1回だけ読み上げる。
 
-Codex の最終出力は途中経過の単純な続きではなく、応答全体を再構成したまとめになることがある。`stream` モードで両方読み上げると同じ内容を2回話すことになるため、用途に応じて `final` へ切り替えられるようにしている。この設定は Codex 専用で、Claude CLI には影響しない（Claude CLI は `--include-partial-messages` によるトークン単位の差分のみを使い、完了後の二重読み上げは発生しない）。
+Codex の最終出力は途中経過の単純な続きではなく、応答全体を再構成したまとめになることがある。`stream` モードで両方読み上げると同じ内容を2回話すことになるため、用途に応じて `final` へ切り替えられるようにしている。この設定は Codex 専用で、Claude CLI には影響しない。Claude CLI は通常 `--include-partial-messages` によるトークン単位の差分を使い、差分本文が一件も得られなかった場合だけ完了イベントの `result` 本文へフォールバックする。
 
 ### Claude CLI
 
@@ -152,7 +152,7 @@ claude -p --output-format stream-json --verbose --permission-mode dontAsk --resu
 
 ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。
 `claude` の実行時は、 `stdin=subprocess.DEVNULL` を指定して完全に非対話（non-interactive）として認識させることで、信頼確認ダイアログなどでブロッキングするのを防ぐ。
-ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSON ストリームの `type == "assistant"` イベントから `content` 内の `text` 差分のみを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
+ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの `stream_event` から `text_delta` を抽出してアプリへ渡す。`text_delta` が一件もなかった場合は、完了を示す `type == "result"` イベントの `result` 本文を最終応答として渡す。
 
 ### HDMI ダッシュボード
 
@@ -265,7 +265,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 端末ターンはローカル録音と同じ本人確認ゲートを通す。母艦がロック中（本人確認が有効かつ未認証）の場合、端末の発話はLLMエージェントへ渡さず本人確認用として扱う。音声キーワードが一致すれば母艦と共有の認証状態を解除し、`text` で「本人確認しました。」を返して `done` で終える。解除できなければ `error` で本人確認を促す。顔認証は母艦のカメラに依存するため、遠隔端末からの実質的な解除手段は音声キーワードになる。認証状態は母艦と端末で共有するため、どちらで解除しても両方が解除される。本人確認が無効な場合はこのゲートを素通りする。
 
-母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンの合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンがRunnerジョブを作成する場合は `response_target=terminal` を保存する。合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
 
 ダッシュボードの会話欄下部からテキストを送信できる。ブラウザは `text/plain` と `Accept: text/event-stream` を使うため、STTとTTSを実行せず、同じスロット・同じ会話コンテキストへ文字で質問し文字で回答を表示する。
 SPダッシュボードでは入力欄横のマイクボタンをタップして録音を開始し、再度タップして停止・送信できる。Safariの `audio/mp4`、Chrome系の `audio/webm`、Opus音声は母艦でffmpegを使ってWAVへ変換し、既存のSTTへ渡す。応答は端末ターンAPIのSSEからWAVチャンクを受信し、Web Audio APIで順次再生する。マイク許可と録音にはHTTPSのセキュアコンテキストを必要とする。

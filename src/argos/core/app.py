@@ -402,6 +402,18 @@ class ArgosApp:
         response_target: str = "local",
     ) -> None:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        if response_target == "terminal":
+            slot_key = _app_slot_key(slot_name, provider)
+            self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+            if not self._is_current_slot_key(slot_key):
+                self._dashboard_state.set_slot_unread(slot_name, provider, True)
+            self._dashboard_state.add_notification(
+                f"{slot_name} 端末応答完了",
+                "端末へ返せなかった応答を会話履歴に反映しました。",
+                source="ARGOS",
+            )
+            log.info("Terminal向け未配信応答を画面だけへ反映しました: job_id=%s", job_id)
+            return
         slot_key = _app_slot_key(slot_name, provider)
         self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
         if response_target == "terminal":
