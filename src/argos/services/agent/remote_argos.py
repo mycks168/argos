@@ -72,6 +72,8 @@ class RemoteArgosClient:
             timeout=(5, self._settings.remote_argos_timeout_seconds),
         )
         response.raise_for_status()
+        # requestsはcharset未指定のtext/*をISO-8859-1とみなすため、SSEはUTF-8へ固定する。
+        response.encoding = "utf-8"
         try:
             for raw_line in response.iter_lines(decode_unicode=True):
                 line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")

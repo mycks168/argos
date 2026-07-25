@@ -465,7 +465,7 @@ def _create_handler(
             """状態更新をServer-Sent Eventsで配信する。"""
             subscriber = state.subscribe()
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
@@ -534,7 +534,7 @@ def _create_handler(
             # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
             self.close_connection = True
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()

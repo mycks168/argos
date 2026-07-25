@@ -147,7 +147,7 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
 
 ### リモートARGOSスロット
 
-`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、SSEの応答差分を通常のエージェント応答として扱う。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
+`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、UTF-8のSSE応答差分を通常のエージェント応答として扱う。受信側も文字コードをUTF-8へ固定し、接続先がcharsetを返さない旧バージョンでも日本語を正しく復元する。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
 
 切替時には`GET /api/terminal/history`から接続先の会話履歴を取得し、接続元のリモートスロット表示へ反映する。接続先の現在スロットも共有するため、リモート選択は接続先ダッシュボードのアクティブスロットにも反映される。
 

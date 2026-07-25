@@ -16,6 +16,7 @@ class FakeResponse:
         self._lines = list(lines)
         self._payload = payload or {}
         self.closed = False
+        self.encoding = None
 
     def raise_for_status(self):
         """成功レスポンスとして扱う。"""
@@ -84,6 +85,7 @@ def test_remote_argos_stream_selects_slot_and_returns_text(monkeypatch):
     assert calls[0][1]["json"] == {"name": "作業", "provider": "codex"}
     assert calls[1][1]["data"] == "確認".encode()
     assert calls[1][1]["headers"]["Authorization"] == "Bearer secret"
+    assert turn_response.encoding == "utf-8"
     assert turn_response.closed is True
 
 
