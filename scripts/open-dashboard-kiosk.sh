@@ -28,7 +28,13 @@ fi
 
 # 母艦起動直後はダッシュボードより先にChromiumが立ち上がるため、
 # 疎通が取れるまでローカルの接続待ち画面を表示し、取れたら自動遷移する。
-SPLASH_URL="file:///opt/argos/scripts/kiosk-splash.html?target=${DASHBOARD_URL}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SPLASH_FILE_URL="$(python3 -c 'import pathlib, sys; print(pathlib.Path(sys.argv[1]).resolve().as_uri())' \
+  "${SCRIPT_DIR}/kiosk-splash.html")"
+ENCODED_TARGET="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' \
+  "${DASHBOARD_URL}")"
+# フラグメントはローカルファイル名の解決に使われないため、認証キーを安全に渡せる。
+SPLASH_URL="${SPLASH_FILE_URL}#target=${ENCODED_TARGET}"
 
 exec chromium \
   --user-data-dir="${HOME}/.config/argos-dashboard-chromium-kiosk" \

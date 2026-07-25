@@ -653,8 +653,8 @@ def test_dashboard_server_serves_remote_location(monkeypatch):
     """リモートGPS設定時は指定URLから現在地を返す。"""
     calls = []
 
-    def fake_read_location(provider, device_path, remote_url, timeout_seconds):
-        calls.append((provider, remote_url, timeout_seconds))
+    def fake_read_location(provider, device_path, remote_url, timeout_seconds, remote_token=""):
+        calls.append((provider, remote_url, timeout_seconds, remote_token))
         return {
             "available": True,
             "lat": 35.0,
@@ -682,7 +682,7 @@ def test_dashboard_server_serves_remote_location(monkeypatch):
 
     assert payload["available"] is True
     assert payload["lat"] == 35.0
-    assert calls == [("remote", "http://example.test/gps", 1.5)]
+    assert calls == [("remote", "http://example.test/gps", 1.5, "")]
 
 
 def test_dashboard_state_center_alert_for_center_display():

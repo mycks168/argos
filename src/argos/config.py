@@ -228,6 +228,7 @@ class Settings:
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
+    remote_location_token: str = ""
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
     agent_runner_url: str = ""
     agent_runner_token: str = ""
@@ -504,6 +505,7 @@ def load_settings() -> Settings:
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
+        remote_location_token=os.environ.get("ARGOS_REMOTE_LOCATION_TOKEN", ""),
         ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),

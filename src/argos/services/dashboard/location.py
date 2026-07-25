@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 
 DEFAULT_GPS_DEVICE_PATH = Path("/dev/ttyACM0")
@@ -24,12 +24,13 @@ def read_location(
     device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     remote_url: str = "",
     timeout_seconds: float = 1.2,
+    remote_token: str = "",
 ) -> dict[str, Any]:
     """設定された取得元から地図表示用の現在地を返す。"""
     if provider == "remote":
         if not remote_url:
             return _unavailable("ARGOS_REMOTE_LOCATION_URL が未設定です")
-        return read_remote_location(remote_url, timeout_seconds=timeout_seconds)
+        return read_remote_location(remote_url, timeout_seconds=timeout_seconds, token=remote_token)
     return read_gps_location(device_path, timeout_seconds=timeout_seconds)
 
 
@@ -100,10 +101,13 @@ def read_nmea_device_location(device_path: Path = DEFAULT_GPS_DEVICE_PATH, timeo
     return _unavailable("GPSの有効な現在地を取得できません")
 
 
-def read_remote_location(url: str, timeout_seconds: float = 2.0) -> dict[str, Any]:
+def read_remote_location(url: str, timeout_seconds: float = 2.0, token: str = "") -> dict[str, Any]:
     """リモートGPS APIから現在地を取得する。"""
     try:
-        with urlopen(url, timeout=timeout_seconds) as response:
+        req = Request(url)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        with urlopen(req, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, URLError, json.JSONDecodeError) as exc:
         return _unavailable(f"リモートGPSを取得できません: {exc}")

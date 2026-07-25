@@ -73,6 +73,7 @@ class DashboardServer:
         location_provider: str = "local",
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
+        remote_location_token: str = "",
         upload_dir: Path = DEFAULT_UPLOAD_DIR,
         upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
         upload_keep: int = DEFAULT_UPLOAD_KEEP,
@@ -96,6 +97,7 @@ class DashboardServer:
         self._location_provider = location_provider
         self._remote_location_url = remote_location_url
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
+        self._remote_location_token = remote_location_token
         self._control_handler = control_handler
         self._event_handler = event_handler
         self._terminal_handler = terminal_handler
@@ -122,6 +124,7 @@ class DashboardServer:
             self._location_provider,
             self._remote_location_url,
             self._remote_location_timeout_seconds,
+            self._remote_location_token,
             self._upload_dir,
             self._upload_max_bytes,
             self._upload_keep,
@@ -157,6 +160,7 @@ def _create_handler(
     location_provider: str = "local",
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
+    remote_location_token: str = "",
     upload_dir: Path = DEFAULT_UPLOAD_DIR,
     upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
     upload_keep: int = DEFAULT_UPLOAD_KEEP,
@@ -191,6 +195,7 @@ def _create_handler(
                         gps_device_path,
                         remote_location_url,
                         remote_location_timeout_seconds,
+                        remote_location_token,
                     )
                 )
             elif path == "/api/stream":

@@ -65,10 +65,12 @@
     </div>
   </div>
 <script>
-  // ?target=<ダッシュボードURL> を受け取り、疎通が取れたらそこへ遷移する。
+  // #target=<ダッシュボードURL> を受け取り、疎通が取れたらそこへ遷移する。
+  // 旧キオスクスクリプトの ?target= も更新中の端末向けに引き続き受け付ける。
   // 401でも「サーバ到達」とみなせるよう no-cors で応答有無だけを見る。
-  const params = new URLSearchParams(location.search);
-  const target = params.get("target") || "http://127.0.0.1:8765/";
+  const fragmentParams = new URLSearchParams(location.hash.slice(1));
+  const queryParams = new URLSearchParams(location.search);
+  const target = fragmentParams.get("target") || queryParams.get("target") || "http://127.0.0.1:8765/";
   const healthUrl = new URL("/api/health", target).href;
   let tries = 0;
 
