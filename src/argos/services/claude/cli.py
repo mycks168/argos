@@ -190,7 +190,9 @@ class ClaudeCliClient:
         assert proc.stdout is not None
 
         # --include-partial-messages により届く stream_event/content_block_delta の
-        # text_delta をそのまま中継する。これがトークン単位の本物のストリーミング差分。
+        # text_delta を中継する。差分が来ない場合はresult本文を完了時に返す。
+        streamed_text = ""
+        result_text = ""
         for line in proc.stdout:
             try:
                 event = json.loads(line.strip())
@@ -208,9 +210,11 @@ class ClaudeCliClient:
                     continue
                 text = delta.get("text", "")
                 if text:
+                    streamed_text += text
                     yield text
 
             elif event_type == "result":
+                result_text = str(event.get("result", "") or "")
                 log.info(
                     "Claudeジョブが正常に完了しました。Cost: %s, Usage: %s",
                     event.get("total_cost_usd"),
@@ -225,6 +229,9 @@ class ClaudeCliClient:
             log.error("claude-cli 実行エラー %s: %s", return_code, stderr)
             self.reset_current()
             raise RuntimeError(f"claude-cli エラー {return_code}: {stderr[-1000:]}")
+
+        if not streamed_text and result_text:
+            yield result_text
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として初期化する。"""

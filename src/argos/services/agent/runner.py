@@ -39,6 +39,7 @@ class AgentJob:
     created_at: float
     updated_at: float
     model: str = ""
+    response_target: str = "local"
     delivered_to_argos: bool = False
     delivered_at: float | None = None
 
@@ -52,7 +53,7 @@ class AgentJobStore:
         self._jobs_dir = self._state_dir / "jobs"
         self._lock = threading.Lock()
 
-    def create(self, slot: AgentSlot, prompt: str) -> AgentJob:
+    def create(self, slot: AgentSlot, prompt: str, response_target: str = "local") -> AgentJob:
         """新しいジョブを作成し、プロンプトを保存する。"""
         now = time.time()
         job_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + "-" + uuid.uuid4().hex[:8]
@@ -76,6 +77,7 @@ class AgentJobStore:
             created_at=now,
             updated_at=now,
             model=slot.model,
+            response_target=response_target,
         )
         self.save(job)
         return job
@@ -197,7 +199,13 @@ class AgentRunner:
         if recovered:
             log.warning("Runner再起動で中断されたジョブを失敗扱いにしました: count=%s", len(recovered))
 
-    def start_job(self, slot_name: str, provider: str, prompt: str) -> AgentJob:
+    def start_job(
+        self,
+        slot_name: str,
+        provider: str,
+        prompt: str,
+        response_target: str = "local",
+    ) -> AgentJob:
         """指定スロットのジョブを開始する。
 
         同一スロットでこのRunnerプロセスが実行中のジョブがある場合は409相当の
@@ -206,6 +214,8 @@ class AgentRunner:
         slot = self._slots.get(_slot_key_values(slot_name, provider))
         if slot is None:
             raise ValueError(f"未定義のスロットです: {slot_name}/{provider}")
+        if response_target not in {"local", "terminal"}:
+            raise ValueError(f"未対応の応答先です: {response_target}")
         existing = self._store.find_active(slot.name, slot.provider, self._active_job_ids)
         if existing is not None:
             log.warning(
@@ -214,7 +224,7 @@ class AgentRunner:
                 existing.job_id,
             )
             raise AgentSlotBusyError(existing)
-        job = self._store.create(slot, prompt)
+        job = self._store.create(slot, prompt, response_target)
         job.model = resolve_agent_slot_model(self._settings, slot)
         self._store.save(job)
         self._active_job_ids.add(job.job_id)
@@ -328,6 +338,7 @@ class AgentRunnerServer:
                             str(payload.get("slot_name", "")),
                             str(payload.get("provider", "")),
                             str(payload.get("prompt", "")),
+                            str(payload.get("response_target", "local")),
                         )
                     except ValueError as exc:
                         self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)

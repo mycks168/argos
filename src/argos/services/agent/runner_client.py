@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 
 import requests
 
@@ -29,6 +31,7 @@ class RunnerAgentClient:
             raise ValueError("エージェントスロットが設定されていません")
         self._index = 0
         self._active_job_ids: set[str] = set()
+        self._request_context = threading.local()
 
     @property
     def current_name(self) -> str:
@@ -70,6 +73,7 @@ class RunnerAgentClient:
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """Runnerにジョブを作成し、出力の差分をポーリングしながら返す。"""
         slot = self._slots[self._index]
+        response_target = str(getattr(self._request_context, "response_target", "local"))
         job = self._request(
             "POST",
             "/api/jobs",
@@ -77,6 +81,7 @@ class RunnerAgentClient:
                 "slot_name": slot.name,
                 "provider": slot.provider,
                 "prompt": prompt,
+                "response_target": response_target,
             },
         )
         job_id = str(job["job_id"])
@@ -117,6 +122,16 @@ class RunnerAgentClient:
                 time.sleep(0.2)
         finally:
             self._active_job_ids.discard(job_id)
+
+    @contextmanager
+    def response_target(self, target: str):
+        """現在スレッドで作成するRunnerジョブの応答先を一時的に指定する。"""
+        previous = getattr(self._request_context, "response_target", "local")
+        self._request_context.response_target = target
+        try:
+            yield
+        finally:
+            self._request_context.response_target = previous
 
     def list_undelivered(self) -> list[dict[str, object]]:
         """現在のARGOS処理外で完了した未配信ジョブを返す。"""
