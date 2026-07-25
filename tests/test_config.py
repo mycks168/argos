@@ -196,6 +196,7 @@ def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
                     "token": "secret",
                     "remote_name": "作業",
                     "remote_provider": "codex",
+                    "ptt_cycle": False,
                 },
                 {"type": "local", "name": "車載", "provider": "claude", "cwd": "/opt/argos"},
             ]
@@ -208,6 +209,7 @@ def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
     assert settings.agent_slots[0].provider == "remote"
     assert settings.agent_slots[0].remote_url == "https://home.example"
     assert settings.agent_slots[0].remote_token == "secret"
+    assert settings.agent_slots[0].ptt_cycle is False
     assert settings.agent_slots[1].provider == "claude"
 
 

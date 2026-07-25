@@ -116,6 +116,7 @@ class AgentSlot:
     remote_token: str = ""
     remote_name: str = ""
     remote_provider: str = ""
+    ptt_cycle: bool = True
 
 
 @dataclass(frozen=True)
@@ -301,6 +302,11 @@ class Settings:
     agent_system_prompt_file: str = ""
     agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
     agent_skills_dir: str = "/opt/argos/skills"
+    conversation_history_enabled: bool = False
+    conversation_history_path: str = "~/.local/state/argos/conversation-history.json"
+    conversation_history_max_messages: int = 100
+    conversation_memory_enabled: bool = False
+    conversation_memory_path: str = "~/.local/state/argos/conversation-memory.json"
 
 
 def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
@@ -395,6 +401,7 @@ def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSl
                     remote_token=str(item.get("token", "")).strip(),
                     remote_name=remote_name,
                     remote_provider=remote_provider,
+                    ptt_cycle=bool(item.get("ptt_cycle", True)),
                 )
             )
             continue
@@ -405,6 +412,7 @@ def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSl
                 cwd=str(item.get("cwd", default_cwd)).strip() or default_cwd,
                 voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
                 model=str(item.get("model", "")).strip(),
+                ptt_cycle=bool(item.get("ptt_cycle", True)),
             )
         )
     return tuple(slots)
@@ -687,6 +695,19 @@ def load_settings() -> Settings:
         voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
         voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
         voicevox_accept_opus=_bool_env("VOICEVOX_ACCEPT_OPUS", False),
+        conversation_history_enabled=_bool_env("ARGOS_CONVERSATION_HISTORY_ENABLED", False),
+        conversation_history_path=os.environ.get(
+            "ARGOS_CONVERSATION_HISTORY_PATH",
+            "~/.local/state/argos/conversation-history.json",
+        ),
+        conversation_history_max_messages=int(
+            os.environ.get("ARGOS_CONVERSATION_HISTORY_MAX_MESSAGES", "100")
+        ),
+        conversation_memory_enabled=_bool_env("ARGOS_CONVERSATION_MEMORY_ENABLED", False),
+        conversation_memory_path=os.environ.get(
+            "ARGOS_CONVERSATION_MEMORY_PATH",
+            "~/.local/state/argos/conversation-memory.json",
+        ),
     )
 
 

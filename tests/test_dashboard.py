@@ -224,11 +224,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "renderAgentUsage(state.agent_usage?.current)" in html
         assert "formatUsageBucket(bucket)" in html
         assert 'id="slots"' in html
-        assert ".slots::-webkit-scrollbar" in html
-        assert "overflow-x: auto" in html
-        assert "touch-action: pan-x" in html
-        assert "border-radius: 999px" in html
-        assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
+        assert '<select id="slots"' in html
+        assert 'slots.addEventListener("change"' in html
+        assert 'id="session-compact-button"' in html
+        assert "state.capabilities?.conversation_memory" in html
+        assert "availableSlots = state.slots || []" in html
         assert "state.agent?.provider" in html
         assert "state.agent?.model" in html
         assert 'class="brand-row"' in html
@@ -280,9 +280,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="iframe-right"' in html
         assert 'id="swap-button"' in html
         assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
-        assert 'data-name="${escapeHtml(slot.name || "")}"' in html
         assert 'fetch("/api/terminal/slots/select"' in html
-        assert 'slots.addEventListener("click"' in html
+        assert 'selectAgentSlot(selected.name || "", selected.provider || "")' in html
         assert 'id="text-composer"' in html
         assert 'id="text-input"' in html
         assert '"Content-Type": "text/plain; charset=utf-8"' in html
