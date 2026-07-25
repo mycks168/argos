@@ -6,6 +6,15 @@ audio:
   output_card: ''
   output_volume: 70
   sample_rate: 16000
+  state_path: ~/.local/state/argos/audio-state.json
+  listen_mode: wakeword
+  silence_rms_threshold: 200
+ptt:
+  gpio: ''
+network:
+  wifi_status_refresh_seconds: 10
+runtime:
+  dry_run: false
 wakeword:
   aliases: []
   enabled: true
@@ -114,6 +123,7 @@ agents:
     model: ''
 location:
   provider: remote
+  osrm_url: ''
   remote:
     url: http://localhost:8080/gps
     timeout_seconds: 2
@@ -134,6 +144,7 @@ dashboard:
   view_key: ''
   screensaver_seconds: 1800
   default_font_size: medium
+  camera_snapshot_path: /tmp/argos/camera-latest.jpg
 greeting:
   enabled: true
   state_path: ~/.local/state/argos/greeting-state.json
@@ -183,6 +194,12 @@ auth:
 tts:
   url: http://127.0.0.1:9191
   bearer_token: ''
+  delimiters: 。！？!?
+  cache:
+    enabled: true
+    max_chars: 30
+    max_size_mb: 200
+    dir: cache/tts
 lcd:
   enabled: false
   width: 76
@@ -203,17 +220,3 @@ voicevox:
   speed_scale: 1.1
   volume_scale: 2.0
   accept_opus: false
-environment:
-  ARGOS_AUDIO_STATE_PATH: ~/.local/state/argos/audio-state.json
-  ARGOS_CAMERA_SNAPSHOT_PATH: /tmp/argos/camera-latest.jpg
-  ARGOS_LISTEN_MODE: wakeword
-  ARGOS_PTT_GPIO: ''
-  ARGOS_TTS_CACHE_DIR: cache/tts
-  ARGOS_TTS_CACHE_ENABLED: true
-  ARGOS_TTS_CACHE_MAX_CHARS: 30
-  ARGOS_TTS_CACHE_MAX_SIZE_MB: 200
-  ARGOS_TTS_DELIMITERS: 。！？!?
-  ARGOS_WIFI_STATUS_REFRESH_SECONDS: 10
-  DRY_RUN: false
-  OSRM_URL: ''
-  SILENCE_RMS_THRESHOLD: 200

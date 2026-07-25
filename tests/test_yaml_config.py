@@ -15,6 +15,24 @@ dashboard:
   host: 0.0.0.0
   port: 8765
   enabled: true
+  camera_snapshot_path: /tmp/camera.jpg
+audio:
+  state_path: ~/.local/state/argos/audio.json
+  listen_mode: vad
+  silence_rms_threshold: 180
+tts:
+  delimiters: 。！？
+  cache:
+    enabled: false
+    max_chars: 40
+ptt:
+  gpio: 17
+network:
+  wifi_status_refresh_seconds: 15
+runtime:
+  dry_run: false
+location:
+  osrm_url: https://route.example
 agents:
   codex:
     model: gpt-test
@@ -39,6 +57,18 @@ agent:
     assert values["ARGOS_DASHBOARD_HOST"] == "0.0.0.0"
     assert values["ARGOS_DASHBOARD_PORT"] == "8765"
     assert values["ARGOS_DASHBOARD_ENABLED"] == "true"
+    assert values["ARGOS_CAMERA_SNAPSHOT_PATH"] == "/tmp/camera.jpg"
+    assert values["ARGOS_AUDIO_STATE_PATH"] == "~/.local/state/argos/audio.json"
+    assert values["ARGOS_LISTEN_MODE"] == "vad"
+    assert values["SILENCE_RMS_THRESHOLD"] == "180"
+    assert values["ARGOS_TTS_DELIMITERS"] == "。！？"
+    assert values["ARGOS_TTS_CACHE_ENABLED"] == "false"
+    assert values["ARGOS_TTS_CACHE_MAX_CHARS"] == "40"
+    assert values["ARGOS_PTT_GPIO"] == "17"
+    assert values["ARGOS_WIFI_STATUS_REFRESH_SECONDS"] == "15"
+    assert values["DRY_RUN"] == "false"
+    assert values["OSRM_URL"] == "https://route.example"
+    assert "TTS_FILTER_DELIMITERS" not in values
     assert values["ARGOS_CODEX_MODEL"] == "gpt-test"
     assert values["ARGOS_CODEX_EXTRA_ARGS"] == "--one --two"
     assert values["ARGOS_AGENT_USAGE_COMMAND_CODEX"] == "python usage.py"
@@ -73,6 +103,10 @@ def test_env_to_yaml_round_trip(tmp_path):
         "ARGOS_DASHBOARD_ENABLED": "true",
         "ARGOS_DASHBOARD_PORT": "8765",
         "ARGOS_CODEX_MODEL": "gpt-test",
+        "ARGOS_AUDIO_STATE_PATH": "~/.local/state/argos/audio.json",
+        "ARGOS_TTS_CACHE_DIR": "cache/custom",
+        "ARGOS_PTT_GPIO": "17",
+        "OSRM_URL": "https://route.example",
         "ARGOS_AGENT_SLOT_1": "作業,codex,/opt/argos,2,gpt-test",
         "CUSTOM_SECRET": "abc==",
     }
@@ -84,12 +118,20 @@ def test_env_to_yaml_round_trip(tmp_path):
     assert loaded["ARGOS_DASHBOARD_ENABLED"] == source["ARGOS_DASHBOARD_ENABLED"]
     assert loaded["ARGOS_DASHBOARD_PORT"] == source["ARGOS_DASHBOARD_PORT"]
     assert loaded["ARGOS_CODEX_MODEL"] == source["ARGOS_CODEX_MODEL"]
+    assert loaded["ARGOS_AUDIO_STATE_PATH"] == source["ARGOS_AUDIO_STATE_PATH"]
+    assert loaded["ARGOS_TTS_CACHE_DIR"] == source["ARGOS_TTS_CACHE_DIR"]
+    assert loaded["ARGOS_PTT_GPIO"] == source["ARGOS_PTT_GPIO"]
+    assert loaded["OSRM_URL"] == source["OSRM_URL"]
     assert loaded["CUSTOM_SECRET"] == source["CUSTOM_SECRET"]
     slots = __import__("json").loads(loaded["ARGOS_AGENT_SLOTS_JSON"])
     assert slots[0]["name"] == "作業"
     assert slots[0]["type"] == "local"
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     assert data["dashboard"]["port"] == 8765
+    assert data["audio"]["state_path"] == "~/.local/state/argos/audio.json"
+    assert data["tts"]["cache"]["dir"] == "cache/custom"
+    assert data["ptt"]["gpio"] == 17
+    assert data["location"]["osrm_url"] == "https://route.example"
     assert data["agent"]["slots"][0]["name"] == "作業"
     assert "  slots:\n    - type: local" in path.read_text(encoding="utf-8")
     assert data["environment"]["CUSTOM_SECRET"] == "abc=="
