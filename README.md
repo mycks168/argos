@@ -356,6 +356,6 @@ ARGOS本体の再起動で実行中エージェントを巻き込まない構成
 uv run argos-agent-runner
 ```
 
-ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。
+ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。通常応答と再起動後の未配信回収が競合しないよう、配信処理はRunner側の期限付きロックで排他制御します。
 
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

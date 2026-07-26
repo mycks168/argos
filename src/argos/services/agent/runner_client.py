@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import uuid
 from collections.abc import Iterable
 from contextlib import contextmanager
 
@@ -31,6 +32,7 @@ class RunnerAgentClient:
             raise ValueError("エージェントスロットが設定されていません")
         self._index = 0
         self._active_job_ids: set[str] = set()
+        self._delivery_owner = uuid.uuid4().hex
         self._request_context = threading.local()
 
     @property
@@ -141,7 +143,7 @@ class RunnerAgentClient:
 
     def list_undelivered(self) -> list[dict[str, object]]:
         """現在のARGOS処理外で完了した未配信ジョブを返す。"""
-        payload = self._request("GET", "/api/jobs")
+        payload = self._request("POST", "/api/jobs/claim", json={})
         jobs = payload.get("jobs", [])
         if not isinstance(jobs, list):
             return []
@@ -168,6 +170,7 @@ class RunnerAgentClient:
     def _request(self, method: str, path: str, **kwargs: object) -> dict[str, object]:
         """Runner APIへHTTPリクエストを送る。"""
         headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Argos-Delivery-Owner"] = self._delivery_owner
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         response = requests.request(method, f"{self._base_url}{path}", headers=headers, timeout=5, **kwargs)
