@@ -124,6 +124,25 @@ def test_agent_runner_persists_completed_job(tmp_path):
     assert runner.list_undelivered() == []
 
 
+def test_agent_job_store_locks_delivery_until_lease_expires(tmp_path, monkeypatch):
+    """通常処理と未配信回収が同じジョブの配信権を同時に取得しない。"""
+    now = {"value": 1_000.0}
+    monkeypatch.setattr("argos.services.agent.runner.time.time", lambda: now["value"])
+    store = AgentJobStore(tmp_path / "runner")
+    job = store.create(AgentSlot("作業", "codex", str(tmp_path)), "発話", delivery_owner="foreground")
+    job.status = "completed"
+    store.save(job)
+
+    assert store.list_undelivered() == []
+    assert store.claim(job.job_id, "recovery") is None
+
+    now["value"] += 31
+    claimed = store.claim_undelivered("recovery")
+    assert [item.job_id for item in claimed] == [job.job_id]
+    assert store.mark_delivered(job.job_id, "foreground") is None
+    assert store.mark_delivered(job.job_id, "recovery").status == "delivered"
+
+
 def test_agent_job_store_loads_legacy_job_without_response_target(tmp_path):
     """応答先を持たない旧ジョブは母艦向けとして読み込む。"""
     state_dir = tmp_path / "runner"
@@ -440,7 +459,7 @@ def test_runner_agent_client_lists_and_marks_undelivered(monkeypatch, tmp_path):
     def fake_request(method: str, url: str, **_kwargs: object) -> Response:
         """未配信ジョブAPIの偽レスポンスを返す。"""
         calls.append((method, url))
-        if method == "GET" and url.endswith("/api/jobs"):
+        if method == "POST" and url.endswith("/api/jobs/claim"):
             return Response({"jobs": [{"job_id": "job-2", "status": "completed"}]})
         if method == "POST" and url.endswith("/api/jobs/job-2/deliver"):
             return Response({"job_id": "job-2", "status": "delivered"})
