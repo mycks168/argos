@@ -1145,6 +1145,10 @@
           <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
           <button id="session-compact-button" class="control-button" type="button">履歴を引き継いで新規セッション</button>
         </div>
+        <div class="settings-row">
+          <span class="settings-label">ARGOS本体</span>
+          <a class="control-button" href="/settings" style="display:block;text-align:center;text-decoration:none;">本体設定を開く</a>
+        </div>
       </div>
     </div>
   </div>
@@ -2264,7 +2268,13 @@
       window.addEventListener(eventName, resetScreensaver, {passive: true});
     });
     resetScreensaver();
-    showSplash();
+    const skipInitialSplash = new URLSearchParams(window.location.search).get("from") === "settings";
+    if (skipInitialSplash) {
+      // 設定画面から戻っただけの場合は、再起動と誤解しやすい起動演出を省く。
+      window.history.replaceState({}, "", window.location.pathname);
+    } else {
+      showSplash();
+    }
     refresh();
 
     // オーバーレイ消去などのイベント送信用のヘルパー関数

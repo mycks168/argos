@@ -4,6 +4,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+import yaml
 
 from argos.services.dashboard import location as dashboard_location
 from argos.services.dashboard import server as dashboard_server
@@ -220,6 +221,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert ".notifications::-webkit-scrollbar" in html
         assert "id=\"splash\"" in html
         assert "showSplash()" in html
+        assert 'get("from") === "settings"' in html
+        assert 'window.history.replaceState({}, "", window.location.pathname)' in html
+        assert "if (skipInitialSplash)" in html
         assert 'data-code="booting"' in html
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
@@ -362,6 +366,61 @@ def test_dashboard_control_api_calls_handler():
     assert status == 200
     assert body == {"muted": True, "volume": 55}
     assert calls == [{"action": "mute", "volume": 55}]
+
+
+def test_dashboard_settings_page_and_authenticated_config_api(tmp_path, monkeypatch):
+    """設定画面を配信し、認証付きAPIでYAMLを更新できる。"""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("audio:\n  output_volume: 70\n", encoding="utf-8")
+    monkeypatch.setattr(
+        dashboard_server,
+        "list_audio_devices",
+        lambda: {"inputs": [{"value": "mic", "label": "USBマイク"}], "outputs": []},
+    )
+    server = DashboardServer(
+        DashboardState(),
+        "127.0.0.1",
+        0,
+        "secret",
+        config_path=config_path,
+    )
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        with urlopen(base_url + "/settings", timeout=2) as response:
+            html = response.read().decode("utf-8")
+        assert "ARGOS 設定" in html
+        assert 'const dashboardToken = "secret";' in html
+        assert "config.yamlの全項目" in html
+        assert 'href="/?from=settings"' in html
+        assert "設定名や説明を検索" in html
+        assert "test-microphone" in html
+
+        with pytest.raises(HTTPError) as error:
+            _read_json(base_url + "/api/config")
+        assert error.value.code == 401
+
+        status, body = _read_json(base_url + "/api/config", token="secret")
+        assert status == 200
+        assert any(field["description"] for field in body["fields"])
+
+        status, body = _read_json(base_url + "/api/config/audio-devices", token="secret")
+        assert status == 200
+        assert body["inputs"][0]["label"] == "USBマイク"
+
+        status, body = _read_json(
+            base_url + "/api/config",
+            "PUT",
+            {"values": {"audio.output_volume": 45}},
+            "secret",
+        )
+        assert status == 200
+        assert body["saved"] is True
+        assert body["restart_required"] is True
+    finally:
+        server.stop()
+
+    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["audio"]["output_volume"] == 45
 
 
 def test_dashboard_event_api_calls_handler():

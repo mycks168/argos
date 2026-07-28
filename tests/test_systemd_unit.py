@@ -116,7 +116,7 @@ def test_dashboard_kiosk_disables_translation_ui():
     unit.read_string(_render_unit("argos-dashboard-kiosk.service"))
     script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
 
-    assert unit["Service"]["EnvironmentFile"] == "/opt/argos/.env"
+    assert unit["Service"]["EnvironmentFile"] == "-/opt/argos/.env"
 
     assert "--lang=ja" in script
     assert 'CHROMIUM_SNAP_FONT_DIR="${HOME}/snap/chromium/current/.local/share/fonts/argos"' in script

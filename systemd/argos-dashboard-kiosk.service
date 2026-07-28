@@ -7,7 +7,7 @@ Type=simple
 Environment=DISPLAY=:0
 Environment=XAUTHORITY=%h/.Xauthority
 Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
-EnvironmentFile=@PROJECT_DIR@/.env
+EnvironmentFile=-@PROJECT_DIR@/.env
 ExecStart=@PROJECT_DIR@/scripts/open-dashboard-kiosk.sh
 Restart=on-failure
 RestartSec=3

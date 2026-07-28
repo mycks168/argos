@@ -38,6 +38,7 @@ from argos.services.auth import AuthGate
 from argos.services.conversation_store import ConversationStore
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
+from argos.yaml_config import default_config_path
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
 from argos.services.network import read_wifi_status
@@ -317,6 +318,7 @@ class ArgosApp:
             control_handler=self._handle_dashboard_control,
             event_handler=self._handle_dashboard_event,
             terminal_handler=_TerminalGateway(self),
+            config_path=default_config_path(),
         )
 
     def run(self) -> None:

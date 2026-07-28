@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import queue
+import subprocess
 import threading
 import uuid
 from http import HTTPStatus
@@ -17,7 +18,9 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, urlparse
 
+from argos.services.dashboard.audio_devices import list_audio_devices, measure_microphone, play_speaker_test
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
+from argos.services.dashboard.settings_config import load_settings_form, save_settings_form
 from argos.services.dashboard.state import DashboardState
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 from argos.services.opus_codec import OpusCodecError, decode_audio_to_wav, encode_wav_to_opus
@@ -89,6 +92,7 @@ class DashboardServer:
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         terminal_handler: Any | None = None,
+        config_path: Path = Path("config.yaml"),
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -111,6 +115,7 @@ class DashboardServer:
         self._control_handler = control_handler
         self._event_handler = event_handler
         self._terminal_handler = terminal_handler
+        self._config_path = config_path
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -142,6 +147,7 @@ class DashboardServer:
             self._control_handler,
             self._event_handler,
             self._terminal_handler,
+            self._config_path,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -179,6 +185,7 @@ def _create_handler(
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     terminal_handler: Any | None = None,
+    config_path: Path = Path("config.yaml"),
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -196,6 +203,8 @@ def _create_handler(
                 cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
                 target_layout = cookie_layout if cookie_layout else default_layout
                 self._send_html(target_layout)
+            elif path in {"/settings", "/settings/"}:
+                self._send_settings_html()
             elif path in {"/sp", "/sp/"}:
                 self._send_html("sp")
             elif path.startswith("/static/"):
@@ -214,6 +223,17 @@ def _create_handler(
                         remote_location_token,
                     )
                 )
+            elif path == "/api/config":
+                if not self._require_token():
+                    return
+                try:
+                    self._send_json(load_settings_form(config_path))
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            elif path == "/api/config/audio-devices":
+                if not self._require_token():
+                    return
+                self._send_json(list_audio_devices())
             elif path == "/api/stream":
                 self._send_sse()
             elif path == "/api/terminal/slots":
@@ -250,6 +270,26 @@ def _create_handler(
         def do_POST(self) -> None:
             """Bearer認証付き更新APIを処理する。"""
             path = urlparse(self.path).path
+            if path in {"/api/config/test-microphone", "/api/config/test-speaker"}:
+                if not self._require_token():
+                    return
+                try:
+                    payload = self._read_json(MAX_BODY_BYTES)
+                    device = str(payload.get("device", "")).strip()
+                    response = (
+                        measure_microphone(device)
+                        if path.endswith("test-microphone")
+                        else play_speaker_test(device)
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                except (OSError, subprocess.SubprocessError):
+                    log.exception("音声デバイスの動作確認に失敗しました")
+                    self._send_json({"error": "音声デバイスを確認できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+                self._send_json(response)
+                return
             if path == "/api/uploads":
                 if not self._require_token():
                     return
@@ -308,6 +348,33 @@ def _create_handler(
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                 return
             self._send_json(response, status)
+
+        def do_PUT(self) -> None:
+            """Bearer認証付き設定保存APIを処理する。"""
+            path = urlparse(self.path).path
+            if path != "/api/config":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            if not self._require_token():
+                return
+            try:
+                payload = self._read_json(MAX_BODY_BYTES)
+                backup_path = save_settings_form(config_path, payload.get("values"))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except OSError:
+                log.exception("設定ファイルの保存に失敗しました")
+                self._send_json({"error": "設定ファイルを保存できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            self._send_json(
+                {
+                    "saved": True,
+                    "restart_required": True,
+                    "message": "保存しました。反映にはARGOSの再起動が必要です。",
+                    "backup": backup_path.name,
+                }
+            )
 
         def log_message(self, format: str, *args: object) -> None:
             """標準HTTPログをアプリログへ流す。"""
@@ -372,6 +439,18 @@ def _create_handler(
                     "Set-Cookie",
                     f"{VIEW_KEY_COOKIE}={view_key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000",
                 )
+            self.end_headers()
+            self.wfile.write(html)
+
+        def _send_settings_html(self) -> None:
+            """初心者向け設定画面を返す。"""
+            html_text = files("argos.services.dashboard.static").joinpath("settings.html").read_text(encoding="utf-8")
+            html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
+            html = html_text.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(html)
 

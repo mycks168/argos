@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ARGOS 設定</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #081016; color: #edf4f7; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: radial-gradient(circle at top, #17303d, #081016 34rem); }
+    main { width: min(920px, calc(100% - 28px)); margin: 0 auto; padding: 28px 0 110px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
+    h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); }
+    .subtitle, .description, .hint { color: #a9bac3; }
+    .subtitle { margin: 7px 0 0; }
+    .search { width: 100%; margin: 0 0 18px; }
+    a, button { font: inherit; }
+    .back { color: #d6e3e9; text-decoration: none; border: 1px solid #3c5360; border-radius: 10px; padding: 10px 14px; }
+    .section { margin: 22px 0; }
+    .section h2 { margin: 0 0 11px; font-size: 20px; color: #79d5ef; }
+    .card { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 280px); gap: 18px; align-items: center;
+      margin: 10px 0; padding: 18px; border: 1px solid #2b424e; border-radius: 14px; background: rgba(16, 28, 36, .94); }
+    .card.warning { border-color: #735f30; }
+    .label { margin: 0 0 5px; font-size: 17px; font-weight: 750; }
+    .description { margin: 0; line-height: 1.55; font-size: 14px; }
+    input:not([type="checkbox"]), select, textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #4a626e;
+      border-radius: 9px; background: #081117; color: #f4f8fa; font: inherit; }
+    textarea { min-height: 110px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+    select[multiple] { min-height: 120px; }
+    .number-wrap { display: flex; align-items: center; gap: 8px; }
+    .unit { color: #a9bac3; min-width: 2em; }
+    .switch { position: relative; display: inline-flex; justify-self: end; width: 58px; height: 32px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; inset: 0; border-radius: 18px; background: #41515a; transition: .18s; }
+    .slider::before { content: ""; position: absolute; width: 24px; height: 24px; left: 4px; top: 4px;
+      border-radius: 50%; background: white; transition: .18s; }
+    .switch input:checked + .slider { background: #16a5c5; }
+    .switch input:checked + .slider::before { transform: translateX(26px); }
+    details { margin-top: 18px; }
+    summary { cursor: pointer; padding: 14px 4px; color: #d2dde2; font-weight: 700; }
+    .audio-control { display: grid; gap: 8px; }
+    .test-button { min-height: 38px; border: 1px solid #4a626e; border-radius: 8px; background: #172832; color: #e8f1f5; cursor: pointer; }
+    .configured { margin-top: 6px; color: #79d5ef; font-size: 12px; }
+    .actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px; border-top: 1px solid #304752;
+      background: rgba(6, 13, 18, .95); backdrop-filter: blur(10px); }
+    .actions-inner { width: min(920px, 100%); margin: auto; display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
+    #status { flex: 1; min-height: 1.4em; color: #b7c8d0; }
+    #status.error { color: #ff9e9e; }
+    #save { min-width: 150px; min-height: 46px; border: 0; border-radius: 10px; background: #18a6c6; color: #051116;
+      font-weight: 800; cursor: pointer; }
+    #save:disabled { opacity: .55; cursor: wait; }
+    .empty { padding: 24px; border: 1px dashed #465964; border-radius: 12px; color: #bac7ce; }
+    @media (max-width: 640px) {
+      main { width: min(100% - 20px, 920px); padding-top: 18px; }
+      header { align-items: flex-start; }
+      .card { grid-template-columns: 1fr; gap: 13px; }
+      .switch { justify-self: start; }
+      .actions-inner { align-items: stretch; flex-direction: column; }
+      #save { width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>ARGOS 設定</h1>
+        <p class="subtitle">config.yamlの全項目を、意味や注意点を確認しながら変更できます。</p>
+      </div>
+      <a class="back" href="/?from=settings">戻る</a>
+    </header>
+    <input id="search" class="search" type="search" placeholder="設定名や説明を検索">
+    <div id="form"><div class="empty">設定を読み込んでいます…</div></div>
+  </main>
+  <div class="actions">
+    <div class="actions-inner">
+      <div id="status" role="status"></div>
+      <button id="save" type="button" disabled>変更を保存</button>
+    </div>
+  </div>
+  <script>
+    const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+    const form = document.querySelector("#form");
+    const saveButton = document.querySelector("#save");
+    const statusText = document.querySelector("#status");
+    const searchInput = document.querySelector("#search");
+    let fields = [];
+    let audioDevices = {inputs: [], outputs: []};
+
+    function setStatus(message, error = false) {
+      statusText.textContent = message;
+      statusText.classList.toggle("error", error);
+    }
+
+    function createInput(field) {
+      let input;
+      if (field.type === "boolean") {
+        const label = document.createElement("label");
+        label.className = "switch";
+        input = document.createElement("input");
+        input.type = "checkbox";
+        input.checked = Boolean(field.value);
+        const slider = document.createElement("span");
+        slider.className = "slider";
+        label.append(input, slider);
+        input.dataset.key = field.key;
+        return label;
+      }
+      if (field.type === "audio-input" || field.type === "audio-output" || field.type === "audio-input-list") {
+        const wrapper = document.createElement("div");
+        wrapper.className = "audio-control";
+        input = document.createElement("select");
+        const choices = field.type === "audio-output" ? audioDevices.outputs : audioDevices.inputs;
+        const currentValues = field.type === "audio-input-list" ? field.value : [field.value];
+        if (field.type === "audio-input-list") input.multiple = true;
+        const knownValues = new Set(choices.map(choice => choice.value));
+        for (const current of currentValues || []) {
+          if (current && !knownValues.has(current)) {
+            choices.unshift({value: current, label: `現在の設定（${current}）`});
+          }
+        }
+        for (const choice of choices) {
+          const option = document.createElement("option");
+          option.value = choice.value;
+          option.textContent = choice.label;
+          option.selected = (currentValues || []).includes(choice.value);
+          input.append(option);
+        }
+        input.dataset.key = field.key;
+        const testButton = document.createElement("button");
+        testButton.type = "button";
+        testButton.className = "test-button";
+        testButton.textContent = field.type === "audio-output" ? "テスト音を再生" : "マイク入力を確認";
+        testButton.addEventListener("click", () => testAudio(field, input, testButton));
+        wrapper.append(input, testButton);
+        return wrapper;
+      }
+      if (field.type === "select") {
+        input = document.createElement("select");
+        for (const option of field.options) {
+          const element = document.createElement("option");
+          element.value = option.value;
+          element.textContent = option.label;
+          element.selected = option.value === field.value;
+          input.append(element);
+        }
+      } else if (field.type === "json") {
+        input = document.createElement("textarea");
+        input.value = JSON.stringify(field.value, null, 2);
+      } else {
+        input = document.createElement("input");
+        input.type = field.secret ? "password" : (field.type === "text" ? "text" : "number");
+        input.value = field.value ?? "";
+        if (field.secret && field.configured) input.placeholder = "設定済み。変更するときだけ入力";
+        if (field.min !== undefined) input.min = field.min;
+        if (field.max !== undefined) input.max = field.max;
+        if (field.step !== undefined) input.step = field.step;
+        if (field.placeholder) input.placeholder = field.placeholder;
+      }
+      input.dataset.key = field.key;
+      if (!field.unit) return input;
+      const wrapper = document.createElement("div");
+      wrapper.className = "number-wrap";
+      const unit = document.createElement("span");
+      unit.className = "unit";
+      unit.textContent = field.unit;
+      wrapper.append(input, unit);
+      return wrapper;
+    }
+
+    function createCard(field) {
+      const card = document.createElement("div");
+      card.className = `card${field.warning ? " warning" : ""}`;
+      const copy = document.createElement("div");
+      const label = document.createElement("p");
+      label.className = "label";
+      label.textContent = field.label;
+      const description = document.createElement("p");
+      description.className = "description";
+      description.textContent = field.description;
+      copy.append(label, description);
+      if (field.secret && field.configured) {
+        const configured = document.createElement("div");
+        configured.className = "configured";
+        configured.textContent = "現在は設定済みです";
+        copy.append(configured);
+      }
+      card.append(copy, createInput(field));
+      return card;
+    }
+
+    function render() {
+      form.replaceChildren();
+      const query = searchInput.value.trim().toLowerCase();
+      const visibleFields = fields.filter(field =>
+        !query || `${field.key} ${field.label} ${field.description}`.toLowerCase().includes(query)
+      );
+      const sections = [...new Set(visibleFields.map(field => field.section))];
+      for (const sectionName of sections) {
+        const details = document.createElement("details");
+        details.className = "section";
+        details.open = Boolean(query) || sectionName === "audio";
+        const summary = document.createElement("summary");
+        const sectionFields = visibleFields.filter(field => field.section === sectionName);
+        summary.textContent = `${sectionFields[0]?.section_label || sectionName}（${sectionFields.length}項目）`;
+        details.append(summary);
+        sectionFields.forEach(field => details.append(createCard(field)));
+        form.append(details);
+      }
+      if (!visibleFields.length) form.innerHTML = '<div class="empty">一致する設定がありません。</div>';
+      saveButton.disabled = false;
+    }
+
+    function collectValues() {
+      const values = {};
+      for (const field of fields) {
+        const input = document.querySelector(`[data-key="${field.key}"]`);
+        if (!input) continue;
+        if (field.secret && !input.value) {
+          values[field.key] = "__ARGOS_SECRET_UNCHANGED__";
+          continue;
+        }
+        if (field.type === "boolean") values[field.key] = input.checked;
+        else if (field.type === "audio-input-list") values[field.key] = Array.from(input.selectedOptions).map(option => option.value);
+        else if (field.type === "json") {
+          try {
+            values[field.key] = JSON.parse(input.value);
+          } catch {
+            throw new Error(`${field.label}のJSON形式が正しくありません`);
+          }
+        }
+        else if (field.type === "integer") values[field.key] = Number.parseInt(input.value, 10);
+        else if (field.type === "number") values[field.key] = Number.parseFloat(input.value);
+        else values[field.key] = input.value;
+      }
+      return values;
+    }
+
+    async function loadSettings() {
+      try {
+        const headers = {Authorization: `Bearer ${dashboardToken}`};
+        const [response, devicesResponse] = await Promise.all([
+          fetch("/api/config", {headers}),
+          fetch("/api/config/audio-devices", {headers}),
+        ]);
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "設定を読み込めませんでした");
+        if (devicesResponse.ok) audioDevices = await devicesResponse.json();
+        fields = body.fields;
+        render();
+      } catch (error) {
+        form.innerHTML = `<div class="empty">${error.message}</div>`;
+        setStatus("設定の読み込みに失敗しました。", true);
+      }
+    }
+
+    async function testAudio(field, input, button) {
+      const device = field.type === "audio-input-list"
+        ? input.selectedOptions[0]?.value
+        : input.value;
+      if (!device) {
+        setStatus("確認する音声デバイスを選んでください。", true);
+        return;
+      }
+      button.disabled = true;
+      setStatus(field.type === "audio-output" ? "テスト音を再生しています…" : "1秒間、マイクへ話してください…");
+      try {
+        const endpoint = field.type === "audio-output" ? "test-speaker" : "test-microphone";
+        const response = await fetch(`/api/config/${endpoint}`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Authorization: `Bearer ${dashboardToken}`},
+          body: JSON.stringify({device}),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "確認できませんでした");
+        setStatus(body.level === undefined ? body.message : `マイク入力レベル: ${body.level}%（RMS ${body.rms}）`);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        button.disabled = false;
+      }
+    }
+
+    saveButton.addEventListener("click", async () => {
+      saveButton.disabled = true;
+      setStatus("保存しています…");
+      try {
+        const response = await fetch("/api/config", {
+          method: "PUT",
+          headers: {"Content-Type": "application/json", Authorization: `Bearer ${dashboardToken}`},
+          body: JSON.stringify({values: collectValues()}),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "保存できませんでした");
+        setStatus(body.message);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    searchInput.addEventListener("input", render);
+    loadSettings();
+  </script>
+</body>
+</html>

@@ -30,6 +30,17 @@ if pgrep -f "[c]hromium.*argos-dashboard-chromium-kiosk" >/dev/null; then
   exit 0
 fi
 
+# .envからconfig.yamlへ移行済みの環境でも、キオスクに必要な値を取得する。
+if [ -x "${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}/../.venv/bin/python" ]; then
+  SCRIPT_DIR="${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
+  mapfile -t DASHBOARD_CONFIG < <(
+    "${SCRIPT_DIR}/../.venv/bin/python" -c \
+      'from pathlib import Path; from argos.yaml_config import load_yaml_environment; v=load_yaml_environment(Path("'"${SCRIPT_DIR}"'").parent / "config.yaml"); print(v.get("ARGOS_DASHBOARD_PORT", "")); print(v.get("ARGOS_DASHBOARD_VIEW_KEY", ""))'
+  )
+  ARGOS_DASHBOARD_PORT="${ARGOS_DASHBOARD_PORT:-${DASHBOARD_CONFIG[0]:-}}"
+  ARGOS_DASHBOARD_VIEW_KEY="${ARGOS_DASHBOARD_VIEW_KEY:-${DASHBOARD_CONFIG[1]:-}}"
+fi
+
 # 閲覧キーが設定されていれば、初回アクセスでCookieを受け取るためURLへ付与する。
 DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
@@ -40,7 +51,7 @@ fi
 # 疎通が取れるまでローカルの接続待ち画面を表示し、取れたら自動遷移する。
 # snap版Chromiumは/opt配下のfile:// URLを読めないため、snapがアクセスできる
 # ユーザー共通領域へ待機画面をコピーする。deb版Chromiumでも同じ配置を利用できる。
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_DIR="${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
 SPLASH_DIR="${HOME}/snap/chromium/common/argos-dashboard-kiosk"
 SPLASH_FILE="${SPLASH_DIR}/kiosk-splash.html"
 install -d -m 700 "${SPLASH_DIR}"
