@@ -127,6 +127,7 @@ def test_dashboard_kiosk_disables_translation_ui():
     assert "--disable-sync" in script
     assert "--disable-features=Translate,TranslateUI" in script
     assert "--disable-translate" in script
+    assert "--touch-events=enabled" in script
     assert "xset s off" in script
     assert "xset -dpms" in script
     assert "gsettings set org.gnome.desktop.screensaver lock-enabled false" in script

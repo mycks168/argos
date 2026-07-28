@@ -81,5 +81,6 @@ exec chromium \
   --noerrdialogs \
   --disable-infobars \
   --disable-session-crashed-bubble \
+  --touch-events=enabled \
   --autoplay-policy=no-user-gesture-required \
   "${SPLASH_URL}"

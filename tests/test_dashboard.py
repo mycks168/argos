@@ -395,6 +395,16 @@ def test_dashboard_settings_page_and_authenticated_config_api(tmp_path, monkeypa
         assert 'href="/?from=settings"' in html
         assert "設定名や説明を検索" in html
         assert "test-microphone" in html
+        assert 'document.addEventListener("pointerdown"' in html
+        assert 'target.closest("input, select, textarea, button, a, label, summary")' in html
+        assert 'window.scrollBy({top: deltaY, left: 0, behavior: "auto"})' in html
+        assert "body.drag-scrolling" in html
+        assert "-webkit-user-select: none" in html
+        assert "input, textarea { user-select: text" in html
+        assert "startInertiaScroll(finished.velocity)" in html
+        assert "requestAnimationFrame(step)" in html
+        assert "Math.min(2.4, initialVelocity)" in html
+        assert "stopInertiaScroll()" in html
 
         with pytest.raises(HTTPError) as error:
             _read_json(base_url + "/api/config")

@@ -7,7 +7,12 @@
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #081016; color: #edf4f7; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: radial-gradient(circle at top, #17303d, #081016 34rem); }
+    body {
+      margin: 0;
+      user-select: none;
+      -webkit-user-select: none;
+      background: radial-gradient(circle at top, #17303d, #081016 34rem);
+    }
     main { width: min(920px, calc(100% - 28px)); margin: 0 auto; padding: 28px 0 110px; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 24px; }
     h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); }
@@ -25,6 +30,7 @@
     .description { margin: 0; line-height: 1.55; font-size: 14px; }
     input:not([type="checkbox"]), select, textarea { width: 100%; min-height: 44px; padding: 9px 11px; border: 1px solid #4a626e;
       border-radius: 9px; background: #081117; color: #f4f8fa; font: inherit; }
+    input, textarea { user-select: text; -webkit-user-select: text; }
     textarea { min-height: 110px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
     select[multiple] { min-height: 120px; }
     .number-wrap { display: flex; align-items: center; gap: 8px; }
@@ -41,6 +47,7 @@
     .audio-control { display: grid; gap: 8px; }
     .test-button { min-height: 38px; border: 1px solid #4a626e; border-radius: 8px; background: #172832; color: #e8f1f5; cursor: pointer; }
     .configured { margin-top: 6px; color: #79d5ef; font-size: 12px; }
+    body.drag-scrolling, body.drag-scrolling * { user-select: none !important; cursor: grabbing !important; }
     .actions { position: fixed; left: 0; right: 0; bottom: 0; padding: 14px; border-top: 1px solid #304752;
       background: rgba(6, 13, 18, .95); backdrop-filter: blur(10px); }
     .actions-inner { width: min(920px, 100%); margin: auto; display: flex; align-items: center; justify-content: flex-end; gap: 14px; }
@@ -86,6 +93,8 @@
     const searchInput = document.querySelector("#search");
     let fields = [];
     let audioDevices = {inputs: [], outputs: []};
+    let dragScroll = null;
+    let inertiaFrame = null;
 
     function setStatus(message, error = false) {
       statusText.textContent = message;
@@ -280,6 +289,75 @@
         button.disabled = false;
       }
     }
+
+    function isInteractiveTarget(target) {
+      // 入力部品や開閉見出しの操作は、ドラッグスクロールより優先する。
+      return Boolean(target.closest("input, select, textarea, button, a, label, summary"));
+    }
+
+    document.addEventListener("pointerdown", event => {
+      if (!event.isPrimary || event.button !== 0 || isInteractiveTarget(event.target)) return;
+      stopInertiaScroll();
+      dragScroll = {
+        pointerId: event.pointerId,
+        lastY: event.clientY,
+        lastTime: performance.now(),
+        velocity: 0,
+        moved: false,
+      };
+      document.body.setPointerCapture?.(event.pointerId);
+      // マウス互換イベントとして届くタッチで文字選択が始まるのを防ぐ。
+      event.preventDefault();
+    });
+
+    document.addEventListener("pointermove", event => {
+      if (!dragScroll || event.pointerId !== dragScroll.pointerId) return;
+      const now = performance.now();
+      const deltaY = dragScroll.lastY - event.clientY;
+      if (!dragScroll.moved && Math.abs(deltaY) < 4) return;
+      dragScroll.moved = true;
+      const elapsed = Math.max(1, now - dragScroll.lastTime);
+      const instantVelocity = Math.max(-2.4, Math.min(2.4, deltaY / elapsed));
+      dragScroll.velocity = dragScroll.velocity * 0.55 + instantVelocity * 0.45;
+      dragScroll.lastY = event.clientY;
+      dragScroll.lastTime = now;
+      document.body.classList.add("drag-scrolling");
+      window.scrollBy({top: deltaY, left: 0, behavior: "auto"});
+      event.preventDefault();
+    }, {passive: false});
+
+    function stopInertiaScroll() {
+      if (inertiaFrame !== null) cancelAnimationFrame(inertiaFrame);
+      inertiaFrame = null;
+    }
+
+    function startInertiaScroll(initialVelocity) {
+      let velocity = Math.max(-2.4, Math.min(2.4, initialVelocity));
+      let previousTime = performance.now();
+      function step(now) {
+        const elapsed = Math.min(32, now - previousTime);
+        previousTime = now;
+        window.scrollBy(0, velocity * elapsed);
+        velocity *= Math.pow(0.91, elapsed / 16.67);
+        if (Math.abs(velocity) < 0.025) {
+          inertiaFrame = null;
+          return;
+        }
+        inertiaFrame = requestAnimationFrame(step);
+      }
+      if (Math.abs(velocity) >= 0.025) inertiaFrame = requestAnimationFrame(step);
+    }
+
+    function finishDragScroll(event) {
+      if (!dragScroll || event.pointerId !== dragScroll.pointerId) return;
+      const finished = dragScroll;
+      dragScroll = null;
+      document.body.classList.remove("drag-scrolling");
+      if (finished.moved) startInertiaScroll(finished.velocity);
+    }
+
+    document.addEventListener("pointerup", finishDragScroll);
+    document.addEventListener("pointercancel", finishDragScroll);
 
     saveButton.addEventListener("click", async () => {
       saveButton.disabled = true;
