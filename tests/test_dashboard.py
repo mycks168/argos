@@ -318,6 +318,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "setTextComposerError(describeTurnSendError(error));" in html
         assert '"母艦に繋がらないみたい"' in html
         assert "await describeTurnResponseError(response)" in html
+        assert "let pttActiveKey = null;" in html
+        assert 'const isPttKey = event.code === "Space"' in html
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:
