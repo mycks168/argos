@@ -8,7 +8,8 @@
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071018; color: #eef6ff; }
     * { box-sizing: border-box; }
     body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: radial-gradient(circle at top, #13283a, #071018 60%); }
-    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; padding: 12px 18px; background: #071018e8; border-bottom: 1px solid #294154; }
+    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 18px; background: #071018e8; border-bottom: 1px solid #294154; }
+    .header-controls { display: flex; align-items: center; gap: 10px; }
     h1 { margin: 0; font-size: 20px; }
     #connection { color: #8fa9bb; }
     #grid { min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); grid-auto-rows: minmax(360px, 1fr); gap: 12px; padding: 12px; overflow: auto; }
@@ -41,20 +42,30 @@
 <body>
   <header>
     <h1>ARGOS スロット一覧</h1>
-    <span id="connection">接続中</span>
+    <div class="header-controls">
+      <button id="mute-button" type="button" aria-pressed="false">ミュート</button>
+      <span id="connection">接続中</span>
+    </div>
   </header>
   <main id="grid" aria-live="polite"></main>
   <script>
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const grid = document.getElementById("grid");
     const connection = document.getElementById("connection");
+    const muteButton = document.getElementById("mute-button");
     const slotElements = new Map();
     const previousUnread = new Map();
+    const pendingAudio = new Map();
     let localSlots = [];
     let recorder = null;
     let recorderStream = null;
     let recordingSlotKey = "";
     let audioChunks = [];
+    let pttActiveKey = "";
+    let isMuted = localStorage.getItem("argos-grid-muted") === "true";
+    let audioContext = null;
+    let playbackChain = Promise.resolve();
+    let activeAudioSource = null;
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
     const authHeaders = extra => dashboardToken
@@ -92,8 +103,11 @@
         input.value = "";
         sendTurn(slot, new Blob([text], {type: "text/plain; charset=utf-8"}));
       });
-      tile.querySelector(".voice").addEventListener("click", () => toggleRecording(slot));
-      tile.addEventListener("focusin", () => clearAttention(tile));
+      tile.querySelector(".voice").addEventListener("click", () => toggleRecording(slot, false));
+      tile.addEventListener("focusin", () => {
+        clearAttention(tile);
+        playPendingAudio(key);
+      });
       tile.addEventListener("click", event => {
         if (!event.target.closest("textarea, button, input, select, a")) {
           tile.focus({preventScroll: true});
@@ -174,6 +188,7 @@
 
     async function sendTurn(slot, body) {
       const tile = slotElements.get(slotKey(slot));
+      const key = slotKey(slot);
       clearAttention(tile);
       tile.dataset.busy = "true";
       const query = new URLSearchParams({name: slot.name, provider: slot.provider});
@@ -181,11 +196,11 @@
       try {
         const response = await fetch(`/api/terminal/turn?${query}`, {
           method: "POST",
-          headers: authHeaders({"Content-Type": body.type, Accept: "text/event-stream"}),
+          headers: authHeaders({"Content-Type": body.type, Accept: "text/event-stream, audio/wav"}),
           body,
         });
         if (!response.ok) throw new Error(`送信に失敗しました: ${response.status}`);
-        didComplete = await consumeTurnEvents(response);
+        didComplete = await consumeTurnEvents(response, key);
       } catch (error) {
         tile.querySelector(".tile-status").textContent = error.message;
       } finally {
@@ -194,7 +209,7 @@
       if (didComplete) showCompletion(tile);
     }
 
-    async function consumeTurnEvents(response) {
+    async function consumeTurnEvents(response, key) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = "";
@@ -209,6 +224,7 @@
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
           if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
+          if (event.event === "audio" && event.data) queueAudio(key, event.data);
           if (event.event === "done") didComplete = true;
         }
         await refreshHistories();
@@ -216,14 +232,16 @@
       }
     }
 
-    async function toggleRecording(slot) {
+    async function toggleRecording(slot, isPushToTalk) {
       const key = slotKey(slot);
       if (recorder && recorder.state === "recording") {
         recorder.stop();
         return;
       }
       try {
-        recorderStream = await navigator.mediaDevices.getUserMedia({audio: true});
+        recorderStream = await navigator.mediaDevices.getUserMedia({
+          audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+        });
         audioChunks = [];
         recordingSlotKey = key;
         recorder = new MediaRecorder(recorderStream);
@@ -245,10 +263,114 @@
         const button = slotElements.get(key).querySelector(".voice");
         button.textContent = "録音停止";
         button.classList.add("recording");
+        if (isPushToTalk && !pttActiveKey) recorder.stop();
       } catch (error) {
         slotElements.get(key).querySelector(".tile-status").textContent = "マイクを利用できません";
       }
     }
+
+    function queueAudio(key, base64Data) {
+      if (isMuted) return;
+      const tile = slotElements.get(key);
+      if (tile?.matches(":focus-within")) {
+        queueAudioPlayback(base64Data);
+        return;
+      }
+      const chunks = pendingAudio.get(key) || [];
+      chunks.push(base64Data);
+      pendingAudio.set(key, chunks);
+    }
+
+    function playPendingAudio(key) {
+      if (isMuted) return;
+      const chunks = pendingAudio.get(key) || [];
+      pendingAudio.delete(key);
+      chunks.forEach(queueAudioPlayback);
+    }
+
+    function queueAudioPlayback(base64Data) {
+      playbackChain = playbackChain
+        .then(() => playAudio(base64Data))
+        .catch(error => console.error("回答音声の再生に失敗しました", error));
+    }
+
+    async function playAudio(base64Data) {
+      if (isMuted) return;
+      audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+      await audioContext.resume();
+      const binary = atob(base64Data);
+      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+      const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
+      if (isMuted) return;
+      await new Promise(resolve => {
+        const source = audioContext.createBufferSource();
+        activeAudioSource = source;
+        source.buffer = audioBuffer;
+        source.connect(audioContext.destination);
+        source.addEventListener("ended", () => {
+          if (activeAudioSource === source) activeAudioSource = null;
+          resolve();
+        }, {once: true});
+        source.start();
+      });
+    }
+
+    function applyMuteState() {
+      muteButton.textContent = isMuted ? "ミュート中" : "ミュート";
+      muteButton.setAttribute("aria-pressed", String(isMuted));
+    }
+
+    function toggleMute() {
+      isMuted = !isMuted;
+      localStorage.setItem("argos-grid-muted", String(isMuted));
+      if (isMuted) {
+        pendingAudio.clear();
+        activeAudioSource?.stop();
+        activeAudioSource = null;
+      }
+      applyMuteState();
+    }
+
+    function isEditableTarget(target) {
+      return Boolean(target.closest("textarea, input, select, button, a, [contenteditable='true']"));
+    }
+
+    function pttKey(event) {
+      if (event.code === "Space") return "Space";
+      return /^F(1[3-9]|2[0-4])$/.test(event.key) ? event.key : "";
+    }
+
+    function focusedSlot() {
+      const tile = document.activeElement?.closest?.(".tile");
+      if (!tile) return null;
+      return localSlots.find(slot => slotKey(slot) === tile.dataset.key) || null;
+    }
+
+    document.addEventListener("keydown", event => {
+      const key = pttKey(event);
+      if (!key || event.repeat || pttActiveKey || isEditableTarget(event.target)) return;
+      const slot = focusedSlot();
+      if (!slot || slotElements.get(slotKey(slot))?.dataset.busy === "true") return;
+      if (key === "Space") event.preventDefault();
+      pttActiveKey = key;
+      toggleRecording(slot, true);
+    });
+
+    document.addEventListener("keyup", event => {
+      const key = pttKey(event);
+      if (!key || key !== pttActiveKey) return;
+      if (key === "Space") event.preventDefault();
+      pttActiveKey = "";
+      if (recorder?.state === "recording") recorder.stop();
+    });
+
+    window.addEventListener("blur", () => {
+      if (!pttActiveKey) return;
+      pttActiveKey = "";
+      if (recorder?.state === "recording") recorder.stop();
+    });
+
+    muteButton.addEventListener("click", toggleMute);
 
     async function refreshState() {
       const response = await fetch("/api/state", {headers: authHeaders({})});
@@ -256,6 +378,7 @@
     }
 
     async function initialize() {
+      applyMuteState();
       const response = await fetch("/api/terminal/slots", {headers: authHeaders({})});
       if (!response.ok) throw new Error(`スロット取得に失敗しました: ${response.status}`);
       const payload = await response.json();

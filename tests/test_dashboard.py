@@ -356,6 +356,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
             grid_html = response.read().decode("utf-8")
         assert "ARGOS スロット一覧" in grid_html
         assert "/api/terminal/turn?${query}" in grid_html
+        assert 'Accept: "text/event-stream, audio/wav"' in grid_html
         assert '(slot.type || "local") === "local"' in grid_html
         assert 'const dashboardToken = "secret";' in grid_html
         assert "height: 100dvh" in grid_html
@@ -366,10 +367,17 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '#f4d35e0d' in grid_html
         assert 'tile.dataset.attention = "true"' in grid_html
         assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
-        assert "consumeTurnEvents(response)" in grid_html
+        assert "consumeTurnEvents(response, key)" in grid_html
         assert "tile.tabIndex = 0" in grid_html
         assert 'tile.setAttribute("role", "group")' in grid_html
         assert 'tile.focus({preventScroll: true})' in grid_html
+        assert 'id="mute-button"' in grid_html
+        assert 'event.code === "Space"' in grid_html
+        assert '/^F(1[3-9]|2[0-4])$/' in grid_html
+        assert "playPendingAudio(key)" in grid_html
+        assert 'event.event === "audio" && event.data' in grid_html
+        assert 'localStorage.setItem("argos-grid-muted"' in grid_html
+        assert 'audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}' in grid_html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
