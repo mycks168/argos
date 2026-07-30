@@ -63,6 +63,8 @@ def _normalize_font_size(value: str) -> str:
 def _normalize_layout(value: str) -> str:
     """ダッシュボードのレイアウト設定を正規化する。"""
     normalized = str(value or "").strip().lower()
+    if normalized in ("grid", "tiles", "tile"):
+        return "grid"
     return "sp" if normalized in ("sp", "mobile") else "standard"
 
 
@@ -198,10 +200,20 @@ def _create_handler(
             if path != "/api/health" and not self._require_view():
                 return
             if path == "/":
+                query = parse_qs(urlparse(self.path).query)
+                open_settings = str(query.get("open", [""])[0]).strip().lower() == "settings"
                 cookie = SimpleCookie(self.headers.get("Cookie", ""))
                 layout_morsel = cookie.get(LAYOUT_COOKIE)
                 cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
                 target_layout = cookie_layout if cookie_layout else default_layout
+                if open_settings and target_layout == "grid":
+                    target_layout = "standard"
+                if target_layout == "grid":
+                    self.send_response(HTTPStatus.SEE_OTHER)
+                    self.send_header("Location", "/grid")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
                 self._send_html(target_layout)
             elif path in {"/settings", "/settings/"}:
                 self._send_settings_html()

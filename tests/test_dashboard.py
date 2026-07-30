@@ -238,7 +238,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert ".notifications::-webkit-scrollbar" in html
         assert "id=\"splash\"" in html
         assert "showSplash()" in html
-        assert 'get("from") === "settings"' in html
+        assert 'pageQuery.get("from")' in html
         assert 'window.history.replaceState({}, "", window.location.pathname)' in html
         assert "if (skipInitialSplash)" in html
         assert 'data-code="booting"' in html
@@ -350,6 +350,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";' in sp_html
         assert "if (rightOpen) markSpNotificationsSeen();" in sp_html
         assert "latestNotifications.filter" in sp_html
+        assert 'id="layout-switch-grid"' in html
+        assert 'data-default-layout-option="grid"' in html
 
         with urlopen(base_url + "/grid", timeout=2) as response:
             assert response.headers["Cache-Control"] == "no-store"
@@ -373,6 +375,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"#ff4d4d"' in grid_html
         assert 'tile.dataset.attention = "true"' in grid_html
         assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
+        assert 'tile.querySelector(".tile-status").textContent = "実行中"' in grid_html
+        assert 'state.status.code !== "ready"' in grid_html
         assert "consumeTurnEvents(response, key)" in grid_html
         assert "tile.tabIndex = 0" in grid_html
         assert 'tile.setAttribute("role", "group")' in grid_html
@@ -381,6 +385,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'title="最大化">⛶</button>' in grid_html
         assert 'class="tile-actions"' in grid_html
         assert 'id="usage-button"' in grid_html
+        assert 'id="settings-button"' in grid_html
+        assert 'href="/?from=grid&amp;open=settings">⚙️ 設定</a>' in grid_html
+        assert "shouldOpenSettings" in html
+        assert 'height: 36px' in grid_html
         assert 'id="usage-dialog"' in grid_html
         assert 'latestState?.agent_usage?.providers' in grid_html
         assert 'class="usage-progress-bar"' in grid_html

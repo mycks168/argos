@@ -1119,6 +1119,7 @@
           <div class="font-size-control" role="group" aria-label="画面レイアウト">
             <button id="layout-switch-standard" class="font-size-button" type="button">通常</button>
             <button id="layout-switch-sp" class="font-size-button" type="button">SP</button>
+            <button id="layout-switch-grid" class="font-size-button" type="button">Grid</button>
           </div>
         </div>
         <div class="settings-row">
@@ -1126,6 +1127,7 @@
           <div class="font-size-control" role="group" aria-label="デフォルトレイアウト">
             <button class="default-layout-button" type="button" data-default-layout-option="standard" aria-pressed="true">通常</button>
             <button class="default-layout-button" type="button" data-default-layout-option="sp" aria-pressed="false">SP</button>
+            <button class="default-layout-button" type="button" data-default-layout-option="grid" aria-pressed="false">Grid</button>
           </div>
         </div>
         <div class="settings-row">
@@ -1265,6 +1267,7 @@
     const spToolbarTitle = document.getElementById("sp-toolbar-title");
     const layoutSwitchStandard = document.getElementById("layout-switch-standard");
     const layoutSwitchSp = document.getElementById("layout-switch-sp");
+    const layoutSwitchGrid = document.getElementById("layout-switch-grid");
     const defaultLayoutButtons = Array.from(document.querySelectorAll("[data-default-layout-option]"));
     const screensaver = document.getElementById("screensaver");
     const centerAlert = document.getElementById("center-alert");
@@ -2141,6 +2144,13 @@
         window.location.href = "/sp";
       });
     }
+    if (layoutSwitchGrid) {
+      layoutSwitchGrid.addEventListener("click", () => {
+        setCookie("argos_layout", "grid");
+        localStorage.setItem(defaultLayoutStorageKey, "grid");
+        window.location.href = "/grid";
+      });
+    }
 
     function updateDefaultLayoutUI(selected) {
       defaultLayoutButtons.forEach(btn => {
@@ -2301,7 +2311,9 @@
       window.addEventListener(eventName, resetScreensaver, {passive: true});
     });
     resetScreensaver();
-    const skipInitialSplash = new URLSearchParams(window.location.search).get("from") === "settings";
+    const pageQuery = new URLSearchParams(window.location.search);
+    const skipInitialSplash = ["settings", "grid"].includes(pageQuery.get("from"));
+    const shouldOpenSettings = pageQuery.get("open") === "settings";
     if (skipInitialSplash) {
       // 設定画面から戻っただけの場合は、再起動と誤解しやすい起動演出を省く。
       window.history.replaceState({}, "", window.location.pathname);
@@ -2352,6 +2364,10 @@
         settingsModal.setAttribute("aria-hidden", "true");
       }
     });
+    if (shouldOpenSettings) {
+      settingsModal.style.display = "flex";
+      settingsModal.setAttribute("aria-hidden", "false");
+    }
     overlayCloseButtons.forEach(button => {
       button.addEventListener("click", () => {
         const slot = button.getAttribute("data-slot");

@@ -74,7 +74,7 @@
         <h1>ARGOS 設定</h1>
         <p class="subtitle">config.yamlの全項目を、意味や注意点を確認しながら変更できます。</p>
       </div>
-      <a class="back" href="/?from=settings">戻る</a>
+      <a id="back-link" class="back" href="/?from=settings">戻る</a>
     </header>
     <input id="search" class="search" type="search" placeholder="設定名や説明を検索">
     <div id="form"><div class="empty">設定を読み込んでいます…</div></div>
@@ -86,6 +86,8 @@
     </div>
   </div>
   <script>
+    const backLink = document.getElementById("back-link");
+    if (new URLSearchParams(window.location.search).get("from") === "grid") backLink.href = "/grid";
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const form = document.querySelector("#form");
     const saveButton = document.querySelector("#save");
