@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from http.server import ThreadingHTTPServer
@@ -113,6 +114,7 @@ def test_agent_runner_persists_completed_job(tmp_path):
     current = runner.get_job(job.job_id)
     assert current is not None
     assert current.status == "completed"
+    assert current.response_target == "local"
     assert Path(current.result_path).read_text(encoding="utf-8") == "応答:こんにちは"
     assert runner.list_undelivered()[0].job_id == job.job_id
 
@@ -120,6 +122,42 @@ def test_agent_runner_persists_completed_job(tmp_path):
     assert delivered is not None
     assert delivered.status == "delivered"
     assert runner.list_undelivered() == []
+
+
+def test_agent_job_store_locks_delivery_until_lease_expires(tmp_path, monkeypatch):
+    """通常処理と未配信回収が同じジョブの配信権を同時に取得しない。"""
+    now = {"value": 1_000.0}
+    monkeypatch.setattr("argos.services.agent.runner.time.time", lambda: now["value"])
+    store = AgentJobStore(tmp_path / "runner")
+    job = store.create(AgentSlot("作業", "codex", str(tmp_path)), "発話", delivery_owner="foreground")
+    job.status = "completed"
+    store.save(job)
+
+    assert store.list_undelivered() == []
+    assert store.claim(job.job_id, "recovery") is None
+
+    now["value"] += 31
+    claimed = store.claim_undelivered("recovery")
+    assert [item.job_id for item in claimed] == [job.job_id]
+    assert store.mark_delivered(job.job_id, "foreground") is None
+    assert store.mark_delivered(job.job_id, "recovery").status == "delivered"
+
+
+def test_agent_job_store_loads_legacy_job_without_response_target(tmp_path):
+    """応答先を持たない旧ジョブは母艦向けとして読み込む。"""
+    state_dir = tmp_path / "runner"
+    store = AgentJobStore(state_dir)
+    slot = AgentSlot("作業", "codex", str(tmp_path))
+    job = store.create(slot, "旧ジョブ")
+    job_path = state_dir / "jobs" / job.job_id / "job.json"
+    payload = json.loads(job_path.read_text(encoding="utf-8"))
+    payload.pop("response_target")
+    job_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+
+    loaded = store.load(job.job_id)
+
+    assert loaded is not None
+    assert loaded.response_target == "local"
 
 
 def test_agent_runner_rejects_new_job_while_same_slot_is_busy(tmp_path, monkeypatch):
@@ -215,7 +253,45 @@ def test_runner_agent_client_polls_until_completed(monkeypatch, tmp_path):
 
     assert list(client.ask_stream("やって")) == ["完了"]
     assert calls[0][2]["headers"]["Authorization"] == "Bearer token"
+    assert calls[0][2]["json"]["response_target"] == "local"
     assert calls[-1][1].endswith("/api/jobs/job-1/deliver")
+
+
+def test_runner_agent_client_marks_terminal_response_target(monkeypatch, tmp_path):
+    """Terminalコンテキストでは作成ジョブの応答先をterminalにする。"""
+    calls: list[tuple[str, str, dict[str, object]]] = []
+
+    class Response:
+        """Runner APIの偽HTTPレスポンス。"""
+
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            """JSONレスポンスを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **kwargs: object) -> Response:
+        """ジョブ作成内容を記録して完了応答を返す。"""
+        calls.append((method, url, kwargs))
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"job_id": "job-terminal", "status": "queued"})
+        if method == "GET" and url.endswith("/api/jobs/job-terminal"):
+            return Response({"job_id": "job-terminal", "status": "completed", "result": "完了"})
+        if method == "POST" and url.endswith("/api/jobs/job-terminal/deliver"):
+            return Response({"job_id": "job-terminal", "status": "delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    with client.response_target("terminal"):
+        assert list(client.ask_stream("やって")) == ["完了"]
+
+    assert calls[0][2]["json"]["response_target"] == "terminal"
 
 
 def test_runner_agent_client_streams_partial_output(monkeypatch, tmp_path):
@@ -383,7 +459,7 @@ def test_runner_agent_client_lists_and_marks_undelivered(monkeypatch, tmp_path):
     def fake_request(method: str, url: str, **_kwargs: object) -> Response:
         """未配信ジョブAPIの偽レスポンスを返す。"""
         calls.append((method, url))
-        if method == "GET" and url.endswith("/api/jobs"):
+        if method == "POST" and url.endswith("/api/jobs/claim"):
             return Response({"jobs": [{"job_id": "job-2", "status": "completed"}]})
         if method == "POST" and url.endswith("/api/jobs/job-2/deliver"):
             return Response({"job_id": "job-2", "status": "delivered"})
@@ -424,6 +500,7 @@ def test_runner_agent_client_switches_and_resets_current_slot(monkeypatch, tmp_p
             **_settings(tmp_path).__dict__,
             "agent_slots": (
                 AgentSlot("作業", "codex", "/tmp/a"),
+                AgentSlot("除外", "claude", "/tmp/c", ptt_cycle=False),
                 AgentSlot("調査", "hermes", "/tmp/b"),
             ),
         }
@@ -434,6 +511,9 @@ def test_runner_agent_client_switches_and_resets_current_slot(monkeypatch, tmp_p
     assert client.current_provider == "codex"
     assert client.next_slot() == "調査"
     assert client.current_provider == "hermes"
+    assert client.select_slot("作業", "codex") == "作業"
+    assert client.current_provider == "codex"
+    client.select_slot("調査", "hermes")
     client.reset_current()
 
     assert calls[-1][1].endswith("/api/slots/reset")
@@ -515,7 +595,12 @@ def test_agent_runner_server_handles_job_lifecycle(tmp_path):
 
         created = requests.post(
             f"{base_url}/api/jobs",
-            json={"slot_name": "作業", "provider": "codex", "prompt": "こんにちは"},
+            json={
+                "slot_name": "作業",
+                "provider": "codex",
+                "prompt": "こんにちは",
+                "response_target": "terminal",
+            },
             headers=headers,
             timeout=2,
         )
@@ -530,6 +615,7 @@ def test_agent_runner_server_handles_job_lifecycle(tmp_path):
 
         current_payload = current.json()
         assert current_payload["result"] == "応答:こんにちは"
+        assert current_payload["response_target"] == "terminal"
 
         pending = requests.get(f"{base_url}/api/jobs", headers=headers, timeout=2)
         assert pending.json()["jobs"][0]["job_id"] == job_id

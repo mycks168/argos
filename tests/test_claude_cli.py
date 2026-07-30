@@ -60,7 +60,9 @@ def _settings(tmp_path: Path) -> Settings:
 
 def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path):
     """Claudeの初回呼び出し時に新規セッションIDを自動生成して保存することを確認する。"""
-    settings = _settings(tmp_path)
+    base = _settings(tmp_path)
+    slot = AgentSlot("Claude", "claude", base.agent_slots[0].cwd, model="opus")
+    settings = Settings(**{**base.__dict__, "agent_slots": (slot,)})
     calls = []
 
     class FakeProc:
@@ -79,7 +81,7 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
                 '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ちは"}}}',
                 '{"type":"stream_event","event":{"type":"content_block_stop","index":0}}',
                 '{"type":"stream_event","event":{"type":"message_stop"}}',
-                '{"type":"result","total_cost_usd":0.001,"usage":{"inputTokens":10,"outputTokens":5}}',
+                '{"type":"result","result":"こんにちは","total_cost_usd":0.001,"usage":{"inputTokens":10,"outputTokens":5}}',
             ]
             return lines
 
@@ -100,6 +102,7 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
     # 2. 実行コマンドと引数確認
     command, cwd = calls[0]
     assert "--session-id" in command
+    assert command[command.index("--model") + 1] == "opus"
     # 生成されたUUIDを取り出す
     session_id_idx = command.index("--session-id") + 1
     session_id = command[session_id_idx]
@@ -107,6 +110,38 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
     # 3. セッションIDがファイルに保存されているか確認
     state_data = json.loads(Path(settings.agent_state_path).read_text(encoding="utf-8"))
     assert state_data[_slot_key(settings.agent_slots[0])] == session_id
+
+
+def test_claude_uses_result_when_stream_has_no_text(monkeypatch, tmp_path):
+    """差分イベントが空でもresult本文を最終応答として返す。"""
+    settings = _settings(tmp_path)
+
+    class FakeProc:
+        """Claude CLIの空ストリームと最終結果を再現する。"""
+
+        def wait(self):
+            """正常終了を返す。"""
+            return 0
+
+        @property
+        def stdout(self):
+            """本文差分を含まないNDJSONを返す。"""
+            return [
+                '{"type":"system","subtype":"init"}',
+                '{"type":"result","result":"最終回答です","total_cost_usd":0.001}',
+            ]
+
+        @property
+        def stderr(self):
+            """標準エラーがないことを返す。"""
+            return None
+
+    monkeypatch.setattr(
+        "argos.services.claude.cli.subprocess.Popen",
+        lambda *args, **kwargs: FakeProc(),
+    )
+
+    assert ClaudeCliClient(settings).ask("確認") == "最終回答です"
 
 
 def test_claude_uses_saved_session(monkeypatch, tmp_path):

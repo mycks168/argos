@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
@@ -91,6 +91,11 @@ class AntigravityCliClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._conversations[self._index].slot.provider
 
+    @property
+    def current_model(self) -> str:
+        """現在スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._conversations[self._index].slot)
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
         self._index = (self._index + 1) % len(self._conversations)
@@ -150,6 +155,9 @@ class AntigravityCliClient:
             command.append("--sandbox")
         if self._settings.antigravity_print_timeout:
             command.extend(["--print-timeout", self._settings.antigravity_print_timeout])
+        model = resolve_agent_slot_model(self._settings, conversation.slot)
+        if model:
+            command.extend(["--model", model])
         if self._settings.antigravity_continue_session and conversation.conversation_id:
             command.extend(["--conversation", conversation.conversation_id])
         command.extend(self._settings.antigravity_extra_args)

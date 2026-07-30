@@ -4,7 +4,7 @@
 
 ARGOS本体だけでなく、周辺サービスとスキルを含めて、1つのリポジトリからセットアップできるようにする。
 
-最終的には、利用者がARGOSリポジトリを取得し、1コマンドで必要なPython仮想環境、`.env`、systemd unit、ダッシュボードkioskを準備できる状態を目指す。
+最終的には、利用者がARGOSリポジトリを取得し、1コマンドで必要なPython仮想環境、`config.yaml`、systemd unit、ダッシュボードkioskを準備できる状態を目指す。
 
 ## 現環境で確認したサービス
 
@@ -78,13 +78,13 @@ uv run argos-install
 uv run argos-install --json
 ```
 
-実際に仮想環境作成、`.env` 作成、systemd unit生成、enable/startまで行う場合は `--apply` を付ける。
+実際に仮想環境作成、`config.yaml` 作成、systemd unit生成、enable/startまで行う場合は `--apply` を付ける。
 
 ```bash
 uv run argos-install --apply
 ```
 
-別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、ChromiumなどのOSパッケージ導入、`uv` のARGOS実行ユーザー向け導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
+別PCをARGOS専用機として初期化する場合は `--bootstrap` も付ける。これにより、`argos` ユーザー作成、`audio` などのデバイスアクセスグループ付与、`alsa-utils`、STT Gateway向けOpus変換に使う`ffmpeg`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、ChromiumなどのOSパッケージ導入、`uv` のARGOS実行ユーザー向け導入、user service用のlinger設定、`/opt/argos` の所有者調整をまとめて行う。
 user serviceが含まれる場合は、Chromiumやデスクトップセッションが使う `~/.config`、`~/.local`、`~/.cache` をARGOS実行ユーザー所有へ補正する。既存環境でこれらがrootや別ユーザー所有になっている場合も、`--apply` または `--update` で再補正する。
 OSパッケージはUbuntuとRaspberry Pi OSの両方を想定し、Chromiumのようにパッケージ名が異なるものは導入可能な候補を自動選択する。`uv` はaptパッケージ名の差を避けるため、ARGOS実行ユーザーで `https://astral.sh/uv/install.sh` を実行し、`~/.local/bin` に配置する。ARGOS本体の `uv sync` は `--extra face` を付け、顔認証用のOpenCVを標準で入れる。サブプロジェクトの `uv sync` もARGOS実行ユーザーで実行し、`.venv` がroot配下のPythonを参照しないようにする。
 
@@ -94,17 +94,22 @@ cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
+ARGOSの対応Pythonは3.11以上3.13未満である。`lgpio`の公式wheelがPython 3.12までしか
+提供されないためで、Ubuntu 26などシステムPythonが3.13以降の環境では、`uv`が互換の
+Pythonを自動的にダウンロードしてインストーラとサービス用仮想環境に使用する。
+システムPythonをダウングレードする必要はない。
+
 `develop` など未リリースブランチを検証する場合は、clone後に対象ブランチへ切り替えてからインストーラを実行する。mainへマージ済みの通常リリースではブランチ指定は不要。
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。 kioskを含む構成ではXorg、LightDM、Openboxを導入し、`argos`ユーザーの軽量画面セッションへ自動ログインする。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
-`.env.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+`config.yaml.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。旧 `.env` がある場合は全項目を `config.yaml` へ移行する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
 `argos-install --apply` と `--update` は、ARGOS本体の `ARGOS_DASHBOARD_TOKEN` を `services/argos-reminder/.env` にも反映する。両方が空の場合は共有トークンを生成する。これにより、argos-reminder が `POST /api/events` へ通知を送るときにBearer認証不一致で401になることを避ける。
 
 エージェントproviderは `codex`、`antigravity`、`claude`、`hermes` からカンマ区切りで選択し、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者IDを設定する。これにより、新規インストール時に不要なスロットが最初から表示されることを避ける。
 
-インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `.env` は保持したまま `uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。
+インストール済み環境を更新する場合は `--update` を使う。`argos` ユーザーで `git pull --ff-only` を実行し、既存の `config.yaml` は保持する。旧 `.env` だけがある環境では内容を `config.yaml` へ移行してから、`uv sync`、systemd unit再生成、daemon-reload、既定サービス再起動を行う。
 
 ```bash
 cd /opt/argos
@@ -121,7 +126,7 @@ claude
 hermes
 ```
 
-外部依存として残すSTTゲートウェイ、VOICEVOX、OSRM、Slack Webhookなどは `/opt/argos/.env` で指定する。
+外部依存として残すSTTゲートウェイ、VOICEVOX、OSRM、Slack Webhookなどは `/opt/argos/config.yaml` で指定する。
 
 `agent-limit` は systemd 常駐サービスではなく補助ツールとして同梱する。インストーラーは `/opt/argos/services/agent-limit/update_limits.py` が存在する場合、ARGOS実行ユーザーのcrontabへ5分おきの更新ジョブを重複なしで登録する。登録済み判定には `# ARGOS agent-limit updater` のマーカーを使う。cron登録は一時ファイルをARGOS実行ユーザーに読ませず、`crontab -` の標準入力へ内容を渡す。
 
@@ -136,7 +141,7 @@ cronはログインシェルのPATHを引き継がないため、更新ジョブ
 - `embedding_model.onnx`: 音声埋め込みモデル
 - `silero_vad_v6.onnx`: ウェイクワード後の発話終了判定に使うVADモデル
 
-`ARGOS_WAKEWORD_MODEL_DIR` は既定で `models/wakeword` を参照するため、リポジトリを `/opt/argos` に配置して `uv run argos-install --apply` した場合は追加コピーなしで利用できる。別パスへモデルを置く場合だけ `.env` で `ARGOS_WAKEWORD_MODEL_DIR` または `ARGOS_WAKEWORD_VAD_MODEL` を上書きする。
+`ARGOS_WAKEWORD_MODEL_DIR` は既定で `models/wakeword` を参照するため、リポジトリを `/opt/argos` に配置して `uv run argos-install --apply` した場合は追加コピーなしで利用できる。別パスへモデルを置く場合だけ `config.yaml` の `wakeword.model_dir` または `wakeword.vad_model` を上書きする。
 
 unit生成だけ確認したい場合は、出力先を一時ディレクトリへ向けて `--no-enable` を付ける。
 

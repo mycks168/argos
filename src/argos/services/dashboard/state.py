@@ -32,7 +32,7 @@ class DashboardState:
         self._subscribers: set[queue.Queue[int]] = set()
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
-        self._agent = {"name": "", "provider": "", "updated_at": _now_iso()}
+        self._agent = {"name": "", "provider": "", "usage_provider": "", "updated_at": _now_iso()}
         self._slots: dict[str, dict[str, Any]] = {}
         self._slot_order: list[str] = []
         self._audio = {"muted": False, "volume": 0, "updated_at": _now_iso()}
@@ -51,19 +51,21 @@ class DashboardState:
         self._center_alert = {"active": False, "updated_at": _now_iso()}
         self._overlay = {"active": False, "updated_at": _now_iso()}
         self._display_activity = {"sequence": 0, "updated_at": _now_iso()}
+        self._capabilities = {"conversation_memory": False}
         self._slot_stack_center = [{"type": "conversation", "title": "会話", "created_at": _now_iso()}]
         self._slot_stack_right = [{"type": "notifications", "title": "通知", "created_at": _now_iso()}]
 
     def snapshot(self) -> dict[str, Any]:
         """現在の表示状態をコピーして返す。"""
         with self._lock:
+            usage_provider = str(self._agent.get("usage_provider") or self._agent["provider"]).lower()
             return {
                 "revision": self._revision,
                 "status": deepcopy(self._status),
                 "agent": deepcopy(self._agent),
                 "slots": deepcopy([self._slots[key] for key in self._slot_order if key in self._slots]),
                 "agent_usage": {
-                    "current": deepcopy(self._agent_usage.get(str(self._agent["provider"]).lower())),
+                    "current": deepcopy(self._agent_usage.get(usage_provider)),
                     "providers": deepcopy(self._agent_usage),
                 },
                 "audio": deepcopy(self._audio),
@@ -72,6 +74,7 @@ class DashboardState:
                 "center_alert": deepcopy(self._center_alert),
                 "overlay": deepcopy(self._overlay),
                 "display_activity": deepcopy(self._display_activity),
+                "capabilities": deepcopy(self._capabilities),
                 "messages": deepcopy(list(self._current_messages_locked())),
                 "notifications": deepcopy(list(self._notifications)),
                 "slot_stacks": {
@@ -91,7 +94,7 @@ class DashboardState:
         with self._lock:
             return str(self._status["code"])
 
-    def set_agent(self, name: str, provider: str) -> None:
+    def set_agent(self, name: str, provider: str, model: str = "", usage_provider: str = "") -> None:
         """現在のエージェントスロット表示を更新する。"""
         with self._lock:
             self._current_slot_key = _slot_key(name, provider)
@@ -108,15 +111,27 @@ class DashboardState:
             self._agent = {
                 "name": name,
                 "provider": provider,
+                "model": model,
+                "usage_provider": usage_provider.strip().lower() or provider.strip().lower(),
                 "updated_at": _now_iso(),
             }
             self._publish_locked()
 
-    def set_slots(self, slots: list[tuple[str, str]]) -> None:
+    def set_slots(self, slots: list[tuple[str, str] | tuple[str, str, str]]) -> None:
         """表示するエージェントスロット一覧を設定する。"""
         with self._lock:
-            for name, provider in slots:
+            for slot in slots:
+                name, provider = slot[:2]
                 self._ensure_slot_locked(name, provider)
+                model = slot[2] if len(slot) > 2 else ""
+                key = _slot_key(name, provider)
+                self._slots[key] = {**self._slots[key], "model": model}
+            self._publish_locked()
+
+    def set_conversation_memory_enabled(self, enabled: bool) -> None:
+        """会話引き継ぎ操作の利用可否を表示状態へ設定する。"""
+        with self._lock:
+            self._capabilities["conversation_memory"] = bool(enabled)
             self._publish_locked()
 
     def set_slot_busy(self, name: str, provider: str, busy: bool) -> None:
@@ -209,7 +224,14 @@ class DashboardState:
             self._publish_locked()
         return message_id
 
-    def add_message_to_slot(self, name: str, provider: str, role: str, text: str) -> str:
+    def add_message_to_slot(
+        self,
+        name: str,
+        provider: str,
+        role: str,
+        text: str,
+        streaming: bool = False,
+    ) -> str:
         """指定スロットへ会話メッセージを追加し、メッセージIDを返す。"""
         message_id = uuid.uuid4().hex
         key = _slot_key(name, provider)
@@ -220,7 +242,7 @@ class DashboardState:
                     "id": message_id,
                     "role": role,
                     "text": text,
-                    "streaming": False,
+                    "streaming": streaming,
                     "created_at": _now_iso(),
                 }
             )
@@ -228,6 +250,81 @@ class DashboardState:
             self._cleanup_message_slots_locked()
             self._publish_locked()
         return message_id
+
+    def slot_messages(self, name: str, provider: str) -> list[dict[str, Any]]:
+        """指定スロットの会話履歴を返す。"""
+        key = _slot_key(name, provider)
+        with self._lock:
+            return deepcopy(list(self._messages_by_slot.get(key, ())))
+
+    def replace_slot_messages(self, name: str, provider: str, messages: list[dict[str, Any]]) -> None:
+        """指定スロットの会話履歴を外部履歴で置き換える。"""
+        key = _slot_key(name, provider)
+        normalized = deque(maxlen=self._max_messages)
+        with self._lock:
+            self._ensure_slot_locked(name, provider)
+            for item in messages[-self._max_messages :]:
+                role = str(item.get("role", "")).strip()
+                text = str(item.get("text", ""))
+                if role not in {"user", "assistant"} or not text:
+                    continue
+                message_id = str(item.get("id", "")).strip() or uuid.uuid4().hex
+                normalized.append(
+                    {
+                        "id": message_id,
+                        "role": role,
+                        "text": text,
+                        "streaming": False,
+                        "created_at": str(item.get("created_at", "")).strip() or _now_iso(),
+                    }
+                )
+                self._message_slots[message_id] = key
+            self._messages_by_slot[key] = normalized
+            self._cleanup_message_slots_locked()
+            self._publish_locked()
+
+    def merge_slot_messages(self, name: str, provider: str, messages: list[dict[str, Any]]) -> None:
+        """保存済み履歴を残し、外部履歴の未登録メッセージだけを追加する。"""
+        existing = self.slot_messages(name, provider)
+        seen = {
+            (
+                str(item.get("id", "")),
+                str(item.get("role", "")),
+                str(item.get("text", "")),
+                str(item.get("created_at", "")),
+            )
+            for item in existing
+        }
+        merged = list(existing)
+        for item in messages:
+            identity = (
+                str(item.get("id", "")),
+                str(item.get("role", "")),
+                str(item.get("text", "")),
+                str(item.get("created_at", "")),
+            )
+            if identity not in seen:
+                merged.append(item)
+                seen.add(identity)
+        self.replace_slot_messages(name, provider, merged)
+
+    def export_histories(self) -> dict[str, list[dict[str, Any]]]:
+        """永続化用に全スロットの会話履歴を返す。"""
+        with self._lock:
+            return {
+                key: deepcopy(list(messages))
+                for key, messages in self._messages_by_slot.items()
+                if key != _slot_key("", "")
+            }
+
+    def restore_histories(self, histories: dict[str, list[dict[str, Any]]]) -> None:
+        """保存済みの全スロット履歴を表示状態へ復元する。"""
+        for key, messages in histories.items():
+            if "\0" not in key:
+                continue
+            provider, name = key.split("\0", 1)
+            if name and provider:
+                self.replace_slot_messages(name, provider, messages)
 
     def append_message(self, message_id: str, delta: str) -> None:
         """指定メッセージへ応答差分を追記する。"""
@@ -466,6 +563,7 @@ class DashboardState:
             "key": key,
             "name": name,
             "provider": provider,
+            "model": "",
             "active": key == self._current_slot_key,
             "busy": False,
             "unread": False,

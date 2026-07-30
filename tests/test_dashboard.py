@@ -4,6 +4,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 import pytest
+import yaml
 
 from argos.services.dashboard import location as dashboard_location
 from argos.services.dashboard import server as dashboard_server
@@ -27,7 +28,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     """画面へ表示する状態をまとめて保持できる。"""
     state = DashboardState()
     state.set_status("thinking", "考え中")
-    state.set_agent("アンチグラビティ", "antigravity")
+    state.set_agent("アンチグラビティ", "antigravity", "Gemini Test")
     state.set_audio_muted(True)
     state.set_audio_volume(64)
     state.set_microphone_enabled(False)
@@ -61,6 +62,7 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["status"]["code"] == "thinking"
     assert snapshot["agent"]["name"] == "アンチグラビティ"
     assert snapshot["agent"]["provider"] == "antigravity"
+    assert snapshot["agent"]["model"] == "Gemini Test"
     assert snapshot["slots"][0]["name"] == "アンチグラビティ"
     assert snapshot["slots"][0]["active"] is True
     assert snapshot["audio"]["muted"] is True
@@ -74,6 +76,19 @@ def test_dashboard_state_keeps_messages_notifications_and_status():
     assert snapshot["messages"][0]["text"] == "返答"
     assert snapshot["messages"][0]["streaming"] is False
     assert snapshot["notifications"][0]["title"] == "メール"
+
+
+def test_dashboard_state_uses_remote_slot_usage_provider():
+    """リモートスロットでも接続先プロバイダの利用枠を現在値として返す。"""
+    state = DashboardState()
+    state.set_agent_usage("codex", {"available": True, "label": "Codex"})
+
+    state.set_agent("mint-codex", "remote", usage_provider="codex")
+
+    snapshot = state.snapshot()
+    assert snapshot["agent"]["provider"] == "remote"
+    assert snapshot["agent"]["usage_provider"] == "codex"
+    assert snapshot["agent_usage"]["current"]["provider"] == "codex"
 
 
 def test_dashboard_state_wake_display_updates_activity():
@@ -121,10 +136,27 @@ def test_dashboard_state_keeps_messages_per_agent_slot():
     assert first_id != second_id
 
 
+def test_dashboard_state_streams_message_to_inactive_slot():
+    """選択状態を変えず指定スロットの応答を逐次更新できる。"""
+    state = DashboardState()
+    state.set_agent("作業", "codex")
+    message_id = state.add_message_to_slot(
+        "調査",
+        "claude",
+        "assistant",
+        "",
+        streaming=True,
+    )
+
+    state.append_message(message_id, "回答")
+    assert state.slot_messages("調査", "claude")[0]["text"] == "回答"
+    assert state.slot_messages("調査", "claude")[0]["streaming"] is True
+
+
 def test_dashboard_state_tracks_slot_unread_and_busy():
     """スロットごとの未読と処理中状態を保持する。"""
     state = DashboardState()
-    state.set_slots([("作業", "codex"), ("調査", "antigravity")])
+    state.set_slots([("作業", "codex", "gpt-test"), ("調査", "antigravity", "Gemini Test")])
     state.set_agent("作業", "codex")
     state.set_slot_busy("調査", "antigravity", True)
     state.set_slot_unread("調査", "antigravity", True)
@@ -135,6 +167,7 @@ def test_dashboard_state_tracks_slot_unread_and_busy():
     assert slots["作業"]["active"] is True
     assert slots["調査"]["busy"] is True
     assert slots["調査"]["unread"] is True
+    assert slots["作業"]["model"] == "gpt-test"
 
     state.set_agent("調査", "antigravity")
     slots = {slot["name"]: slot for slot in state.snapshot()["slots"]}
@@ -182,7 +215,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
     state = DashboardState()
     snapshot_path = tmp_path / "camera-latest.jpg"
     snapshot_path.write_bytes(b"jpeg-data")
-    server = DashboardServer(state, "127.0.0.1", 0, "secret", snapshot_path, screensaver_seconds=12.5, default_font_size="small")
+    server = DashboardServer(
+        state, "127.0.0.1", 0, "secret", camera_snapshot_path=snapshot_path, screensaver_seconds=12.5, default_font_size="small"
+    )
     server.start()
     base_url = f"http://{server.address[0]}:{server.address[1]}"
     try:
@@ -203,6 +238,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert ".notifications::-webkit-scrollbar" in html
         assert "id=\"splash\"" in html
         assert "showSplash()" in html
+        assert 'pageQuery.get("from")' in html
+        assert 'window.history.replaceState({}, "", window.location.pathname)' in html
+        assert "if (skipInitialSplash)" in html
         assert 'data-code="booting"' in html
         assert 'stream.addEventListener("open", refresh)' in html
         assert 'data-code="locked"' in html
@@ -213,19 +251,21 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'body[data-status-code="thinking"]::after' in html
         assert ".status[data-code=\"transcribing\"] .status-dot" in html
         assert "status-frame-flow" in html
-        assert 'document.body.dataset.statusCode = state.status.code || "ready";' in html
+        assert 'document.body.dataset.statusCode = displayStatus.code || "ready";' in html
         assert "CURRENT SLOT" in html
         assert 'id="agent-name"' in html
         assert 'id="agent-usage"' in html
         assert "renderAgentUsage(state.agent_usage?.current)" in html
         assert "formatUsageBucket(bucket)" in html
-        assert 'id="slots"' in html
-        assert ".slots::-webkit-scrollbar" in html
-        assert "overflow-x: auto" in html
-        assert "touch-action: pan-x" in html
-        assert "border-radius: 999px" in html
-        assert 'data-unread="${slot.unread ? "true" : "false"}"' in html
+        assert 'id="agent-selector"' in html
+        assert 'id="slot-menu"' in html
+        assert 'agentSelector.addEventListener("click"' in html
+        assert 'slotMenu.addEventListener("click"' in html
+        assert 'id="session-compact-button"' in html
+        assert "state.capabilities?.conversation_memory" in html
+        assert "availableSlots = state.slots || []" in html
         assert "state.agent?.provider" in html
+        assert "state.agent?.model" in html
         assert 'class="brand-row"' in html
         assert 'class="brand-controls"' in html
         assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html
@@ -275,6 +315,100 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'id="iframe-right"' in html
         assert 'id="swap-button"' in html
         assert 'sendEvent("clear_overlay", { target_slot: slot })' in html
+        assert 'fetch("/api/terminal/slots/select"' in html
+        assert 'selectAgentSlot(selected.name || "", selected.provider || "")' in html
+        assert 'id="text-composer"' in html
+        assert 'id="text-input"' in html
+        assert '"Content-Type": "text/plain; charset=utf-8"' in html
+        assert '"Accept": "text/event-stream"' in html
+        assert 'fetch("/api/terminal/turn"' in html
+        assert 'id="voice-input-button"' in html
+        assert '"audio/mp4;codecs=mp4a.40.2"' in html
+        assert "navigator.mediaDevices.getUserMedia" in html
+        assert '\"Accept\": \"text/event-stream, audio/wav\"' in html
+        assert "consumeVoiceTurnEvents(response.body)" in html
+        assert "const inFlightTextSlots = new Set();" in html
+        assert "inFlightTextSlots.has(currentAgentSlotKey)" in html
+        assert "textInput.disabled = false;" in html
+        # 送信が母艦へ届かなかったときに理由を画面へ出す（端末のエラー表示に合わせる）。
+        assert 'id="text-composer-error"' in html
+        assert "setTextComposerError(describeTurnSendError(error));" in html
+        assert '"母艦に繋がらないみたい"' in html
+        assert "await describeTurnResponseError(response)" in html
+        assert "let pttActiveKey = null;" in html
+        assert 'const isPttKey = event.code === "Space"' in html
+        assert 'data-layout="standard"' in html
+
+        with urlopen(base_url + "/sp", timeout=2) as response:
+            assert response.headers["Cache-Control"] == "no-store"
+            sp_html = response.read().decode("utf-8")
+        assert 'data-layout="sp"' in sp_html
+        assert 'id="sp-status-button"' in sp_html
+        assert 'body[data-layout="sp"].sp-left-pinned' in sp_html
+        assert 'window.visualViewport?.addEventListener("resize", updateSpViewport)' in sp_html
+        assert 'body[data-layout="sp"] .dashboard' in sp_html
+        assert 'const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";' in sp_html
+        assert "if (rightOpen) markSpNotificationsSeen();" in sp_html
+        assert "latestNotifications.filter" in sp_html
+        assert 'id="layout-switch-grid"' in html
+        assert 'data-default-layout-option="grid"' in html
+
+        with urlopen(base_url + "/grid", timeout=2) as response:
+            assert response.headers["Cache-Control"] == "no-store"
+            grid_html = response.read().decode("utf-8")
+        assert "ARGOS スロット一覧" in grid_html
+        assert "/api/terminal/turn?${query}" in grid_html
+        assert 'Accept: "text/event-stream, audio/wav"' in grid_html
+        assert '(slot.type || "local") === "local"' in grid_html
+        assert 'const dashboardToken = "secret";' in grid_html
+        assert "height: 100dvh" in grid_html
+        assert "grid-template-rows: auto minmax(0, 1fr)" in grid_html
+        assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
+        assert ".messages { min-height: 0; overflow: auto; padding: 6px 8px; }" in grid_html
+        assert ".message { width: fit-content; max-width: 92%; margin: 3px 0; padding: 4px 8px;" in grid_html
+        assert 'const text = String(message.text ?? "").trim();' in grid_html
+        assert '>${escapeHtml(text)}</div>`' in grid_html
+        assert '#69b7e4' in grid_html
+        assert '#f4d35e0d' in grid_html
+        assert 'background: #070b0f' in grid_html
+        assert '"#00b140"' in grid_html
+        assert '"#ff4d4d"' in grid_html
+        assert 'tile.dataset.attention = "true"' in grid_html
+        assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
+        assert 'tile.querySelector(".tile-status").textContent = "実行中"' in grid_html
+        assert 'state.status.code !== "ready"' in grid_html
+        assert "consumeTurnEvents(response, key)" in grid_html
+        assert "tile.tabIndex = 0" in grid_html
+        assert 'tile.setAttribute("role", "group")' in grid_html
+        assert 'tile.focus({preventScroll: true})' in grid_html
+        assert 'class="maximize"' in grid_html
+        assert 'title="最大化">⛶</button>' in grid_html
+        assert 'class="tile-actions"' in grid_html
+        assert 'id="usage-button"' in grid_html
+        assert 'id="settings-button"' in grid_html
+        assert 'href="/?from=grid&amp;open=settings">⚙️ 設定</a>' in grid_html
+        assert "shouldOpenSettings" in html
+        assert 'height: 36px' in grid_html
+        assert 'id="usage-dialog"' in grid_html
+        assert 'latestState?.agent_usage?.providers' in grid_html
+        assert 'class="usage-progress-bar"' in grid_html
+        assert 'usageBucketMarkup("5時間"' in grid_html
+        assert 'usageBucketMarkup("週間"' in grid_html
+        assert 'messages.scrollTop = messages.scrollHeight' in grid_html
+        assert 'requestAnimationFrame(scrollToLatest)' in grid_html
+        assert 'window.setTimeout(scrollToLatest, 100)' in grid_html
+        assert 'grid.scrollTop = gridScroll.top' in grid_html
+        assert 'event.type === "dblclick"' not in grid_html
+        assert 'tile.addEventListener("dblclick"' in grid_html
+        assert 'classList.toggle("is-maximized")' in grid_html
+        assert 'event.key !== "Escape"' in grid_html
+        assert 'id="mute-button"' in grid_html
+        assert 'event.code === "Space"' in grid_html
+        assert '/^F(1[3-9]|2[0-4])$/' in grid_html
+        assert "playPendingAudio(key)" in grid_html
+        assert 'event.event === "audio" && event.data' in grid_html
+        assert 'localStorage.setItem("argos-grid-muted"' in grid_html
+        assert 'audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}' in grid_html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
@@ -310,6 +444,71 @@ def test_dashboard_control_api_calls_handler():
     assert status == 200
     assert body == {"muted": True, "volume": 55}
     assert calls == [{"action": "mute", "volume": 55}]
+
+
+def test_dashboard_settings_page_and_authenticated_config_api(tmp_path, monkeypatch):
+    """設定画面を配信し、認証付きAPIでYAMLを更新できる。"""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("audio:\n  output_volume: 70\n", encoding="utf-8")
+    monkeypatch.setattr(
+        dashboard_server,
+        "list_audio_devices",
+        lambda: {"inputs": [{"value": "mic", "label": "USBマイク"}], "outputs": []},
+    )
+    server = DashboardServer(
+        DashboardState(),
+        "127.0.0.1",
+        0,
+        "secret",
+        config_path=config_path,
+    )
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        with urlopen(base_url + "/settings", timeout=2) as response:
+            html = response.read().decode("utf-8")
+        assert "ARGOS 設定" in html
+        assert 'const dashboardToken = "secret";' in html
+        assert "config.yamlの全項目" in html
+        assert 'href="/?from=settings"' in html
+        assert "設定名や説明を検索" in html
+        assert "test-microphone" in html
+        assert 'document.addEventListener("pointerdown"' in html
+        assert 'target.closest("input, select, textarea, button, a, label, summary")' in html
+        assert 'window.scrollBy({top: deltaY, left: 0, behavior: "auto"})' in html
+        assert "body.drag-scrolling" in html
+        assert "-webkit-user-select: none" in html
+        assert "input, textarea { user-select: text" in html
+        assert "startInertiaScroll(finished.velocity)" in html
+        assert "requestAnimationFrame(step)" in html
+        assert "Math.min(2.4, initialVelocity)" in html
+        assert "stopInertiaScroll()" in html
+
+        with pytest.raises(HTTPError) as error:
+            _read_json(base_url + "/api/config")
+        assert error.value.code == 401
+
+        status, body = _read_json(base_url + "/api/config", token="secret")
+        assert status == 200
+        assert any(field["description"] for field in body["fields"])
+
+        status, body = _read_json(base_url + "/api/config/audio-devices", token="secret")
+        assert status == 200
+        assert body["inputs"][0]["label"] == "USBマイク"
+
+        status, body = _read_json(
+            base_url + "/api/config",
+            "PUT",
+            {"values": {"audio.output_volume": 45}},
+            "secret",
+        )
+        assert status == 200
+        assert body["saved"] is True
+        assert body["restart_required"] is True
+    finally:
+        server.stop()
+
+    assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["audio"]["output_volume"] == 45
 
 
 def test_dashboard_event_api_calls_handler():
@@ -613,8 +812,8 @@ def test_dashboard_server_serves_remote_location(monkeypatch):
     """リモートGPS設定時は指定URLから現在地を返す。"""
     calls = []
 
-    def fake_read_location(provider, device_path, remote_url, timeout_seconds):
-        calls.append((provider, remote_url, timeout_seconds))
+    def fake_read_location(provider, device_path, remote_url, timeout_seconds, remote_token=""):
+        calls.append((provider, remote_url, timeout_seconds, remote_token))
         return {
             "available": True,
             "lat": 35.0,
@@ -642,7 +841,7 @@ def test_dashboard_server_serves_remote_location(monkeypatch):
 
     assert payload["available"] is True
     assert payload["lat"] == 35.0
-    assert calls == [("remote", "http://example.test/gps", 1.5)]
+    assert calls == [("remote", "http://example.test/gps", 1.5, "")]
 
 
 def test_dashboard_state_center_alert_for_center_display():
@@ -777,3 +976,65 @@ def test_prune_uploads_keeps_newest(tmp_path):
     dashboard_server._prune_uploads(tmp_path, keep=2)
     remaining = sorted(p.name for p in tmp_path.iterdir())
     assert remaining == ["2.jpg", "3.jpg"]
+
+
+def test_dashboard_view_key_guards_read_endpoints():
+    """閲覧キー設定時は画面・状態・SSEなど閲覧系に認証を要求する。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", view_key="viewkey")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        # キーなしはページも状態APIも拒否する
+        for path in ("/", "/api/state"):
+            try:
+                urlopen(base_url + path, timeout=2)
+            except HTTPError as exc:
+                assert exc.code == 401
+            else:
+                raise AssertionError(f"{path} が認証なしで閲覧できました")
+
+        # 誤ったキーも拒否する
+        try:
+            urlopen(base_url + "/?key=wrong", timeout=2)
+        except HTTPError as exc:
+            assert exc.code == 401
+        else:
+            raise AssertionError("誤ったキーで閲覧できました")
+
+        # ヘルスチェックは常に開放する
+        status, _ = _read_json(base_url + "/api/health")
+        assert status == 200
+
+        # 正しいキー付きはHTMLとCookieを返す
+        with urlopen(base_url + "/?key=viewkey", timeout=2) as response:
+            assert response.status == 200
+            cookie_header = response.headers.get("Set-Cookie", "")
+            assert "argos_view_key=viewkey" in cookie_header
+            assert "HttpOnly" in cookie_header
+            assert "ARGOS Dashboard" in response.read().decode("utf-8")
+
+        # 発行済みCookieだけで状態APIを読める
+        request = Request(base_url + "/api/state", headers={"Cookie": "argos_view_key=viewkey"})
+        with urlopen(request, timeout=2) as response:
+            assert response.status == 200
+
+        # Bearerトークンでも閲覧できる（スクリプト用）
+        status, _ = _read_json(base_url + "/api/state", token="secret")
+        assert status == 200
+    finally:
+        server.stop()
+
+
+def test_dashboard_without_view_key_stays_open():
+    """閲覧キー未設定なら従来通り認証なしで閲覧できる。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        with urlopen(base_url + "/", timeout=2) as response:
+            assert response.status == 200
+            assert response.headers.get("Set-Cookie") is None
+        status, _ = _read_json(base_url + "/api/state")
+        assert status == 200
+    finally:
+        server.stop()

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from collections.abc import Generator
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 
@@ -102,6 +102,11 @@ class CodexCliClient:
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
         return self._conversations[self._index].slot.provider
+
+    @property
+    def current_model(self) -> str:
+        """現在スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._conversations[self._index].slot)
 
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
@@ -222,8 +227,9 @@ class CodexCliClient:
             if not self._settings.codex_bypass_sandbox:
                 base.extend(["-s", self._settings.codex_sandbox])
             prompt_args = ["-"]
-        if self._settings.codex_model:
-            base.extend(["-m", self._settings.codex_model])
+        model = resolve_agent_slot_model(self._settings, slot)
+        if model:
+            base.extend(["-m", model])
         extra_args = list(self._settings.codex_extra_args)
         if "--json" not in extra_args:
             extra_args.append("--json")

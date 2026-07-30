@@ -51,6 +51,10 @@ cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
+Ubuntu 26など、システムのPythonが3.13以降の場合も同じコマンドを使用できます。ARGOSは
+`lgpio`の公式wheelが提供されるPython 3.11/3.12を対象としており、互換Pythonがない場合は
+`uv`が自動的にダウンロードして使用します。通常、システムPythonの入れ替えは不要です。
+
 `develop` など未リリースブランチを検証する場合だけ、clone後に対象ブランチへ切り替えてからインストーラを実行してください。通常の導入手順はブランチ名に依存しません。
 
 インストール後はARGOS実行ユーザーで、利用するエージェントCLIの初回ログインを済ませます。
@@ -72,14 +76,21 @@ journalctl -u argos.service -f
 
 ## 更新する場合
 
-更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `.env` は上書きしません。
+更新する場合は、`/opt/argos` で次を実行します。Git pull、依存更新、systemd unit再生成、既定サービス再起動まで行います。既存の `config.yaml` は上書きしません。
 
 ```bash
 cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --update
 ```
 
-設定を変更した場合は `.env` を更新してから再起動します。tts-filter を使う場合は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` が一致している必要があります。`argos-install --apply` または `--update` はこの値を自動で揃えます。
+設定を変更した場合は `config.yaml` を更新してから再起動します。ARGOS本体の設定は機能別の階層へ記載し、スキルへ渡す`SLACK_WEBHOOK_URL`などの汎用値だけ`environment`へ記載します。環境変数は一時的な上書きに使え、旧 `.env` も移行互換として読み込まれます。詳しい形式と優先順位は [docs/basic_design.md](docs/basic_design.md#設定ファイル) を参照してください。
+
+既存の `.env` だけを `config.yaml` へ変換する場合は、次を実行します。インストール、依存更新、サービス再起動は行わず、既存の `config.yaml` がある場合は上書きせず終了します。
+
+```bash
+cd /opt/argos
+uv run argos-install --migrate-config
+```
 
 ```bash
 sudo systemctl restart argos.service
@@ -94,23 +105,28 @@ uv run argos-install
 uv run argos-install --json
 ```
 
-既存環境で `.env` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
+既存環境で `config.yaml` 作成、`uv sync`、systemd unit生成、enable/startまで行う場合:
 
 ```bash
 uv run argos-install --configure --apply
 ```
 
-`--bootstrap` は `argos` ユーザーがなければ作成し、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、`/opt/argos` の所有者も `argos:argos` に揃えます。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
+`--bootstrap` は `argos` ユーザーがなければ作成し、`ffmpeg`、`build-essential`、`python3-dev`、`swig`、`liblgpio-dev`、`cron`、IPAフォント、Chromiumなどを導入して、kioskを含む構成ではXorg、LightDM、Openboxも導入して`argos`ユーザーで画面セッションへ自動ログインし、`/opt/argos` の所有者も `argos:argos` に揃えます。`ffmpeg` はSTT Gateway向けのOpus変換にも使用します。`uv` はARGOS実行ユーザーの `~/.local/bin` へ導入し、ARGOS本体は `uv sync --extra face` で顔認証用OpenCVも含めて同期します。user serviceが使う `~/.config`、`~/.local`、`~/.cache` の所有者も補正します。
 
-`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `.env` へ設定します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
+`--configure` はSTTゲートウェイ、VOICEVOX、OSRM、GPS API、マイク、スピーカーなどを対話式に `config.yaml` へ設定します。旧 `.env` がある場合は内容を失わず自動移行します。利用するエージェントproviderを選んだうえで、ダッシュボードに出す会話スロット名、作業ディレクトリ、VOICEVOX話者IDも設定できます。Codex、Antigravity、Claude、HermesなどのOAuth認証は自動化しません。
+
+別のARGOSを会話スロットとして使う場合は、`config.yaml`の`agent.slots`へ`type: remote`のスロットを追加します。ローカルスロットと同じ配列へ任意の順番で配置できます。設定例は [docs/basic_design.md](docs/basic_design.md#リモートargosスロット) を参照してください。
 
 対象サービスと取り込み方針は [docs/bundled_installer.md](docs/bundled_installer.md) を参照してください。
 ウェイクワード用のONNXモデルは `models/wakeword/` に同梱しているため、`ARGOS_WAKEWORD_MODEL_DIR=models/wakeword` の既定値で利用できます。
 
-複数のマイク候補を使う場合は、`.env` の `AUDIO_INPUT_DEVICES` にセミコロン区切りで指定します。`ARGOS_INPUT_DEVICES` と `ARGOS_AUDIO_INPUT_DEVICES` でも指定できます。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
+複数のマイク候補を使う場合は、`config.yaml` の `audio.input_devices` に配列で指定します。録音開始時に接続済みの `CARD=...` を選びます。ALSAカード名に右側空白が含まれる場合も、空白を除いて照合します。
 
-```text
-AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
+```yaml
+audio:
+  input_devices:
+    - default
+    - plughw:CARD=USBMic,DEV=0
 ```
 
 ## PTT 操作
@@ -132,13 +148,19 @@ AUDIO_INPUT_DEVICES=default;plughw:CARD=USBMic,DEV=0
 ## ウェイクワード
 
 `ARGOS_WAKEWORD_ENABLED=true` にすると、LiveKit形式のONNXモデルで「アルゴス」を常時監視します。検知後は同じマイクストリームから発話をWAV化し、既存の文字起こし、エージェント、読み上げ処理へ渡します。検知は2秒窓を無音で前詰めして早い段階から開始し、短い発話の先頭を取りこぼさないよう、既定で検知直前3秒の音声もWAV先頭へ含めます。発話終了は既定でSilero VADを使います。PTT操作は引き続き使えます。
+
+物理ミュート付きマイクで呼びかけを省略する場合は、`ARGOS_LISTEN_MODE=vad` を設定します。ミュート解除後にSilero VADが発話を検知すると録音を開始し、無音で終了して通常の文字起こしと応答へ渡します。既定の `wakeword` モードには影響しません。
 自宅などSTTゲートウェイが近く誤検知を抑えたい環境では、`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` にすると、文字起こし結果が「アルゴス」などの呼びかけから始まる場合だけ処理します。ダッシュボードのマイクOFFボタンを押すと、PTTとウェイクワードの受付を一時停止できます。
+
+誤検知で破棄された録音は、既定で `/tmp/argos/wakeword-candidates/hard_negative/` に音声と判定理由を保存します。周囲の会話を誤検知候補として判別するには `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` も有効にします。内容を聞いて誤検知だと確認したものだけ、wakeword trainerの `raw-dataset/hard_negative/` へ移してください。保存を止める場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE=false`、保存先を変える場合は `ARGOS_WAKEWORD_FALSE_POSITIVE_DIR` を設定します。`/tmp` 配下は再起動で消えるため、確認前に必要な候補を退避してください。
 
 応答の読み上げが終わったあと、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけウェイクワードを言い直さずに続けて話せます。この間に話しかけると、そのまま次の発話として受け付け、応答のたびに窓が開き直すので会話が続きます。この追いかけ受付は本人確認済みのときだけ有効で、無音のまま数秒たつと通常の待機に戻ります。
 
 `ARGOS_WAKEWORD_BARGEIN_ENABLED=true` にすると、読み上げ中でもウェイクワードで割り込んで（バージイン）、進行中の読み上げを止めて次の発話を受け付けられます。ウェイクワードonly運用でTTSを止める手段が無い問題への対策です。ただし自分の声に反応しないよう、マイク入力を音響エコーキャンセル(AEC)済みの経路にすることが前提です。`scripts/setup-echo-cancel.sh`（Raspberry Pi OS / Ubuntu 共通、`--install-deps`で依存導入、`--revert`で撤去）でPipeWireのエコーキャンセルとALSAブリッジを設定します（詳細は `docs/basic_design.md`）。既定は無効です。
 
 モデルは `ARGOS_WAKEWORD_MODEL_DIR` に配置します。
+
+Raspberry Pi AI HAT+のHailo-8を使う場合は、Hailo用にコンパイルした`embedding.hef`を配置し、`ARGOS_WAKEWORD_EMBEDDING_HEF=models/wakeword/embedding.hef`を設定します。メル特徴量と最終分類はONNX Runtime、負荷の大きい音声埋め込みはHailoで実行します。HEF設定が空の場合は従来どおり全段をCPUで実行します。
 
 ```text
 models/wakeword/
@@ -236,13 +258,20 @@ ARGOS_DASHBOARD_SCREENSAVER_SECONDS=300
 
 ブラウザで `http://localhost:8765/` を開くと、ARGOSの状態、現在のエージェントスロット、Wi-Fi接続状態、会話履歴、外部通知を表示します。1920x440では3列、800x600程度では通知欄を右側に残すコンパクト3列、さらに狭い画面では通知欄を下へ回り込ませます。
 会話更新時は通知欄を再描画しないため、表示中の画像を安定して保持します。
-中央の会話欄と右側の通知欄はタッチ操作で縦にスクロールできます。会話欄は現在のエージェントスロットごとに切り替わり、末尾を表示しているときだけ新しい会話へ自動追従するため、過去ログを読んでいる途中で表示位置は変わりません。左側パネルにはスロット一覧を横並びチップで表示し、スロット数が増えた場合は一覧だけを横にスクロールできます。裏で完了したスロットは未読表示にします。表示中ではないスロットの応答は読み上げず、そのスロットへ切り替えたときに句読点単位で分割して読み上げます。
+中央の会話欄と右側の通知欄はタッチ操作で縦にスクロールできます。会話欄は現在のエージェントスロットごとに切り替わり、末尾を表示しているときだけ新しい会話へ自動追従するため、過去ログを読んでいる途中で表示位置は変わりません。左側パネルの `CURRENT SLOT` 表示をタップすると全スロットの一覧が開きます。裏で完了したスロットは未読表示にします。表示中ではないスロットの応答は読み上げず、そのスロットへ切り替えたときに句読点単位で分割して読み上げます。
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` 秒間操作がない場合は、ロック中も黒い全画面表示へ切り替わります。0以下にすると無効化できます。現段階ではバックライトやHDMI出力は消しません。タッチ操作に加えて、PTT録音開始でも黒表示を解除します。
 地図オーバーレイの現在地は、既定ではローカルのgpsdまたはGPSデバイスから取得します。外部端末のGPS APIを使う場合は、`.env` で `ARGOS_LOCATION_PROVIDER=remote` と `ARGOS_REMOTE_LOCATION_URL` を設定します。
 ARGOSロゴ直下のミュートボタンで読み上げを一時停止できます。ミュート中は再生中の音声を止め、解除後はキューに残っている読み上げから再開します。ミュート状態はボタン表示で示し、録音中などの動作表示はそのまま維持します。
+会話欄下部の入力欄からテキストを送ると、現在のエージェントスロットへ同じ会話の続きとして入力できます。この操作ではSTTとTTSを使わず、回答も会話欄へ文字で表示します。iPhoneやiPadなど、同じダッシュボードへ接続できるブラウザからも利用できます。
+左側の `CURRENT SLOT` 表示をクリックまたはタップして一覧から選ぶと、そのスロットへ切り替えて会話履歴を表示できます。`agent.slots`の`ptt_cycle: false`を指定したスロットは、画面から選択できますがPTTダブルクリックの巡回対象にはなりません。
+
+`conversation_history.enabled: true`にすると、回答完了時にスロット別の画面会話履歴を保存し、ARGOS再起動後に復元します。設定画面の「履歴を引き継いで新規セッション」は、現在の履歴をエージェントに要約させてセッションをリセットし、次回の入力へ要約を一度だけ付与します。この機能は`conversation_memory.enabled: true`の場合に利用できます。
+回答処理中でも別の空いているスロットへ切り替えて、テキスト会話を続けられます。裏のスロットで回答が完了すると、そのスロットが未読表示になります。
+スマートフォンやタブレットでは `/sp` を開くと、本文をスクロールさせない専用表示を利用できます。左上のボタンで状態・スロット、右上のベルで通知を開閉します。通知バッジは未確認件数を示し、通知欄を開くと履歴を残したまま端末ごとに確認済みになります。
+HTTPSで開いた `/sp` では、入力欄横のマイクボタンをタップして録音を開始し、もう一度タップして音声を送信できます。回答音声は同じブラウザで順次再生されます。初回はSafariなどのマイク利用許可が必要です。
 同じ操作行のマイクOFFボタンで、PTTとウェイクワードの受付を一時停止できます。もう一度押すとマイク受付を再開します。Wi-Fi状態は接続中だけARGOSロゴ横に表示します。
 左側のフォントサイズボタンで、ダッシュボードの主要テキストを `小`、`中`、`大` から切り替えられます。選択値はブラウザのローカルストレージに保存され、キオスク画面の再読み込み後も維持されます。未保存時の初期値は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` で指定できます。
-`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
+`ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` にJSONを返すコマンドを設定すると、現在のエージェントがそのproviderの時だけ左側パネルへ週間・月間の利用枠を表示します。リモートスロットでは `remote_provider` のローカル利用枠を表示します。例: `ARGOS_AGENT_USAGE_COMMAND_CODEX=/opt/argos/bin/codex-usage-status`
 文字起こし、Codex、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、右側の通知欄へ赤色で表示します。同じエラーが連続した場合は1件にまとめます。
 
 `/tmp/argos/camera-latest.jpg` に静止画を置くと、`/camera/latest.jpg` で配信できます。通知の `image_url` にこのURLを指定すると、カメラ画像も表示できます。
@@ -319,7 +348,7 @@ Codex のセッションIDは `ARGOS_AGENT_STATE_PATH` にスロットごとに�
 
 ARGOS共通のシステム指示は各スロットの会話開始時だけエージェントへ渡します。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE`、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定できます。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、`/reset` 後は再度注入します。
 
-Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目に話者IDを指定し、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8` のように設定します。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
+Hermes を使う場合は `ARGOS_AGENT_PROVIDER=hermes`、または `ARGOS_AGENT_SLOT_N=名前,hermes,/path/to/workdir` を指定します。スロットごとにVOICEVOX話者を変える場合は4項目目、モデルを変える場合は5項目目を使い、例えば `ARGOS_AGENT_SLOT_1=調査,hermes,/path/to/workdir,8,model-name` のように設定します。話者を省略してモデルだけ指定する場合は4項目目を空にします。従来の3・4項目形式もそのまま利用できます。ARGOS は `hermes chat -q <prompt> -Q --source argos` を実行し、出力に含まれる session ID を `ARGOS_AGENT_STATE_PATH` に保存して次回以降 `--resume` で再開します。
 
 ARGOS本体の再起動で実行中エージェントを巻き込まない構成にする場合は、別サービスとして Agent Runner を起動します。
 
@@ -327,6 +356,6 @@ ARGOS本体の再起動で実行中エージェントを巻き込まない構成
 uv run argos-agent-runner
 ```
 
-ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。
+ARGOS本体側には `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定します。Runnerはジョブごとに状態、標準出力、最終回答、配信済み状態を `ARGOS_AGENT_RUNNER_STATE_DIR` に保存します。通常応答と再起動後の未配信回収が競合しないよう、配信処理はRunner側の期限付きロックで排他制御します。
 
 外部仕様と設定の詳細は [docs/basic_design.md](docs/basic_design.md) を参照してください。

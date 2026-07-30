@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 from collections.abc import Iterable, Iterator
+from contextlib import nullcontext
 from pathlib import Path
 
 from argos.config import (
@@ -18,6 +19,7 @@ from argos.config import (
     DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
     DEFAULT_WAKEWORD_ALIASES,
     Settings,
+    resolve_agent_slot_model,
 )
 from argos.core.auth_coordinator import AuthCoordinator
 from argos.core.periodic_monitor import PeriodicMonitor
@@ -33,8 +35,10 @@ from argos.services.agent.runner_client import RunnerSlotBusyError
 from argos.services.agent_usage import AgentUsageProvider
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
+from argos.services.conversation_store import ConversationStore
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
+from argos.yaml_config import default_config_path
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
 from argos.services.network import read_wifi_status
@@ -46,7 +50,7 @@ from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
-from argos.services.wakeword import WakeWordListener
+from argos.services.wakeword import WakeWordListener, save_false_positive_candidate
 
 
 log = logging.getLogger(__name__)
@@ -128,7 +132,13 @@ class ArgosApp:
             self._recorder = StreamRecorder(self._audio_input_stream, settings.audio_sample_rate)
         else:
             self._recorder = Recorder(audio_devices, settings.audio_sample_rate)
-        self._stt = SttGatewayClient(settings.stt_gateway_url, settings.stt_language, settings.stt_gateway_token)
+        self._stt = SttGatewayClient(
+            settings.stt_gateway_url,
+            settings.stt_language,
+            settings.stt_gateway_token,
+            settings.stt_gateway_use_opus,
+            settings.stt_gateway_opus_bitrate,
+        )
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
             settings.stt_language,
@@ -149,6 +159,7 @@ class ArgosApp:
             settings.voicevox_speed_scale,
             settings.voicevox_volume_scale,
             settings.voicevox_bearer_token,
+            settings.voicevox_accept_opus,
         )
         self._voicevox_speakers_by_slot_key = {
             _app_slot_key(slot.name, slot.provider): slot.voicevox_speaker
@@ -171,9 +182,18 @@ class ArgosApp:
         initial_volume = saved_audio_state.volume if saved_audio_state.volume is not None else settings.audio_output_volume
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, initial_volume)
         self._lcd = self._create_lcd_display(settings)
-        self._dashboard_state = DashboardState()
+        self._dashboard_state = DashboardState(max_messages=settings.conversation_history_max_messages)
+        self._conversation_store = ConversationStore(
+            Path(settings.conversation_history_path).expanduser(),
+            settings.conversation_history_enabled,
+            settings.conversation_history_max_messages,
+        )
         self._dashboard_state.set_audio_volume(self._audio.volume)
-        self._dashboard_state.set_slots([(slot.name, slot.provider) for slot in settings.agent_slots])
+        self._dashboard_state.set_conversation_memory_enabled(settings.conversation_memory_enabled)
+        self._dashboard_state.set_slots(
+            [(slot.name, slot.provider, resolve_agent_slot_model(settings, slot)) for slot in settings.agent_slots]
+        )
+        self._dashboard_state.restore_histories(self._conversation_store.load_histories())
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -283,18 +303,22 @@ class ArgosApp:
             host=settings.dashboard_host,
             port=settings.dashboard_port,
             token=settings.dashboard_token,
+            view_key=settings.dashboard_view_key,
             camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
             default_font_size=settings.dashboard_default_font_size,
+            default_layout=settings.dashboard_default_layout,
             location_provider=settings.location_provider,
             remote_location_url=settings.remote_location_url,
             remote_location_timeout_seconds=settings.remote_location_timeout_seconds,
+            remote_location_token=settings.remote_location_token,
             upload_dir=Path(settings.dashboard_upload_dir).expanduser(),
             upload_max_bytes=settings.dashboard_upload_max_bytes,
             upload_keep=settings.dashboard_upload_keep,
             control_handler=self._handle_dashboard_control,
             event_handler=self._handle_dashboard_event,
             terminal_handler=_TerminalGateway(self),
+            config_path=default_config_path(),
         )
 
     def run(self) -> None:
@@ -369,20 +393,54 @@ class ArgosApp:
                     status = str(job.get("status", ""))
                     result = str(job.get("result", "")).strip()
                     error = str(job.get("error", "")).strip()
+                    response_target = str(job.get("response_target", "local"))
                     if status == "completed" and result:
-                        self._deliver_runner_result(job_id, slot_name, provider, result)
+                        self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
                         mark_delivered(job_id)
                     elif status == "failed":
-                        self._deliver_runner_error(job_id, slot_name, provider, error)
+                        self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
                         mark_delivered(job_id)
             except Exception:
                 log.exception("Agent Runner未配信ジョブの確認に失敗しました")
             self._shutdown.wait(5)
 
-    def _deliver_runner_result(self, job_id: str, slot_name: str, provider: str, result: str) -> None:
+    def _deliver_runner_result(
+        self,
+        job_id: str,
+        slot_name: str,
+        provider: str,
+        result: str,
+        response_target: str = "local",
+    ) -> None:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        if response_target == "terminal":
+            slot_key = _app_slot_key(slot_name, provider)
+            self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+            if not self._is_current_slot_key(slot_key):
+                self._dashboard_state.set_slot_unread(slot_name, provider, True)
+            self._dashboard_state.add_notification(
+                f"{slot_name} 端末応答完了",
+                "端末へ返せなかった応答を会話履歴に反映しました。",
+                source="ARGOS",
+            )
+            log.info("Terminal向け未配信応答を画面だけへ反映しました: job_id=%s", job_id)
+            self._save_conversation_history()
+            return
         slot_key = _app_slot_key(slot_name, provider)
         self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+        if response_target == "terminal":
+            if not self._is_current_slot_key(slot_key):
+                self._dashboard_state.set_slot_unread(slot_name, provider, True)
+            self._dashboard_state.add_notification(
+                f"{slot_name} 端末応答完了",
+                "端末へ返せなかった応答を会話履歴に反映しました。",
+                source="ARGOS",
+            )
+            log.info(
+                "Terminal向け未配信応答を画面だけに反映しました: job_id=%s",
+                job_id,
+            )
+            return
         self._pending_slot_speech[slot_key] = result
         if self._is_current_slot_key(slot_key):
             self._start_pending_slot_response()
@@ -393,10 +451,21 @@ class ArgosApp:
             "Runnerで完了した応答を会話履歴に反映しました。",
             source="ARGOS",
         )
+        self._save_conversation_history()
         log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
 
-    def _deliver_runner_error(self, job_id: str, slot_name: str, provider: str, error: str) -> None:
+    def _deliver_runner_error(
+        self,
+        job_id: str,
+        slot_name: str,
+        provider: str,
+        error: str,
+        response_target: str = "local",
+    ) -> None:
         """Runnerで失敗したジョブを通知へ反映する。"""
+        if response_target == "terminal":
+            log.info("Terminal向け未配信エラーの母艦通知を抑止しました: job_id=%s", job_id)
+            return
         text = error or "Agent Runnerジョブに失敗しました"
         self._dashboard_state.add_error_notification(f"{slot_name} Runner", text[:300])
         log.info("Agent Runner未配信エラーを反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
@@ -431,9 +500,43 @@ class ArgosApp:
 
     def _sync_agent_display(self) -> None:
         """現在のエージェントスロットをダッシュボード表示へ反映する。"""
-        self._dashboard_state.set_agent(self._agent.current_name, self._agent.current_provider)
+        self._dashboard_state.set_agent(
+            self._agent.current_name,
+            self._agent.current_provider,
+            self._current_agent_model(),
+            self._current_agent_usage_provider(),
+        )
+        load_history = getattr(self._agent, "load_current_history", None)
+        if callable(load_history) and self._agent.current_provider == "remote":
+            try:
+                messages = load_history()
+                if isinstance(messages, list):
+                    self._dashboard_state.merge_slot_messages(
+                        self._agent.current_name,
+                        self._agent.current_provider,
+                        messages,
+                    )
+                    self._save_conversation_history()
+            except Exception:
+                log.exception("リモートArgosの会話履歴を取得できませんでした")
         self._publish_agent_usage_pending()
-        self._refresh_current_agent_usage()
+        self._refresh_agent_usage()
+
+    def _current_agent_model(self) -> str:
+        """現在のスロット設定から表示・実行対象モデルを返す。"""
+        for slot in self._settings.agent_slots:
+            if slot.name == self._agent.current_name and slot.provider == self._agent.current_provider:
+                return resolve_agent_slot_model(self._settings, slot)
+        return ""
+
+    def _current_agent_usage_provider(self) -> str:
+        """現在スロットの利用枠取得に使うプロバイダを返す。"""
+        for slot in self._settings.agent_slots:
+            if slot.name == self._agent.current_name and slot.provider == self._agent.current_provider:
+                if slot.slot_type == "remote" and slot.remote_provider.strip():
+                    return slot.remote_provider.strip().lower()
+                return slot.provider.strip().lower()
+        return self._agent.current_provider.strip().lower()
 
     def _start_agent_usage_monitor(self) -> None:
         """現在エージェントの利用枠を定期的に取得する。"""
@@ -442,36 +545,34 @@ class ArgosApp:
         self._agent_usage_monitor = PeriodicMonitor(
             "agent-usage",
             max(10.0, self._settings.agent_usage_refresh_seconds),
-            self._refresh_current_agent_usage,
+            self._refresh_agent_usage,
             self._shutdown,
         )
         self._agent_usage_monitor.start()
 
     def _publish_agent_usage_pending(self) -> None:
-        """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
-        provider = self._agent.current_provider
-        if not self._agent_usage.has_provider(provider) or self._dashboard_state.has_agent_usage(provider):
-            return
-        self._dashboard_state.set_agent_usage(
-            provider,
-            {
-                "provider": provider.lower(),
-                "available": False,
-                "label": "取得待ち",
-                "five_hour": None,
-                "weekly": None,
-                "other_text": "",
-                "error": "",
-            },
-        )
+        """取得対象プロバイダをすべて取得待ちとして初期表示する。"""
+        for provider in self._agent_usage.providers:
+            if self._dashboard_state.has_agent_usage(provider):
+                continue
+            self._dashboard_state.set_agent_usage(
+                provider,
+                {
+                    "provider": provider.lower(),
+                    "available": False,
+                    "label": "取得待ち",
+                    "five_hour": None,
+                    "weekly": None,
+                    "other_text": "",
+                    "error": "",
+                },
+            )
 
-    def _refresh_current_agent_usage(self) -> None:
-        """現在プロバイダの利用枠を取得してダッシュボードへ反映する。"""
-        provider = self._agent.current_provider
-        if not self._agent_usage.has_provider(provider):
-            return
-        snapshot = self._agent_usage.fetch(provider)
-        self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
+    def _refresh_agent_usage(self) -> None:
+        """設定済みプロバイダの利用枠を取得してダッシュボードへ反映する。"""
+        for provider in self._agent_usage.providers:
+            snapshot = self._agent_usage.fetch(provider)
+            self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
 
     def _start_wifi_status_monitor(self) -> None:
         """Wi-Fi接続状態を定期的にダッシュボードへ反映する。"""
@@ -563,6 +664,8 @@ class ArgosApp:
             self._wakeword_listener = WakeWordListener(
                 devices=self._settings.audio_input_devices or (self._settings.audio_input_device,),
                 model_dir=self._settings.wakeword_model_dir,
+                listen_mode=self._settings.listen_mode,
+                embedding_hef_path=self._settings.wakeword_embedding_hef,
                 threshold=self._settings.wakeword_threshold,
                 audio_source=self._audio_input_stream,
                 should_continue_recording=self._should_continue_wakeword_recording,
@@ -579,6 +682,7 @@ class ArgosApp:
                 endpoint_mode=self._settings.wakeword_endpoint_mode,
                 vad_model_path=self._settings.wakeword_vad_model_path,
                 vad_threshold=self._settings.wakeword_vad_threshold,
+                vad_start_seconds=self._settings.wakeword_vad_start_seconds,
                 vad_min_silence_seconds=self._settings.wakeword_vad_min_silence_seconds,
                 vad_check_seconds=self._settings.wakeword_vad_check_seconds,
                 score_log_path=self._settings.wakeword_score_log_path,
@@ -588,7 +692,8 @@ class ArgosApp:
                 followup_seconds=self._settings.wakeword_followup_seconds,
             )
             self._wakeword_listener.start()
-            self._dashboard_state.add_notification("ウェイクワード", "ウェイクワード監視を開始しました。", source="ARGOS")
+            label = "VAD常時受付" if self._settings.listen_mode == "vad" else "ウェイクワード監視"
+            self._dashboard_state.add_notification("音声入力", f"{label}を開始しました。", source="ARGOS")
         except Exception as exc:
             log.exception("ウェイクワード監視を開始できません")
             self._report_error("ウェイクワード", exc)
@@ -694,17 +799,22 @@ class ArgosApp:
                 if self._is_auth_locked():
                     self._auth_coord.ensure_authenticated("", token)
                     return
+                if not followup:
+                    self._save_wakeword_false_positive(wav_path, "stt_empty", "", level)
                 self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
                 return
             # 追いかけ受付ではウェイクワードを言っていないため、呼びかけ必須/除去は行わない
             if not followup:
                 if self._settings.wakeword_require_stt_wakeword and not _has_leading_wakeword(transcript, self._wakeword_pattern):
                     log.info("STT結果に呼びかけがないためウェイクワード検知を破棄します: %s", transcript)
+                    self._save_wakeword_false_positive(wav_path, "wakeword_missing", transcript, level)
                     self._dashboard_state.add_notification("ウェイクワード", "呼びかけを確認できなかったため破棄しました。", source="ARGOS")
                     return
+                original_transcript = transcript
                 transcript = _strip_leading_wakeword(transcript, self._wakeword_pattern)
                 if not transcript:
                     log.info("ウェイクワード除去後の文字起こし結果が空でした: wav=%s RMS=%.1f", wav_path, level)
+                    self._save_wakeword_false_positive(wav_path, "wakeword_only", original_transcript, level)
                     self._dashboard_state.add_error_notification("文字起こし", "呼びかけ以外の音声を認識できませんでした。")
                     return
             if self._auth_coord.ensure_authenticated(transcript, token):
@@ -724,6 +834,22 @@ class ArgosApp:
         if handled:
             self._arm_followup_window()
 
+    def _save_wakeword_false_positive(self, wav_path: str, reason: str, transcript: str, rms: float) -> None:
+        """破棄したウェイクワード録音を再学習候補として退避する。"""
+        if not self._settings.wakeword_false_positive_capture:
+            return
+        try:
+            saved_dir = save_false_positive_candidate(
+                wav_path,
+                self._settings.wakeword_false_positive_dir,
+                reason=reason,
+                transcript=transcript,
+                rms=rms,
+            )
+            log.info("ウェイクワード誤検知候補を保存しました: %s", saved_dir)
+        except (OSError, ValueError) as exc:
+            log.warning("ウェイクワード誤検知候補を保存できませんでした: %s", exc)
+
     def _should_continue_wakeword_recording(self) -> bool:
         """PTT押下でウェイクワード後録音を継続するか返す。"""
         return self._wakeword_ptt_hold.is_set()
@@ -742,15 +868,22 @@ class ArgosApp:
         """PiZero端末向けにエージェントスロット一覧と現在スロットを返す。"""
         current_name = self._agent.current_name
         current_provider = self._agent.current_provider
+        current_model = self._current_agent_model()
         slots = [
             {
                 "name": slot.name,
                 "provider": slot.provider,
+                "type": slot.slot_type,
+                "model": resolve_agent_slot_model(self._settings, slot),
+                "usage_provider": slot.remote_provider.strip().lower() if slot.slot_type == "remote" and slot.remote_provider.strip() else slot.provider.strip().lower(),
                 "active": slot.name == current_name and slot.provider == current_provider,
             }
             for slot in self._settings.agent_slots
         ]
-        return {"slots": slots, "current": {"name": current_name, "provider": current_provider}}
+        return {
+            "slots": slots,
+            "current": {"name": current_name, "provider": current_provider, "model": current_model},
+        }
 
     def _terminal_next_slot(self) -> dict[str, object]:
         """PiZero端末のダブルクリックに対応して次のスロットへ巡回切替する。
@@ -758,74 +891,159 @@ class ArgosApp:
         スロットは母艦・ダッシュボード・端末で共有するため、切替は目の前の端末にも
         反映する。母艦側では読み上げず、表示だけ更新して切替後の現在スロットを返す。
         """
+        self._status.invalidate()
         name = self._agent.next_slot()
-        self._sync_agent_display()
+        self._complete_terminal_slot_switch()
         log.info("端末操作でエージェントスロット切替: %s", name)
         return self._terminal_list_slots()
 
-    def _terminal_process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
-        """録音WAVをSTT→エージェント→TTSで処理し、SSE用イベントを順に生成する。
+    def _terminal_select_slot(self, name: str, provider: str) -> dict[str, object]:
+        """端末操作で指定されたエージェントスロットへ切り替える。"""
+        selected = self._agent.select_slot(name.strip(), provider.strip())
+        self._status.invalidate()
+        self._complete_terminal_slot_switch()
+        log.info("端末操作でエージェントスロット選択: %s (%s)", selected, provider)
+        return self._terminal_list_slots()
 
-        母艦のスピーカーでは再生せず、応答テキストの差分と文単位の合成WAVを
-        端末へ返す。発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
+    def _terminal_slot_history(self, name: str, provider: str) -> dict[str, object]:
+        """Argos間同期向けに指定スロットの会話履歴を返す。"""
+        known = any(slot.name == name and slot.provider == provider for slot in self._settings.agent_slots)
+        if not known:
+            raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+        return {"messages": self._dashboard_state.slot_messages(name, provider)}
+
+    def _complete_terminal_slot_switch(self) -> None:
+        """端末からの切替後に表示状態と未読応答を現在スロットへ同期する。"""
+        self._sync_agent_display()
+        self._set_ready_or_locked()
+        self._start_pending_slot_response()
+
+    def _terminal_process_turn(
+        self,
+        wav_bytes: bytes | None = None,
+        *,
+        text: str | None = None,
+        want_audio: bool = True,
+        slot_name: str = "",
+        slot_provider: str = "",
+    ) -> Iterator[dict[str, object]]:
+        """端末ターンを処理し、SSE用イベントを順に生成する。
+
+        入力は録音WAV(``wav_bytes``)またはテキスト(``text``)のどちらか一方。
+        音声入力のときはSTTで文字起こしし、テキスト入力のときはそのまま使う。
+        ``want_audio`` が True のときは応答をTTS合成したWAVも返し、False の
+        ときは応答テキストの差分だけを返す（母艦のスピーカーでは再生しない）。
+        発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
         """
-        slot_name = self._agent.current_name
-        slot_provider = self._agent.current_provider
+        has_explicit_slot = bool(slot_name or slot_provider)
+        if has_explicit_slot and (not slot_name or not slot_provider):
+            yield {"event": "error", "message": "スロット名とproviderが必要です"}
+            return
+        if not has_explicit_slot:
+            slot_name = self._agent.current_name
+            slot_provider = self._agent.current_provider
+        if not any(
+            slot.name == slot_name and slot.provider == slot_provider
+            for slot in self._settings.agent_slots
+        ):
+            yield {"event": "error", "message": "エージェントスロットが見つかりません"}
+            return
         slot_key = _app_slot_key(slot_name, slot_provider)
         # 端末ターンの進行を母艦ダッシュボードの状態枠へも反映する。
         token = self._status.current_generation()
+        # 端末PTTでもキオスク画面のスクリーンセーバーを解除する。
+        self._dashboard_state.wake_display()
         tmp_path = ""
         try:
-            with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
-                tmp.write(wav_bytes)
-                tmp_path = tmp.name
-            self._status.set(token, "transcribing", "文字起こし中")
-            try:
-                transcript = self._transcribe_wav(tmp_path)
-            except Exception as exc:
-                log.exception("端末ターンの文字起こしに失敗しました")
-                self._report_error("文字起こし", exc)
-                yield {"event": "error", "message": "文字起こしに失敗しました"}
-                return
-            if not transcript:
-                log.info("端末ターンの文字起こし結果が空でした")
-                self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
-                yield {"event": "error", "message": "音声を認識できませんでした"}
-                return
+            # --- 入力段: テキストならそのまま、音声ならSTTで文字起こしする ---
+            if text is not None:
+                transcript = text.strip()
+                if not transcript:
+                    log.info("端末テキストターンの入力が空でした")
+                    yield {"event": "error", "message": "テキストが空です"}
+                    return
+            else:
+                with tempfile.NamedTemporaryFile(prefix="argos-terminal-", suffix=".wav", delete=False) as tmp:
+                    tmp.write(wav_bytes or b"")
+                    tmp_path = tmp.name
+                self._status.set(token, "transcribing", "文字起こし中")
+                try:
+                    transcript = self._transcribe_wav(tmp_path)
+                except Exception as exc:
+                    log.exception("端末ターンの文字起こしに失敗しました")
+                    self._report_error("文字起こし", exc)
+                    yield {"event": "error", "message": "文字起こしに失敗しました"}
+                    return
+                if not transcript:
+                    log.info("端末ターンの文字起こし結果が空でした")
+                    self._dashboard_state.add_error_notification("文字起こし", "音声を認識できませんでした。")
+                    yield {"event": "error", "message": "音声を認識できませんでした"}
+                    return
             yield {"event": "transcript", "text": transcript}
-            log.info("端末ユーザ発話: %s", transcript)
-            # ローカル録音と同じ本人確認ゲートを通す。ロック中は発話を本人確認扱いにし、
-            # 音声キーワード一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
+            log.info("端末ユーザ入力: %s", transcript)
+            # ローカル録音と同じ本人確認ゲートを通す。ロック中は入力を本人確認扱いにし、
+            # 合言葉一致で母艦と共有の認証状態を解除する（顔認証は母艦カメラ依存）。
             if not self._auth_coord.ensure_authenticated(transcript, token):
                 if self._auth_coord.is_locked():
-                    yield {"event": "error", "message": "本人確認が必要です。合言葉を話してね。"}
+                    yield {"event": "error", "message": "本人確認が必要です。合言葉を入力してね。"}
                 else:
-                    # キーワードで解除できたが、この発話自体は本人確認用なのでエージェントへは渡さない。
+                    # キーワードで解除できたが、この入力自体は本人確認用なのでエージェントへは渡さない。
                     yield {"event": "text", "delta": "本人確認しました。"}
                     yield {"event": "done", "text": "本人確認しました。"}
                 return
             self._status.set(token, "thinking", "考え中")
-            self._dashboard_state.add_message("user", transcript)
+            self._dashboard_state.add_message_to_slot(
+                slot_name,
+                slot_provider,
+                "user",
+                transcript,
+            )
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
-            dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
+            dashboard_message_id = self._dashboard_state.add_message_to_slot(
+                slot_name,
+                slot_provider,
+                "assistant",
+                "",
+                streaming=True,
+            )
             seq = 0
             full_response = ""
             try:
-                for kind, payload in self._speech.synthesize_response_stream(
-                    self._agent.ask_stream(transcript), slot_key
-                ):
-                    if kind == "text":
-                        text = str(payload)
-                        if not full_response:
-                            self._status.set(token, "speaking", "読み上げ中")
-                        full_response += text
-                        self._dashboard_state.append_message(dashboard_message_id, text)
-                        yield {"event": "text", "delta": text}
-                    else:
-                        encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
-                        yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
-                        seq += 1
+                deltas = self._terminal_agent_stream(
+                    transcript,
+                    slot_name if has_explicit_slot else "",
+                    slot_provider if has_explicit_slot else "",
+                )
+                if want_audio:
+                    # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
+                    for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
+                        if kind == "text":
+                            chunk = str(payload)
+                            if not full_response:
+                                self._status.set(token, "speaking", "読み上げ中")
+                            full_response += chunk
+                            self._dashboard_state.append_message(dashboard_message_id, chunk)
+                            yield {"event": "text", "delta": chunk}
+                        else:
+                            encoded = base64.b64encode(payload).decode("ascii") if isinstance(payload, (bytes, bytearray)) else ""
+                            yield {"event": "audio", "seq": seq, "format": "wav", "data": encoded}
+                            seq += 1
+                else:
+                    # テキスト出力のみ。TTS合成を通さず応答差分だけを返す。
+                    for delta in deltas:
+                        if not delta:
+                            continue
+                        full_response += delta
+                        self._dashboard_state.append_message(dashboard_message_id, delta)
+                        yield {"event": "text", "delta": delta}
                 log.info("端末エージェント応答: %s", full_response[:300])
+                if full_response and not self._is_current_slot_key(slot_key):
+                    self._dashboard_state.set_slot_unread(slot_name, slot_provider, True)
+                    self._dashboard_state.add_notification(
+                        f"{slot_name} 応答完了",
+                        "スロットを切り替えると回答を確認できます。",
+                        source="ARGOS",
+                    )
                 yield {"event": "done", "text": full_response}
             except RunnerSlotBusyError as exc:
                 log.info("端末ターンでエージェントスロットが処理中です: %s", exc)
@@ -837,11 +1055,27 @@ class ArgosApp:
             finally:
                 self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
                 self._dashboard_state.finish_message(dashboard_message_id)
+                self._save_conversation_history()
         finally:
             # 全経路で母艦の状態枠を休止（待機中）へ戻す。stale世代なら無視される。
             self._status.finish(token)
             if tmp_path:
                 self._remove_recording_file(tmp_path)
+
+    def _terminal_agent_stream(
+        self,
+        prompt: str,
+        slot_name: str = "",
+        slot_provider: str = "",
+    ) -> Iterator[str]:
+        """Terminal起点のRunnerジョブへ応答先を付けて差分を返す。"""
+        response_target = getattr(self._agent, "response_target", None)
+        context = response_target("terminal") if callable(response_target) else nullcontext()
+        with context:
+            if slot_name and slot_provider:
+                yield from self._agent.ask_slot_stream(slot_name, slot_provider, prompt)
+                return
+            yield from self._agent.ask_stream(prompt)
 
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
@@ -876,6 +1110,15 @@ class ArgosApp:
                 "volume": self._audio.volume,
                 "session_reset": True,
                 "slot": {"name": slot_name, "provider": slot_provider},
+            }
+        elif action == "compact_agent_session":
+            if not self._settings.conversation_memory_enabled:
+                raise ValueError("会話履歴の引き継ぎが無効です")
+            self._start_session_compaction()
+            return {
+                "muted": self._speech.is_muted(),
+                "volume": self._audio.volume,
+                "session_compaction_started": True,
             }
         else:
             raise ValueError(f"未対応の操作です: {action}")
@@ -1004,9 +1247,58 @@ class ArgosApp:
         finally:
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
             self._dashboard_state.finish_message(dashboard_message_id)
+            self._save_conversation_history()
             if announcer is not None:
                 announcer.stop()
             self._status.finish(handle_generation)
+
+    def _save_conversation_history(self) -> None:
+        """有効時だけ現在の全スロット表示履歴を永続化する。"""
+        try:
+            self._conversation_store.save_histories(self._dashboard_state.export_histories())
+        except OSError:
+            log.exception("会話表示履歴を保存できませんでした")
+
+    def _start_session_compaction(self) -> None:
+        """現在スロットの履歴要約と新規セッション準備をバックグラウンドで始める。"""
+        slot_name = self._agent.current_name
+        slot_provider = self._agent.current_provider
+        messages = self._dashboard_state.slot_messages(slot_name, slot_provider)
+        if not messages:
+            raise ValueError("引き継ぐ会話履歴がありません")
+
+        def compact() -> None:
+            """現在履歴を要約し、次回だけ注入する状態でセッションをリセットする。"""
+            self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
+            try:
+                history = "\n".join(
+                    f"{'ユーザー' if item.get('role') == 'user' else 'アシスタント'}: {item.get('text', '')}"
+                    for item in messages
+                )
+                prompt = (
+                    "次の会話履歴を、新しいセッションへ引き継ぐために簡潔に要約してください。"
+                    "確定事項、未完了の作業、重要な固有名詞やパスを優先し、推測は加えないでください。"
+                    "要約本文だけを返してください。\n\n"
+                    f"{history}"
+                )
+                summary = self._agent.ask(prompt).strip()
+                save_memory = getattr(self._agent, "save_resume_memory", None)
+                if not summary or not callable(save_memory):
+                    raise RuntimeError("引き継ぎ要約を保存できませんでした")
+                save_memory(summary)
+                self._agent.reset_current()
+                self._dashboard_state.add_notification(
+                    "会話を引き継ぎ",
+                    f"{slot_name} の要約を保存し、新しいセッションを準備しました。",
+                    source="ARGOS",
+                )
+            except Exception as exc:
+                log.exception("会話履歴の引き継ぎに失敗しました")
+                self._report_error("会話引き継ぎ", exc)
+            finally:
+                self._dashboard_state.set_slot_busy(slot_name, slot_provider, False)
+
+        threading.Thread(target=compact, name="conversation-compaction", daemon=True).start()
 
     def _start_agent_progress(self, user_text: str = "", slot_key: str = "") -> AgentProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
@@ -1156,9 +1448,35 @@ class _TerminalGateway:
         """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
         return self._app._terminal_next_slot()
 
-    def process_turn(self, wav_bytes: bytes) -> Iterator[dict[str, object]]:
-        """録音WAVを処理し、SSE用イベントを順に生成する。"""
-        return self._app._terminal_process_turn(wav_bytes)
+    def select_slot(self, name: str, provider: str) -> dict[str, object]:
+        """指定されたエージェントスロットへ切り替え、切替後の状態を返す。"""
+        return self._app._terminal_select_slot(name, provider)
+
+    def slot_history(self, name: str, provider: str) -> dict[str, object]:
+        """指定スロットの会話履歴を返す。"""
+        return self._app._terminal_slot_history(name, provider)
+
+    def process_turn(
+        self,
+        wav_bytes: bytes | None = None,
+        *,
+        text: str | None = None,
+        want_audio: bool = True,
+        slot_name: str = "",
+        slot_provider: str = "",
+    ) -> Iterator[dict[str, object]]:
+        """録音WAVまたはテキストを処理し、SSE用イベントを順に生成する。
+
+        ``text`` を渡すとSTTをスキップしてそのままエージェントへ入力する。
+        ``want_audio`` が False のときはTTS合成を省き、応答テキストのみ返す。
+        """
+        return self._app._terminal_process_turn(
+            wav_bytes,
+            text=text,
+            want_audio=want_audio,
+            slot_name=slot_name,
+            slot_provider=slot_provider,
+        )
 
 
 def _app_slot_key(name: str, provider: str) -> str:

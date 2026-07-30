@@ -39,3 +39,17 @@ def test_weekly_reset_rolls_over_to_next_year():
 def test_parse_status_raises_on_unexpected_screen():
     with pytest.raises(ValueError):
         parse_status("no usage information here")
+
+
+def test_parse_status_without_five_hour():
+    screen = """
+Weekly limit:         [██████████████████░░] 90% left (resets 08:31 on 20 Jul)
+Credits:              794 credits
+"""
+    now = datetime(2026, 7, 14, 12, 0)
+    result = parse_status(screen, now=now)
+    assert result == {
+        "five_hour": {"usage_pct": 0, "reset": "N/A"},
+        "weekly": {"usage_pct": 10, "reset": "07/20 08:31"},
+        "credits": 794,
+    }

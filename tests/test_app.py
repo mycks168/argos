@@ -1,5 +1,6 @@
 import json
 import logging
+from contextlib import contextmanager
 
 from argos.config import AgentSlot, Settings
 from argos.core.app import (
@@ -102,6 +103,25 @@ def _settings():
     )
 
 
+def test_current_agent_usage_provider_uses_remote_provider():
+    """リモートスロットでは接続先プロバイダのローカル利用枠を参照する。"""
+    remote_slot = AgentSlot(
+        "mint-codex",
+        "remote",
+        "",
+        slot_type="remote",
+        remote_url="https://mint.example",
+        remote_token="token",
+        remote_name="作業",
+        remote_provider="codex",
+    )
+    app = object.__new__(ArgosApp)
+    app._settings = Settings(**{**_settings().__dict__, "agent_slots": (remote_slot,)})
+    app._agent = type("Agent", (), {"current_name": "mint-codex", "current_provider": "remote"})()
+
+    assert app._current_agent_usage_provider() == "codex"
+
+
 class FakeRecorder:
     def __init__(self, *args):
         self.started = False
@@ -168,6 +188,7 @@ class FakeCodex:
         self.current_name = "作業"
         self.current_provider = "codex"
         self.asked = []
+        self.targeted = []
 
     def ask(self, text):
         self.asked.append(text)
@@ -177,10 +198,21 @@ class FakeCodex:
         self.asked.append(text)
         yield "応答"
 
+    def ask_slot_stream(self, name, provider, text):
+        """選択状態を変えず指定スロットの応答を返す。"""
+        self.targeted.append((name, provider, text))
+        self.asked.append(text)
+        yield "応答"
+
     def next_slot(self):
         self.current_name = "次"
         self.current_provider = "antigravity"
         return "次"
+
+    def select_slot(self, name, provider):
+        self.current_name = name
+        self.current_provider = provider
+        return name
 
     def reset_current(self):
         self.reset = True
@@ -294,6 +326,19 @@ def test_dashboard_shows_current_agent_slot(monkeypatch):
     assert snapshot["agent"]["provider"] == "codex"
 
 
+def test_dashboard_shows_current_slot_model(monkeypatch):
+    """現在スロットのモデルをダッシュボード状態へ反映する。"""
+    _patch_app(monkeypatch)
+    settings = _settings()
+    slot = AgentSlot("作業", "codex", "/tmp", model="gpt-test")
+    app = ArgosApp(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    snapshot = app._dashboard_state.snapshot()
+
+    assert snapshot["agent"]["model"] == "gpt-test"
+    assert snapshot["slots"][0]["model"] == "gpt-test"
+
+
 def test_deliver_runner_result_speaks_current_slot_response(monkeypatch, capsys):
     """Runnerで完了した現在スロットの未配信応答は自動で読み上げる。"""
     _patch_app(monkeypatch)
@@ -325,6 +370,39 @@ def test_deliver_runner_result_keeps_other_slot_unread(monkeypatch):
 
     app._dashboard_state.set_agent("調査", "antigravity")
     assert app._dashboard_state.snapshot()["messages"][-1]["text"] == "Runner応答"
+
+
+def test_deliver_terminal_runner_result_only_updates_dashboard(monkeypatch):
+    """Terminal向け未配信応答は画面へ残すが母艦TTSへ二重配信しない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    app._deliver_runner_result("job-1", "作業", "codex", "Terminal応答", "terminal")
+
+    snapshot = app._dashboard_state.snapshot()
+    assert snapshot["messages"][-1]["text"] == "Terminal応答"
+    assert snapshot["notifications"][-1]["title"] == "作業 端末応答完了"
+    assert app._pending_slot_speech == {}
+
+
+def test_terminal_agent_stream_sets_terminal_response_target(monkeypatch):
+    """端末ターンのエージェント実行中だけ応答先をterminalへ切り替える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    targets = []
+
+    @contextmanager
+    def response_target(target):
+        targets.append(("enter", target))
+        try:
+            yield
+        finally:
+            targets.append(("exit", target))
+
+    app._agent.response_target = response_target
+
+    assert list(app._terminal_agent_stream("端末入力")) == ["応答"]
+    assert targets == [("enter", "terminal"), ("exit", "terminal")]
 
 
 def test_deliver_runner_error_adds_notification(monkeypatch):
@@ -688,6 +766,52 @@ def test_wakeword_requirement_discards_without_wakeword(monkeypatch):
     app._process_wakeword_recording("/tmp/argos-followup-test.wav", followup=False)
 
     assert app._agent.asked == []
+
+
+def test_wakeword_requirement_saves_false_positive_candidate(monkeypatch, tmp_path):
+    """呼びかけなしで破棄した音声を誤検知候補として保存する。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "wakeword_require_stt_wakeword": True,
+            "wakeword_false_positive_dir": str(tmp_path / "candidates"),
+        }
+    )
+    app = ArgosApp(settings)
+    wav_path = tmp_path / "wakeword.wav"
+    wav_path.write_bytes(b"RIFF-test-audio")
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: "周囲の会話"
+
+    app._process_wakeword_recording(str(wav_path), followup=False)
+
+    saved = list((tmp_path / "candidates" / "hard_negative").glob("*/metadata.json"))
+    assert len(saved) == 1
+    metadata = json.loads(saved[0].read_text(encoding="utf-8"))
+    assert metadata["reason"] == "wakeword_missing"
+    assert metadata["transcript"] == "周囲の会話"
+
+
+def test_wakeword_followup_does_not_save_empty_transcript(monkeypatch, tmp_path):
+    """追いかけ受付の空文字起こしはウェイクワード誤検知候補に含めない。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "wakeword_false_positive_dir": str(tmp_path / "candidates"),
+        }
+    )
+    app = ArgosApp(settings)
+    wav_path = tmp_path / "followup.wav"
+    wav_path.write_bytes(b"RIFF-test-audio")
+    monkeypatch.setattr("argos.core.app.check_audio_level", lambda _wav: 100)
+    app._stt.transcribe = lambda _wav: ""
+    app._local_stt.transcribe = lambda _wav: ""
+
+    app._process_wakeword_recording(str(wav_path), followup=True)
+
+    assert not (tmp_path / "candidates").exists()
 
 
 def test_wakeword_turn_arms_followup_window(monkeypatch):
@@ -1297,6 +1421,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
             **_settings().__dict__,
             "dry_run": False,
             "wakeword_enabled": True,
+            "listen_mode": "vad",
             "wakeword_model_dir": "/tmp/wakeword",
             "wakeword_threshold": 0.6,
             "wakeword_capture_sample_rate": 48000,
@@ -1305,6 +1430,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
             "wakeword_endpoint_mode": "vad",
             "wakeword_vad_model_path": "/tmp/silero.onnx",
             "wakeword_vad_threshold": 0.4,
+            "wakeword_vad_start_seconds": 0.24,
             "wakeword_vad_min_silence_seconds": 1.2,
             "wakeword_vad_check_seconds": 0.2,
             "wakeword_score_log_path": "/tmp/argos/wakeword-score.log",
@@ -1315,6 +1441,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
     app._start_wakeword_listener()
 
     assert started
+    assert started[0]["listen_mode"] == "vad"
     assert started[0]["model_dir"] == "/tmp/wakeword"
     assert started[0]["threshold"] == 0.6
     assert started[0]["capture_sample_rate"] == 48000
@@ -1323,6 +1450,7 @@ def test_wakeword_listener_starts_when_enabled(monkeypatch):
     assert started[0]["endpoint_mode"] == "vad"
     assert started[0]["vad_model_path"] == "/tmp/silero.onnx"
     assert started[0]["vad_threshold"] == 0.4
+    assert started[0]["vad_start_seconds"] == 0.24
     assert started[0]["vad_min_silence_seconds"] == 1.2
     assert started[0]["vad_check_seconds"] == 0.2
     assert started[0]["score_log_path"] == "/tmp/argos/wakeword-score.log"

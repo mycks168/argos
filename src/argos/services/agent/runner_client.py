@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import threading
 import time
+import uuid
 from collections.abc import Iterable
+from contextlib import contextmanager
 
 import requests
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 
 
 class RunnerSlotBusyError(RuntimeError):
@@ -29,6 +32,8 @@ class RunnerAgentClient:
             raise ValueError("エージェントスロットが設定されていません")
         self._index = 0
         self._active_job_ids: set[str] = set()
+        self._delivery_owner = uuid.uuid4().hex
+        self._request_context = threading.local()
 
     @property
     def current_name(self) -> str:
@@ -40,10 +45,29 @@ class RunnerAgentClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._slots[self._index].provider
 
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._slots[self._index])
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
-        self._index = (self._index + 1) % len(self._slots)
+        candidates = [index for index, slot in enumerate(self._slots) if slot.ptt_cycle]
+        if not candidates:
+            candidates = list(range(len(self._slots)))
+        self._index = next(
+            (index for index in candidates if index > self._index),
+            candidates[0],
+        )
         return self.current_name
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        for index, slot in enumerate(self._slots):
+            if slot.name == name and slot.provider == provider:
+                self._index = index
+                return self.current_name
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
 
     def reset_current(self) -> None:
         """現在スロットの保存済みセッションをRunner側で削除する。"""
@@ -57,6 +81,19 @@ class RunnerAgentClient:
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """Runnerにジョブを作成し、出力の差分をポーリングしながら返す。"""
         slot = self._slots[self._index]
+        yield from self._ask_slot_stream(slot, prompt)
+
+    def ask_slot_stream(self, name: str, provider: str, prompt: str) -> Iterable[str]:
+        """選択中スロットを変えず、指定スロットのRunnerジョブを開始する。"""
+        for slot in self._slots:
+            if slot.name == name and slot.provider == provider:
+                yield from self._ask_slot_stream(slot, prompt)
+                return
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+
+    def _ask_slot_stream(self, slot: AgentSlot, prompt: str) -> Iterable[str]:
+        """指定スロットのRunner出力を差分として返す。"""
+        response_target = str(getattr(self._request_context, "response_target", "local"))
         job = self._request(
             "POST",
             "/api/jobs",
@@ -64,6 +101,7 @@ class RunnerAgentClient:
                 "slot_name": slot.name,
                 "provider": slot.provider,
                 "prompt": prompt,
+                "response_target": response_target,
             },
         )
         job_id = str(job["job_id"])
@@ -105,9 +143,19 @@ class RunnerAgentClient:
         finally:
             self._active_job_ids.discard(job_id)
 
+    @contextmanager
+    def response_target(self, target: str):
+        """現在スレッドで作成するRunnerジョブの応答先を一時的に指定する。"""
+        previous = getattr(self._request_context, "response_target", "local")
+        self._request_context.response_target = target
+        try:
+            yield
+        finally:
+            self._request_context.response_target = previous
+
     def list_undelivered(self) -> list[dict[str, object]]:
         """現在のARGOS処理外で完了した未配信ジョブを返す。"""
-        payload = self._request("GET", "/api/jobs")
+        payload = self._request("POST", "/api/jobs/claim", json={})
         jobs = payload.get("jobs", [])
         if not isinstance(jobs, list):
             return []
@@ -122,9 +170,19 @@ class RunnerAgentClient:
         self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
         self._active_job_ids.discard(job_id)
 
+    def load_current_history(self) -> list[dict[str, object]]:
+        """リモート仮想スロットの会話履歴を接続先Argosから取得する。"""
+        slot = self._slots[self._index]
+        if slot.slot_type != "remote":
+            return []
+        from argos.services.agent.remote_argos import RemoteArgosClient
+
+        return RemoteArgosClient(self._settings, slot).load_current_history()
+
     def _request(self, method: str, path: str, **kwargs: object) -> dict[str, object]:
         """Runner APIへHTTPリクエストを送る。"""
         headers = dict(kwargs.pop("headers", {}) or {})
+        headers["X-Argos-Delivery-Owner"] = self._delivery_owner
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         response = requests.request(method, f"{self._base_url}{path}", headers=headers, timeout=5, **kwargs)

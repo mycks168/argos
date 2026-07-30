@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+from argos.yaml_config import apply_yaml_environment
 
 
+_PROCESS_ENVIRONMENT = set(os.environ)
 load_dotenv()
+apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
 
 
 # エージェント待機中に読み上げる進捗音声の既定フレーズ。
@@ -89,6 +93,15 @@ def _split_aliases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     return aliases or default
 
 
+def _normalize_layout(value: str) -> str:
+    """ダッシュボードレイアウト名を正規化する ("standard" または "sp")。"""
+    val = (value or "").strip().lower()
+    if val in ("sp", "mobile"):
+        return "sp"
+    return "standard"
+
+
+
 @dataclass(frozen=True)
 class AgentSlot:
     """LLMエージェントの会話スロット設定。"""
@@ -97,6 +110,13 @@ class AgentSlot:
     provider: str
     cwd: str
     voicevox_speaker: int | None = None
+    model: str = ""
+    slot_type: str = "local"
+    remote_url: str = ""
+    remote_token: str = ""
+    remote_name: str = ""
+    remote_provider: str = ""
+    ptt_cycle: bool = True
 
 
 @dataclass(frozen=True)
@@ -156,6 +176,10 @@ class Settings:
     antigravity_command: str
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
+    claude_model: str = ""
+    # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
+    dashboard_view_key: str = ""
+    antigravity_model: str = ""
     antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
     antigravity_print_timeout: str = "5m0s"
@@ -217,20 +241,26 @@ class Settings:
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
     dashboard_default_font_size: str = "medium"
+    dashboard_default_layout: str = "standard"
     dashboard_upload_dir: str = "/tmp/argos/uploads"
     dashboard_upload_max_bytes: int = 5 * 1024 * 1024
     dashboard_upload_keep: int = 50
     location_provider: str = "local"
     remote_location_url: str = ""
     remote_location_timeout_seconds: float = 2.0
+    remote_location_token: str = ""
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
     agent_runner_url: str = ""
     agent_runner_token: str = ""
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    remote_argos_timeout_seconds: float = 600.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
+    voicevox_accept_opus: bool = False
+    stt_gateway_use_opus: bool = False
+    stt_gateway_opus_bitrate: str = "24k"
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -240,7 +270,9 @@ class Settings:
     agent_usage_command_timeout_seconds: float = 5.0
     wifi_status_refresh_seconds: float = 10.0
     wakeword_enabled: bool = False
+    listen_mode: str = "wakeword"
     wakeword_model_dir: str = "models/wakeword"
+    wakeword_embedding_hef: str = ""
     wakeword_threshold: float = 0.5
     wakeword_capture_sample_rate: int = 16000
     wakeword_window_seconds: float = 2.0
@@ -254,6 +286,7 @@ class Settings:
     wakeword_endpoint_mode: str = "vad"
     wakeword_vad_model_path: str = ""
     wakeword_vad_threshold: float = 0.35
+    wakeword_vad_start_seconds: float = 0.16
     wakeword_vad_min_silence_seconds: float = 1.5
     wakeword_vad_check_seconds: float = 0.32
     wakeword_tts_cooldown_seconds: float = 2.0
@@ -261,16 +294,43 @@ class Settings:
     wakeword_bargein_enabled: bool = False
     wakeword_score_log_path: str = ""
     wakeword_require_stt_wakeword: bool = False
+    wakeword_false_positive_capture: bool = True
+    wakeword_false_positive_dir: str = "/tmp/argos/wakeword-candidates"
     wakeword_aliases: tuple[str, ...] = DEFAULT_WAKEWORD_ALIASES
     camera_snapshot_path: str = "/tmp/argos/camera-latest.jpg"
     agent_system_prompt: str = ""
     agent_system_prompt_file: str = ""
     agent_system_prompt_state_path: str = "~/.argos/agent-system-prompts.json"
     agent_skills_dir: str = "/opt/argos/skills"
+    conversation_history_enabled: bool = False
+    conversation_history_path: str = "~/.local/state/argos/conversation-history.json"
+    conversation_history_max_messages: int = 100
+    conversation_memory_enabled: bool = False
+    conversation_memory_path: str = "~/.local/state/argos/conversation-memory.json"
+
+
+def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
+    """スロット固有値を優先し、provider全体設定を後方互換の既定値として返す。"""
+    if slot.model.strip():
+        return slot.model.strip()
+    provider = slot.provider.strip().lower()
+    if provider == "codex":
+        return settings.codex_model.strip()
+    if provider in {"claude", "claudecode"}:
+        return settings.claude_model.strip()
+    if provider == "antigravity":
+        return settings.antigravity_model.strip()
+    if provider == "hermes":
+        return settings.hermes_model.strip()
+    return ""
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
+    unified = os.environ.get("ARGOS_AGENT_SLOTS_JSON", "").strip()
+    if unified:
+        return _parse_unified_agent_slots(unified, default_provider)
+
     slots: list[AgentSlot] = []
     default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
     index = 1
@@ -278,7 +338,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
         raw = os.environ.get(f"ARGOS_AGENT_SLOT_{index}", "")
         if not raw:
             break
-        parts = [part.strip() for part in raw.split(",", 3)]
+        parts = [part.strip() for part in raw.split(",", 4)]
         if parts and parts[0]:
             slots.append(
                 AgentSlot(
@@ -286,6 +346,7 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
                     provider=parts[1] if len(parts) > 1 and parts[1] else default_provider,
                     cwd=parts[2] if len(parts) > 2 and parts[2] else default_cwd,
                     voicevox_speaker=_optional_int(parts[3]) if len(parts) > 3 else None,
+                    model=parts[4] if len(parts) > 4 else "",
                 )
             )
         index += 1
@@ -302,6 +363,59 @@ def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
             voicevox_speaker=_optional_int(os.environ.get("ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER")),
         ),
     )
+
+
+def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSlot, ...]:
+    """YAMLから変換されたローカル・リモート共通スロットを読み込む。"""
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("agent.slotsはYAMLの配列で指定してください") from exc
+    if not isinstance(payload, list) or not payload:
+        raise ValueError("agent.slotsには1件以上のスロットが必要です")
+
+    default_cwd = os.environ.get("ARGOS_AGENT_CWD", os.environ.get("ARGOS_CODEX_CWD", "/opt/argos"))
+    slots: list[AgentSlot] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise ValueError("agent.slotsの各要素はテーブルで指定してください")
+        slot_type = str(item.get("type", "local")).strip().lower()
+        name = str(item.get("name", "")).strip()
+        if not name or slot_type not in {"local", "remote"}:
+            raise ValueError("agent.slotsにはnameと有効なtypeが必要です")
+        if slot_type == "remote":
+            remote_url = str(item.get("url", "")).strip().rstrip("/")
+            remote_name = str(item.get("remote_name", "")).strip()
+            remote_provider = str(item.get("remote_provider", "")).strip()
+            if not all((remote_url, remote_name, remote_provider)):
+                raise ValueError("リモートスロットにはurl、remote_name、remote_providerが必要です")
+            slots.append(
+                AgentSlot(
+                    name=name,
+                    provider="remote",
+                    cwd=remote_url,
+                    voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
+                    model=str(item.get("model", "")).strip(),
+                    slot_type="remote",
+                    remote_url=remote_url,
+                    remote_token=str(item.get("token", "")).strip(),
+                    remote_name=remote_name,
+                    remote_provider=remote_provider,
+                    ptt_cycle=bool(item.get("ptt_cycle", True)),
+                )
+            )
+            continue
+        slots.append(
+            AgentSlot(
+                name=name,
+                provider=str(item.get("provider", default_provider)).strip() or default_provider,
+                cwd=str(item.get("cwd", default_cwd)).strip() or default_cwd,
+                voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
+                model=str(item.get("model", "")).strip(),
+                ptt_cycle=bool(item.get("ptt_cycle", True)),
+            )
+        )
+    return tuple(slots)
 
 
 def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[AgentSlot, ...]:
@@ -396,7 +510,9 @@ def load_settings() -> Settings:
         ),
         wifi_status_refresh_seconds=float(os.environ.get("ARGOS_WIFI_STATUS_REFRESH_SECONDS", "10")),
         wakeword_enabled=_bool_env("ARGOS_WAKEWORD_ENABLED", False),
+        listen_mode=os.environ.get("ARGOS_LISTEN_MODE", "wakeword").strip().lower(),
         wakeword_model_dir=os.environ.get("ARGOS_WAKEWORD_MODEL_DIR", "models/wakeword"),
+        wakeword_embedding_hef=os.environ.get("ARGOS_WAKEWORD_EMBEDDING_HEF", ""),
         wakeword_threshold=float(os.environ.get("ARGOS_WAKEWORD_THRESHOLD", "0.5")),
         wakeword_capture_sample_rate=int(os.environ.get("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "16000")),
         wakeword_window_seconds=float(os.environ.get("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.0")),
@@ -410,6 +526,7 @@ def load_settings() -> Settings:
         wakeword_endpoint_mode=os.environ.get("ARGOS_WAKEWORD_ENDPOINT_MODE", "vad"),
         wakeword_vad_model_path=os.environ.get("ARGOS_WAKEWORD_VAD_MODEL", ""),
         wakeword_vad_threshold=float(os.environ.get("ARGOS_WAKEWORD_VAD_THRESHOLD", "0.35")),
+        wakeword_vad_start_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_START_SECONDS", "0.16")),
         wakeword_vad_min_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS", "1.5")),
         wakeword_vad_check_seconds=float(os.environ.get("ARGOS_WAKEWORD_VAD_CHECK_SECONDS", "0.32")),
         wakeword_tts_cooldown_seconds=float(os.environ.get("ARGOS_WAKEWORD_TTS_COOLDOWN_SECONDS", "2.0")),
@@ -417,11 +534,17 @@ def load_settings() -> Settings:
         wakeword_bargein_enabled=_bool_env("ARGOS_WAKEWORD_BARGEIN_ENABLED", False),
         wakeword_score_log_path=os.environ.get("ARGOS_WAKEWORD_SCORE_LOG_PATH", ""),
         wakeword_require_stt_wakeword=_bool_env("ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD", False),
+        wakeword_false_positive_capture=_bool_env("ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE", True),
+        wakeword_false_positive_dir=os.environ.get(
+            "ARGOS_WAKEWORD_FALSE_POSITIVE_DIR", "/tmp/argos/wakeword-candidates"
+        ),
         wakeword_aliases=_split_aliases("ARGOS_WAKEWORD_ALIASES", DEFAULT_WAKEWORD_ALIASES),
         camera_snapshot_path=os.environ.get("ARGOS_CAMERA_SNAPSHOT_PATH", "/tmp/argos/camera-latest.jpg"),
         stt_gateway_url=os.environ.get("STT_GATEWAY_URL", ""),
         stt_language=os.environ.get("STT_GATEWAY_LANGUAGE", "ja"),
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
+        stt_gateway_use_opus=_bool_env("STT_GATEWAY_USE_OPUS", False),
+        stt_gateway_opus_bitrate=os.environ.get("STT_GATEWAY_OPUS_BITRATE", "24k"),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),
@@ -440,6 +563,7 @@ def load_settings() -> Settings:
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
+        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "600")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),
@@ -456,14 +580,17 @@ def load_settings() -> Settings:
         dashboard_host=os.environ.get("ARGOS_DASHBOARD_HOST", "127.0.0.1"),
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
+        dashboard_view_key=os.environ.get("ARGOS_DASHBOARD_VIEW_KEY", ""),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
+        dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),
         dashboard_upload_max_bytes=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_MAX_BYTES", str(5 * 1024 * 1024))),
         dashboard_upload_keep=int(os.environ.get("ARGOS_DASHBOARD_UPLOAD_KEEP", "50")),
         location_provider=os.environ.get("ARGOS_LOCATION_PROVIDER", "local"),
         remote_location_url=os.environ.get("ARGOS_REMOTE_LOCATION_URL", ""),
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
+        remote_location_token=os.environ.get("ARGOS_REMOTE_LOCATION_TOKEN", ""),
         ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
@@ -476,6 +603,8 @@ def load_settings() -> Settings:
         antigravity_command=os.environ.get("ARGOS_ANTIGRAVITY_COMMAND", "agy"),
         antigravity_home=os.environ.get("ARGOS_ANTIGRAVITY_HOME", "~/.gemini/antigravity-cli"),
         antigravity_extra_args=antigravity_extra_args,
+        claude_model=os.environ.get("ARGOS_CLAUDE_MODEL", ""),
+        antigravity_model=os.environ.get("ARGOS_ANTIGRAVITY_MODEL", ""),
         antigravity_skip_permissions=_bool_env("ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS", True),
         antigravity_sandbox=_bool_env("ARGOS_ANTIGRAVITY_SANDBOX", False),
         antigravity_print_timeout=os.environ.get("ARGOS_ANTIGRAVITY_PRINT_TIMEOUT", "5m0s"),
@@ -565,6 +694,20 @@ def load_settings() -> Settings:
         whisper_compute_type=os.environ.get("ARGOS_WHISPER_COMPUTE_TYPE", "int8"),
         voicevox_volume_scale=float(os.environ.get("VOICEVOX_VOLUME_SCALE", "1.0")),
         voicevox_bearer_token=os.environ.get("VOICEVOX_BEARER_TOKEN", ""),
+        voicevox_accept_opus=_bool_env("VOICEVOX_ACCEPT_OPUS", False),
+        conversation_history_enabled=_bool_env("ARGOS_CONVERSATION_HISTORY_ENABLED", False),
+        conversation_history_path=os.environ.get(
+            "ARGOS_CONVERSATION_HISTORY_PATH",
+            "~/.local/state/argos/conversation-history.json",
+        ),
+        conversation_history_max_messages=int(
+            os.environ.get("ARGOS_CONVERSATION_HISTORY_MAX_MESSAGES", "100")
+        ),
+        conversation_memory_enabled=_bool_env("ARGOS_CONVERSATION_MEMORY_ENABLED", False),
+        conversation_memory_path=os.environ.get(
+            "ARGOS_CONVERSATION_MEMORY_PATH",
+            "~/.local/state/argos/conversation-memory.json",
+        ),
     )
 
 

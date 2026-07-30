@@ -14,13 +14,14 @@ from pathlib import Path
 from typing import Callable
 from urllib.parse import urlparse
 
-from argos.config import AgentSlot, Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.client import AgentClient, create_provider_client
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 
 
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 1024 * 1024
+DELIVERY_LEASE_SECONDS = 30.0
 
 
 @dataclass
@@ -38,8 +39,12 @@ class AgentJob:
     result_path: str
     created_at: float
     updated_at: float
+    model: str = ""
+    response_target: str = "local"
     delivered_to_argos: bool = False
     delivered_at: float | None = None
+    delivery_owner: str = ""
+    delivery_lease_until: float | None = None
 
 
 class AgentJobStore:
@@ -49,9 +54,15 @@ class AgentJobStore:
         """保存先ディレクトリを初期化する。"""
         self._state_dir = state_dir.expanduser()
         self._jobs_dir = self._state_dir / "jobs"
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
-    def create(self, slot: AgentSlot, prompt: str) -> AgentJob:
+    def create(
+        self,
+        slot: AgentSlot,
+        prompt: str,
+        response_target: str = "local",
+        delivery_owner: str = "",
+    ) -> AgentJob:
         """新しいジョブを作成し、プロンプトを保存する。"""
         now = time.time()
         job_id = time.strftime("%Y%m%d-%H%M%S", time.localtime(now)) + "-" + uuid.uuid4().hex[:8]
@@ -74,6 +85,10 @@ class AgentJobStore:
             result_path=str(result_path),
             created_at=now,
             updated_at=now,
+            model=slot.model,
+            response_target=response_target,
+            delivery_owner=delivery_owner,
+            delivery_lease_until=now + DELIVERY_LEASE_SECONDS if delivery_owner else None,
         )
         self.save(job)
         return job
@@ -103,19 +118,51 @@ class AgentJobStore:
             log.warning("ジョブ状態JSONの形式が不正です: %s", path)
             return None
 
-    def mark_delivered(self, job_id: str) -> AgentJob | None:
-        """ジョブをARGOSへ配信済みにする。"""
-        job = self.load(job_id)
-        if job is None:
+    def claim(self, job_id: str, owner: str) -> AgentJob | None:
+        """ジョブの配信権を期限付きで取得または更新する。"""
+        if not owner:
             return None
-        job.delivered_to_argos = True
-        job.delivered_at = time.time()
-        if job.status == "completed":
-            job.status = "delivered"
-        elif job.status == "failed":
-            job.status = "failed_delivered"
-        self.save(job)
-        return job
+        with self._lock:
+            job = self.load(job_id)
+            if job is None or job.delivered_to_argos:
+                return None
+            now = time.time()
+            if job.delivery_owner and job.delivery_owner != owner and (job.delivery_lease_until or 0) > now:
+                return None
+            job.delivery_owner = owner
+            job.delivery_lease_until = now + DELIVERY_LEASE_SECONDS
+            self.save(job)
+            return job
+
+    def claim_undelivered(self, owner: str) -> list[AgentJob]:
+        """期限切れの未配信ジョブを呼び出し元へ原子的に割り当てる。"""
+        with self._lock:
+            claimed: list[AgentJob] = []
+            for job in self.list_undelivered():
+                current = self.claim(job.job_id, owner)
+                if current is not None:
+                    claimed.append(current)
+            return claimed
+
+    def mark_delivered(self, job_id: str, owner: str = "") -> AgentJob | None:
+        """ジョブをARGOSへ配信済みにする。"""
+        with self._lock:
+            job = self.load(job_id)
+            if job is None:
+                return None
+            now = time.time()
+            if owner and job.delivery_owner != owner and (job.delivery_lease_until or 0) > now:
+                return None
+            job.delivered_to_argos = True
+            job.delivered_at = now
+            job.delivery_owner = ""
+            job.delivery_lease_until = None
+            if job.status == "completed":
+                job.status = "delivered"
+            elif job.status == "failed":
+                job.status = "failed_delivered"
+            self.save(job)
+            return job
 
     def list_undelivered(self) -> list[AgentJob]:
         """完了済みでARGOSへ未配信のジョブ一覧を返す。"""
@@ -124,7 +171,10 @@ class AgentJobStore:
         jobs: list[AgentJob] = []
         for path in self._jobs_dir.glob("*/job.json"):
             job = self.load(path.parent.name)
-            if job and job.status in {"completed", "failed"} and not job.delivered_to_argos:
+            lease_expired = job and (
+                not job.delivery_owner or (job.delivery_lease_until or 0) <= time.time()
+            )
+            if job and job.status in {"completed", "failed"} and not job.delivered_to_argos and lease_expired:
                 jobs.append(job)
         return sorted(jobs, key=lambda item: item.created_at)
 
@@ -195,7 +245,14 @@ class AgentRunner:
         if recovered:
             log.warning("Runner再起動で中断されたジョブを失敗扱いにしました: count=%s", len(recovered))
 
-    def start_job(self, slot_name: str, provider: str, prompt: str) -> AgentJob:
+    def start_job(
+        self,
+        slot_name: str,
+        provider: str,
+        prompt: str,
+        response_target: str = "local",
+        delivery_owner: str = "",
+    ) -> AgentJob:
         """指定スロットのジョブを開始する。
 
         同一スロットでこのRunnerプロセスが実行中のジョブがある場合は409相当の
@@ -204,6 +261,8 @@ class AgentRunner:
         slot = self._slots.get(_slot_key_values(slot_name, provider))
         if slot is None:
             raise ValueError(f"未定義のスロットです: {slot_name}/{provider}")
+        if response_target not in {"local", "terminal"}:
+            raise ValueError(f"未対応の応答先です: {response_target}")
         existing = self._store.find_active(slot.name, slot.provider, self._active_job_ids)
         if existing is not None:
             log.warning(
@@ -212,19 +271,23 @@ class AgentRunner:
                 existing.job_id,
             )
             raise AgentSlotBusyError(existing)
-        job = self._store.create(slot, prompt)
+        job = self._store.create(slot, prompt, response_target, delivery_owner)
+        job.model = resolve_agent_slot_model(self._settings, slot)
+        self._store.save(job)
         self._active_job_ids.add(job.job_id)
         thread = threading.Thread(target=self._run_job, args=(job, slot), daemon=True)
         thread.start()
         return job
 
-    def get_job(self, job_id: str) -> AgentJob | None:
+    def get_job(self, job_id: str, delivery_owner: str = "") -> AgentJob | None:
         """ジョブ状態を返す。"""
+        if delivery_owner:
+            return self._store.claim(job_id, delivery_owner)
         return self._store.load(job_id)
 
-    def mark_delivered(self, job_id: str) -> AgentJob | None:
+    def mark_delivered(self, job_id: str, delivery_owner: str = "") -> AgentJob | None:
         """ジョブを配信済みにする。"""
-        return self._store.mark_delivered(job_id)
+        return self._store.mark_delivered(job_id, delivery_owner)
 
     def reset_slot(self, slot_name: str, provider: str) -> None:
         """指定スロットの保存済みセッションを削除する。"""
@@ -237,6 +300,10 @@ class AgentRunner:
     def list_undelivered(self) -> list[AgentJob]:
         """未配信ジョブを返す。"""
         return self._store.list_undelivered()
+
+    def claim_undelivered(self, delivery_owner: str) -> list[AgentJob]:
+        """期限切れの未配信ジョブを呼び出し元へ割り当てる。"""
+        return self._store.claim_undelivered(delivery_owner)
 
     def _run_job(self, job: AgentJob, slot: AgentSlot) -> None:
         """エージェントを実行し、結果をジョブディレクトリへ保存する。"""
@@ -260,6 +327,10 @@ class AgentRunner:
             job.status = "failed"
         finally:
             self._active_job_ids.discard(job.job_id)
+            current = self._store.load(job.job_id)
+            if current is not None:
+                job.delivery_owner = current.delivery_owner
+                job.delivery_lease_until = current.delivery_lease_until
             self._store.save(job)
 
 
@@ -303,9 +374,12 @@ class AgentRunnerServer:
                     return
                 prefix = "/api/jobs/"
                 if parsed.path.startswith(prefix):
-                    job = runner.get_job(parsed.path.removeprefix(prefix).strip("/"))
+                    job = runner.get_job(
+                        parsed.path.removeprefix(prefix).strip("/"),
+                        self.headers.get("X-Argos-Delivery-Owner", ""),
+                    )
                     if job is None:
-                        self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+                        self._send_json({"error": "job not found or delivery locked"}, HTTPStatus.CONFLICT)
                         return
                     self._send_json(_job_payload(job), HTTPStatus.OK)
                     return
@@ -317,6 +391,14 @@ class AgentRunnerServer:
                     self._send_json({"error": "unauthorized"}, HTTPStatus.UNAUTHORIZED)
                     return
                 parsed = urlparse(self.path)
+                if parsed.path == "/api/jobs/claim":
+                    owner = self.headers.get("X-Argos-Delivery-Owner", "")
+                    if not owner:
+                        self._send_json({"error": "delivery owner is required"}, HTTPStatus.BAD_REQUEST)
+                        return
+                    jobs = runner.claim_undelivered(owner)
+                    self._send_json({"jobs": [_job_payload(job) for job in jobs]}, HTTPStatus.OK)
+                    return
                 if parsed.path == "/api/jobs":
                     try:
                         payload = self._read_json(MAX_BODY_BYTES, allow_empty=True)
@@ -324,6 +406,8 @@ class AgentRunnerServer:
                             str(payload.get("slot_name", "")),
                             str(payload.get("provider", "")),
                             str(payload.get("prompt", "")),
+                            str(payload.get("response_target", "local")),
+                            self.headers.get("X-Argos-Delivery-Owner", ""),
                         )
                     except ValueError as exc:
                         self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -342,9 +426,12 @@ class AgentRunnerServer:
                 suffix = "/deliver"
                 if parsed.path.startswith("/api/jobs/") and parsed.path.endswith(suffix):
                     job_id = parsed.path.removeprefix("/api/jobs/")[: -len(suffix)].strip("/")
-                    job = runner.mark_delivered(job_id)
+                    job = runner.mark_delivered(
+                        job_id,
+                        self.headers.get("X-Argos-Delivery-Owner", ""),
+                    )
                     if job is None:
-                        self._send_json({"error": "job not found"}, HTTPStatus.NOT_FOUND)
+                        self._send_json({"error": "job not found or delivery locked"}, HTTPStatus.CONFLICT)
                         return
                     self._send_json(_job_payload(job), HTTPStatus.OK)
                     return

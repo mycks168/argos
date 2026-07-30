@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+import base64
+import hmac
 import json
 import logging
 import queue
+import subprocess
 import threading
 import uuid
 from http import HTTPStatus
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
+from argos.services.dashboard.audio_devices import list_audio_devices, measure_microphone, play_speaker_test
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
+from argos.services.dashboard.settings_config import load_settings_form, save_settings_form
 from argos.services.dashboard.state import DashboardState
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
+from argos.services.opus_codec import OpusCodecError, decode_audio_to_wav, encode_wav_to_opus
 
 
 log = logging.getLogger(__name__)
@@ -26,6 +33,9 @@ DEFAULT_UPLOAD_DIR = Path("/tmp/argos/uploads")
 DEFAULT_UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 DEFAULT_UPLOAD_KEEP = 50
 FONT_SIZE_OPTIONS = {"small", "medium", "large"}
+# 閲覧認証で使うCookie名。値には閲覧キーそのものを保持する。
+VIEW_KEY_COOKIE = "argos_view_key"
+LAYOUT_COOKIE = "argos_layout"
 # アップロード画像のMIMEタイプと保存拡張子の対応。
 UPLOAD_MIME_EXTENSIONS = {
     "image/png": ".png",
@@ -50,6 +60,15 @@ def _normalize_font_size(value: str) -> str:
     return normalized if normalized in FONT_SIZE_OPTIONS else "medium"
 
 
+def _normalize_layout(value: str) -> str:
+    """ダッシュボードのレイアウト設定を正規化する。"""
+    normalized = str(value or "").strip().lower()
+    if normalized in ("grid", "tiles", "tile"):
+        return "grid"
+    return "sp" if normalized in ("sp", "mobile") else "standard"
+
+
+
 class DashboardServer:
     """ダッシュボード画面、API、SSEを別スレッドで提供する。"""
 
@@ -59,25 +78,30 @@ class DashboardServer:
         host: str,
         port: int,
         token: str,
+        view_key: str = "",
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
         default_font_size: str = "medium",
+        default_layout: str = "standard",
         location_provider: str = "local",
         remote_location_url: str = "",
         remote_location_timeout_seconds: float = 2.0,
+        remote_location_token: str = "",
         upload_dir: Path = DEFAULT_UPLOAD_DIR,
         upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
         upload_keep: int = DEFAULT_UPLOAD_KEEP,
         control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         terminal_handler: Any | None = None,
+        config_path: Path = Path("config.yaml"),
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
         self._host = host
         self._port = port
         self._token = token
+        self._view_key = view_key
         self._camera_snapshot_path = camera_snapshot_path
         self._gps_device_path = gps_device_path
         self._upload_dir = upload_dir
@@ -85,12 +109,15 @@ class DashboardServer:
         self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
+        self._default_layout = _normalize_layout(default_layout)
         self._location_provider = location_provider
         self._remote_location_url = remote_location_url
         self._remote_location_timeout_seconds = remote_location_timeout_seconds
+        self._remote_location_token = remote_location_token
         self._control_handler = control_handler
         self._event_handler = event_handler
         self._terminal_handler = terminal_handler
+        self._config_path = config_path
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -106,19 +133,23 @@ class DashboardServer:
         handler = _create_handler(
             self._state,
             self._token,
+            self._view_key,
             self._camera_snapshot_path,
             self._gps_device_path,
             self._screensaver_seconds,
             self._default_font_size,
+            self._default_layout,
             self._location_provider,
             self._remote_location_url,
             self._remote_location_timeout_seconds,
+            self._remote_location_token,
             self._upload_dir,
             self._upload_max_bytes,
             self._upload_keep,
             self._control_handler,
             self._event_handler,
             self._terminal_handler,
+            self._config_path,
         )
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
@@ -140,19 +171,23 @@ class DashboardServer:
 def _create_handler(
     state: DashboardState,
     token: str,
+    view_key: str,
     camera_snapshot_path: Path,
     gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
     screensaver_seconds: float = 300.0,
     default_font_size: str = "medium",
+    default_layout: str = "standard",
     location_provider: str = "local",
     remote_location_url: str = "",
     remote_location_timeout_seconds: float = 2.0,
+    remote_location_token: str = "",
     upload_dir: Path = DEFAULT_UPLOAD_DIR,
     upload_max_bytes: int = DEFAULT_UPLOAD_MAX_BYTES,
     upload_keep: int = DEFAULT_UPLOAD_KEEP,
     control_handler: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     terminal_handler: Any | None = None,
+    config_path: Path = Path("config.yaml"),
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -162,8 +197,30 @@ def _create_handler(
         def do_GET(self) -> None:
             """画面、状態、ヘルスチェック、SSEを返す。"""
             path = urlparse(self.path).path
+            if path != "/api/health" and not self._require_view():
+                return
             if path == "/":
-                self._send_html()
+                query = parse_qs(urlparse(self.path).query)
+                open_settings = str(query.get("open", [""])[0]).strip().lower() == "settings"
+                cookie = SimpleCookie(self.headers.get("Cookie", ""))
+                layout_morsel = cookie.get(LAYOUT_COOKIE)
+                cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
+                target_layout = cookie_layout if cookie_layout else default_layout
+                if open_settings and target_layout == "grid":
+                    target_layout = "standard"
+                if target_layout == "grid":
+                    self.send_response(HTTPStatus.SEE_OTHER)
+                    self.send_header("Location", "/grid")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    return
+                self._send_html(target_layout)
+            elif path in {"/settings", "/settings/"}:
+                self._send_settings_html()
+            elif path in {"/sp", "/sp/"}:
+                self._send_html("sp")
+            elif path in {"/grid", "/grid/"}:
+                self._send_grid_html()
             elif path.startswith("/static/"):
                 self._send_static_file(path)
             elif path == "/api/health":
@@ -177,8 +234,20 @@ def _create_handler(
                         gps_device_path,
                         remote_location_url,
                         remote_location_timeout_seconds,
+                        remote_location_token,
                     )
                 )
+            elif path == "/api/config":
+                if not self._require_token():
+                    return
+                try:
+                    self._send_json(load_settings_form(config_path))
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.INTERNAL_SERVER_ERROR)
+            elif path == "/api/config/audio-devices":
+                if not self._require_token():
+                    return
+                self._send_json(list_audio_devices())
             elif path == "/api/stream":
                 self._send_sse()
             elif path == "/api/terminal/slots":
@@ -188,6 +257,23 @@ def _create_handler(
                     self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
                 self._send_json(terminal_handler.list_slots())
+            elif path == "/api/terminal/history":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                query = parse_qs(urlparse(self.path).query)
+                name = str(query.get("name", [""])[0]).strip()
+                provider = str(query.get("provider", [""])[0]).strip()
+                try:
+                    if not name or not provider:
+                        raise ValueError("スロット名とproviderが必要です")
+                    response = terminal_handler.slot_history(name, provider)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(response)
             elif path == "/camera/latest.jpg":
                 self._send_camera_snapshot()
             elif path.startswith("/uploads/"):
@@ -198,6 +284,26 @@ def _create_handler(
         def do_POST(self) -> None:
             """Bearer認証付き更新APIを処理する。"""
             path = urlparse(self.path).path
+            if path in {"/api/config/test-microphone", "/api/config/test-speaker"}:
+                if not self._require_token():
+                    return
+                try:
+                    payload = self._read_json(MAX_BODY_BYTES)
+                    device = str(payload.get("device", "")).strip()
+                    response = (
+                        measure_microphone(device)
+                        if path.endswith("test-microphone")
+                        else play_speaker_test(device)
+                    )
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                except (OSError, subprocess.SubprocessError):
+                    log.exception("音声デバイスの動作確認に失敗しました")
+                    self._send_json({"error": "音声デバイスを確認できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return
+                self._send_json(response)
+                return
             if path == "/api/uploads":
                 if not self._require_token():
                     return
@@ -211,13 +317,45 @@ def _create_handler(
                     return
                 self._send_json(terminal_handler.next_slot())
                 return
+            if path == "/api/terminal/slots/select":
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                try:
+                    payload = self._read_json(MAX_BODY_BYTES)
+                    name = str(payload.get("name", "")).strip()
+                    provider = str(payload.get("provider", "")).strip()
+                    if not name or not provider:
+                        raise ValueError("スロット名とproviderが必要です")
+                    response = terminal_handler.select_slot(name, provider)
+                except ValueError as exc:
+                    self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._send_json(response)
+                return
             if path == "/api/terminal/turn":
                 if not self._require_token():
                     return
                 if terminal_handler is None:
                     self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self._send_terminal_turn(terminal_handler, upload_max_bytes)
+                query = parse_qs(urlparse(self.path).query)
+                slot_name = str(query.get("name", [""])[0]).strip()
+                slot_provider = str(query.get("provider", [""])[0]).strip()
+                if bool(slot_name) != bool(slot_provider):
+                    self._send_json(
+                        {"error": "スロット名とproviderは両方指定してください"},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                self._send_terminal_turn(
+                    terminal_handler,
+                    upload_max_bytes,
+                    slot_name,
+                    slot_provider,
+                )
                 return
             if path not in {"/api/events", "/api/control"}:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -239,9 +377,59 @@ def _create_handler(
                 return
             self._send_json(response, status)
 
+        def do_PUT(self) -> None:
+            """Bearer認証付き設定保存APIを処理する。"""
+            path = urlparse(self.path).path
+            if path != "/api/config":
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            if not self._require_token():
+                return
+            try:
+                payload = self._read_json(MAX_BODY_BYTES)
+                backup_path = save_settings_form(config_path, payload.get("values"))
+            except ValueError as exc:
+                self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
+                return
+            except OSError:
+                log.exception("設定ファイルの保存に失敗しました")
+                self._send_json({"error": "設定ファイルを保存できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
+                return
+            self._send_json(
+                {
+                    "saved": True,
+                    "restart_required": True,
+                    "message": "保存しました。反映にはARGOSの再起動が必要です。",
+                    "backup": backup_path.name,
+                }
+            )
+
         def log_message(self, format: str, *args: object) -> None:
             """標準HTTPログをアプリログへ流す。"""
             log.info("dashboard http: " + format, *args)
+
+        def _view_request_authorized(self) -> bool:
+            """閲覧キーがクエリ、Cookie、Bearerのいずれかで一致するか調べる。"""
+            query_key = parse_qs(urlparse(self.path).query).get("key", [""])[0]
+            if query_key and hmac.compare_digest(query_key, view_key):
+                return True
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            morsel = cookie.get(VIEW_KEY_COOKIE)
+            if morsel is not None and hmac.compare_digest(morsel.value, view_key):
+                return True
+            return bool(token) and bearer_header_matches(self.headers.get("Authorization", ""), token)
+
+        def _require_view(self) -> bool:
+            """閲覧系エンドポイントのアクセスキーを検証する。未設定なら常に許可する。"""
+            if not view_key:
+                return True
+            if self._view_request_authorized():
+                return True
+            if urlparse(self.path).path.startswith("/api/"):
+                self._send_json({"error": "アクセスキーが必要です"}, HTTPStatus.UNAUTHORIZED)
+            else:
+                self.send_error(HTTPStatus.UNAUTHORIZED, "Unauthorized")
+            return False
 
         def _require_token(self) -> bool:
             """更新系APIのBearer認証を検証する。"""
@@ -260,16 +448,55 @@ def _create_handler(
             _required_text(payload, "action", 40)
             return control_handler(payload)
 
-        def _send_html(self) -> None:
+        def _send_html(self, layout: str) -> None:
             """ダッシュボードHTMLを返す。"""
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
             html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_LAYOUT__", json.dumps(layout))
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
+            # 更新後の操作UIが端末ごとのブラウザキャッシュに残らないようにする。
+            self.send_header("Cache-Control", "no-store")
+            if view_key:
+                # クエリキーで入った端末が以降キーなしで再読込できるようCookieを配る。
+                self.send_header(
+                    "Set-Cookie",
+                    f"{VIEW_KEY_COOKIE}={view_key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000",
+                )
+            self.end_headers()
+            self.wfile.write(html)
+
+        def _send_settings_html(self) -> None:
+            """初心者向け設定画面を返す。"""
+            self._send_static_html("settings.html")
+
+        def _send_grid_html(self) -> None:
+            """ローカルスロットを一覧操作するタイル画面を返す。"""
+            self._send_static_html("grid.html")
+
+        def _send_static_html(self, filename: str) -> None:
+            """トークンを埋め込んだ静的HTMLをキャッシュせず返す。"""
+            html_text = files("argos.services.dashboard.static").joinpath(filename).read_text(
+                encoding="utf-8",
+            )
+            html_text = html_text.replace(
+                "__ARGOS_DASHBOARD_TOKEN__",
+                json.dumps(token, ensure_ascii=False),
+            )
+            html = html_text.encode("utf-8")
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(html)))
+            self.send_header("Cache-Control", "no-store")
+            if view_key:
+                self.send_header(
+                    "Set-Cookie",
+                    f"{VIEW_KEY_COOKIE}={view_key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000",
+                )
             self.end_headers()
             self.wfile.write(html)
 
@@ -363,7 +590,7 @@ def _create_handler(
             """状態更新をServer-Sent Eventsで配信する。"""
             subscriber = state.subscribe()
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "keep-alive")
             self.end_headers()
@@ -383,26 +610,84 @@ def _create_handler(
             finally:
                 state.unsubscribe(subscriber)
 
-        def _send_terminal_turn(self, handler: Any, max_bytes: int) -> None:
-            """録音WAVを受け取り、STT→エージェント→TTS結果をSSEで返す。"""
+        def _send_terminal_turn(
+            self,
+            handler: Any,
+            max_bytes: int,
+            slot_name: str = "",
+            slot_provider: str = "",
+        ) -> None:
+            """端末ターンを受け取り、STT/直接テキスト→エージェント→(TTS)結果をSSEで返す。
+
+            入力形式はリクエストの Content-Type で決まる。
+              - ``audio/wav``（既定）: 録音WAV
+              - ``audio/ogg`` / ``audio/opus``: Ogg Opus（WAVへデコード）
+              - ``audio/mp4`` / ``audio/webm``: ブラウザ録音（WAVへデコード）
+              - ``text/plain``: テキストをそのままエージェントへ（STTスキップ）
+            出力に音声を含めるかは Accept ヘッダでネゴシエートする。
+              - ``text/plain`` のみを要求 → 音声を返さずテキストのみ（母艦も端末も読み上げない）
+              - それ以外（既定）→ 従来通り音声チャンクも返す。コーデックは ``X-Argos-Audio`` を尊重
+            """
             try:
                 length = int(self.headers.get("Content-Length", "0"))
             except ValueError:
                 self._send_json({"error": "Content-Length が不正です"}, HTTPStatus.BAD_REQUEST)
                 return
             if length <= 0 or length > max_bytes:
-                self._send_json({"error": "音声サイズが不正です"}, HTTPStatus.BAD_REQUEST)
+                self._send_json({"error": "入力サイズが不正です"}, HTTPStatus.BAD_REQUEST)
                 return
-            wav_bytes = self.rfile.read(length)
+            body = self.rfile.read(length)
+            content_type = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
+            # Accept にテキストのみが指定されていれば、応答音声（TTS）を省く。
+            want_audio = not _accepts_text_only(self.headers.get("Accept", ""))
+            text_input: str | None = None
+            wav_bytes: bytes | None = None
+            if content_type == "text/plain":
+                try:
+                    text_input = body.decode("utf-8")
+                except UnicodeDecodeError:
+                    self._send_json({"error": "テキストのデコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
+                    return
+            elif content_type in {"audio/ogg", "audio/opus", "audio/mp4", "video/mp4", "audio/webm"}:
+                try:
+                    wav_bytes = decode_audio_to_wav(body)
+                except OpusCodecError as exc:
+                    log.warning("端末ターンのブラウザ音声デコードに失敗しました: %s", exc)
+                    self._send_json({"error": "音声デコードに失敗しました"}, HTTPStatus.BAD_REQUEST)
+                    return
+            elif content_type in {"", "audio/wav", "audio/x-wav"}:
+                wav_bytes = body
+            else:
+                self._send_json({"error": "対応していない入力形式です"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
+                return
+            # X-Argos-Audio: opus のとき、応答音声チャンクをOpusへ変換して返す。
+            wants_opus = want_audio and self.headers.get("X-Argos-Audio", "").strip().lower() == "opus"
             # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
             self.close_connection = True
             self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
             self.send_header("Connection", "close")
             self.end_headers()
             try:
-                for event in handler.process_turn(wav_bytes):
+                turn_events = (
+                    handler.process_turn(
+                        wav_bytes,
+                        text=text_input,
+                        want_audio=want_audio,
+                        slot_name=slot_name,
+                        slot_provider=slot_provider,
+                    )
+                    if slot_name and slot_provider
+                    else handler.process_turn(
+                        wav_bytes,
+                        text=text_input,
+                        want_audio=want_audio,
+                    )
+                )
+                for event in turn_events:
+                    if wants_opus and event.get("event") == "audio" and event.get("format") == "wav":
+                        event = _encode_audio_event_to_opus(event)
                     name = str(event.get("event", "message"))
                     body = json.dumps(event, ensure_ascii=False).encode("utf-8")
                     self.wfile.write(f"event: {name}\ndata: ".encode("utf-8") + body + b"\n\n")
@@ -419,6 +704,36 @@ def _create_handler(
                     return
 
     return DashboardHandler
+
+
+def _accepts_text_only(accept: str) -> bool:
+    """Acceptヘッダが音声を含まずテキストのみを要求しているか判定する。
+
+    ``text/plain`` や ``text/event-stream`` などテキスト系だけが指定され、
+    ``*/*`` や ``audio/*`` を含まないときに True を返す。ヘッダ未指定や ``*/*``
+    を含む場合は従来通り音声も返す（False）。端末クライアントは Accept を
+    指定しない（requests既定は ``*/*``）ため、既存の音声ターンは影響を受けない。
+    """
+    types = [part.split(";")[0].strip().lower() for part in accept.split(",") if part.strip()]
+    if not types:
+        return False
+    if any(t == "*/*" or t.startswith("audio/") for t in types):
+        return False
+    return all(t.startswith("text/") for t in types)
+
+
+def _encode_audio_event_to_opus(event: dict[str, Any]) -> dict[str, Any]:
+    """audioイベントのWAVペイロードをOgg Opusへ変換する。失敗時はWAVのまま返す。"""
+    try:
+        wav = base64.b64decode(str(event.get("data", "")))
+        opus = encode_wav_to_opus(wav)
+    except (OpusCodecError, ValueError):
+        log.exception("応答音声のOpusエンコードに失敗したためWAVのまま返します")
+        return event
+    converted = dict(event)
+    converted["format"] = "opus"
+    converted["data"] = base64.b64encode(opus).decode("ascii")
+    return converted
 
 
 def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, Any]:

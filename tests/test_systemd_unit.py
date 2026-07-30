@@ -42,7 +42,8 @@ def test_argos_service_uses_project_runtime():
     wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
     assert wd == project_dir
 
-    env_file = Path(unit["Service"]["EnvironmentFile"]).resolve()
+    assert unit["Service"]["EnvironmentFile"].startswith("-")
+    env_file = Path(unit["Service"]["EnvironmentFile"].removeprefix("-")).resolve()
     assert env_file == project_dir / ".env"
 
     exec_start = unit["Service"]["ExecStart"]
@@ -74,7 +75,8 @@ def test_agent_runner_service_uses_project_runtime():
     wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
     assert wd == project_dir
 
-    env_file = Path(unit["Service"]["EnvironmentFile"]).resolve()
+    assert unit["Service"]["EnvironmentFile"].startswith("-")
+    env_file = Path(unit["Service"]["EnvironmentFile"].removeprefix("-")).resolve()
     assert env_file == project_dir / ".env"
 
     exec_start = unit["Service"]["ExecStart"]
@@ -91,7 +93,7 @@ def test_systemd_templates_support_development_project_dir():
     runner_unit = _load_runner_unit(project_dir)
 
     assert unit["Service"]["WorkingDirectory"] == str(project_dir)
-    assert unit["Service"]["EnvironmentFile"] == str(project_dir / ".env")
+    assert unit["Service"]["EnvironmentFile"] == f"-{project_dir / '.env'}"
     assert unit["Service"]["ExecStart"] == str(project_dir / ".venv" / "bin" / "argos")
     assert runner_unit["Service"]["ExecStart"] == str(project_dir / ".venv" / "bin" / "argos-agent-runner")
 
@@ -109,18 +111,42 @@ def test_install_systemd_services_script_renders_templates():
 
 def test_dashboard_kiosk_disables_translation_ui():
     """キオスク画面ではChromiumの翻訳UIを表示しない。"""
+    unit = ConfigParser(strict=False)
+    unit.optionxform = str
+    unit.read_string(_render_unit("argos-dashboard-kiosk.service"))
     script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
 
+    assert unit["Service"]["EnvironmentFile"] == "-/opt/argos/.env"
+
     assert "--lang=ja" in script
+    assert 'CHROMIUM_SNAP_FONT_DIR="${HOME}/snap/chromium/current/.local/share/fonts/argos"' in script
+    assert "/usr/share/fonts/opentype/ipafont-gothic/*.ttf" in script
     assert "--no-first-run" in script
     assert "--no-default-browser-check" in script
     assert "--disable-extensions" in script
     assert "--disable-sync" in script
     assert "--disable-features=Translate,TranslateUI" in script
     assert "--disable-translate" in script
+    assert "--touch-events=enabled" in script
     assert "xset s off" in script
     assert "xset -dpms" in script
     assert "gsettings set org.gnome.desktop.screensaver lock-enabled false" in script
+
+
+def test_dashboard_kiosk_uses_portable_splash_url():
+    """接続待ち画面は配置先に追従し、転送先をファイル名と分離して渡す。"""
+    project_dir = Path(__file__).parents[1]
+    script = (project_dir / "scripts" / "open-dashboard-kiosk.sh").read_text()
+    splash = (project_dir / "scripts" / "kiosk-splash.html").read_text()
+
+    assert 'dirname -- "${BASH_SOURCE[0]}"' in script
+    assert "pathlib.Path(sys.argv[1]).resolve().as_uri()" in script
+    assert 'SPLASH_URL="${SPLASH_FILE_URL}#target=${ENCODED_TARGET}"' in script
+    assert 'SPLASH_DIR="${HOME}/snap/chromium/common/argos-dashboard-kiosk"' in script
+    assert 'install -m 600 "${SCRIPT_DIR}/kiosk-splash.html" "${SPLASH_FILE}"' in script
+    assert "file:///opt/argos/scripts/kiosk-splash.html" not in script
+    assert "location.hash.slice(1)" in splash
+    assert 'queryParams.get("target")' in splash
 
 
 def test_dashboard_chromium_policy_disables_translation():

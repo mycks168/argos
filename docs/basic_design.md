@@ -1,5 +1,49 @@
 # 基本設計
 
+## 設定ファイル
+
+ARGOS本体の正規設定ファイルは、プロジェクト直下の `config.yaml` とする。雛形は `config.yaml.example` に置く。別の場所を使う場合は、実プロセスの環境変数 `ARGOS_CONFIG_FILE` でパスを指定する。
+
+設定値の優先順位は、実プロセスの環境変数、`config.yaml`、旧 `.env`、プログラム既定値の順とする。環境変数名は既存の外部連携と一時上書きの互換性のため維持する。旧 `.env` も移行期間中は読み込むが、通常の編集対象にはしない。
+
+設定は機能別のYAMLマッピングに分ける。複数値と会話スロットは配列で表現する。
+
+ARGOS本体が直接使う設定は`audio`、`ptt`、`tts`、`network`、`runtime`、`location`などの機能別マッピングへ置く。`environment`はスキルや外部スクリプトへそのまま渡す汎用環境変数の互換領域とし、ARGOS本体設定の置き場所には使わない。たとえばSlack通知スキルが使う`SLACK_WEBHOOK_URL`は`environment`へ置く。`environment`の値もARGOSとAgent Runnerから起動する子プロセスへ引き継ぐため、認証情報を含む`config.yaml`の権限は600にする。
+
+```yaml
+agent:
+  provider: codex
+  slots:
+    - type: local
+      name: Codex
+      provider: codex
+      cwd: /opt/argos
+      voicevox_speaker: 13
+      model: default
+    - type: remote
+      name: 自宅Codex
+      url: https://home.example.ts.net
+      token: 接続先のARGOS_DASHBOARD_TOKEN
+      remote_name: 作業
+      remote_provider: codex
+remote_argos:
+  timeout_seconds: 600
+audio:
+  input_devices:
+    - default
+    - plughw:CARD=USBMic,DEV=0
+location:
+  provider: remote
+  remote:
+    url: https://example.invalid/location
+```
+
+`argos-install --configure --apply` は対話結果を `config.yaml` へ保存する。既存の `.env` がある場合は既知の項目を階層化し、未分類の項目も `environment` 配下に文字列のまま保存して移行する。Bearerトークンを含むため、生成ファイルの権限は600にする。tts-filterやargos-reminderなど、独立プロセスが専用に読む `services/*/.env` は引き続きインストーラーが生成・同期する。
+
+`argos-install --migrate-config` は、プロジェクト直下の `.env` から `config.yaml`を生成する設定移行専用コマンドとする。依存更新、systemd unit生成、サービス再起動は行わない。既存の`config.yaml`がある場合は上書きせずエラーにする。
+
+`agent.slots`は記載順がそのままダッシュボードとPTT切替の順番になる。`type: local`は同じホストのエージェントCLIを使う。`type: remote`は別のARGOSへ接続し、`url`、`remote_name`、`remote_provider`を必須とする。
+
 ## 外部仕様
 
 ### stt-gateway
@@ -8,9 +52,11 @@
 
 リクエスト:
 
-- `file`: WAV ファイル
+- `file`: WAV ファイル（`STT_GATEWAY_USE_OPUS=true` のときは Opus ファイル）
 - `language`: 既定値 `ja`
 - `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>`。トークン未設定時は送信しない。
+
+`STT_GATEWAY_USE_OPUS=true` のときは、録音WAVを ffmpeg で Ogg Opus にエンコードしてから送信し、アップロードサイズを削減する。送信ファイル名は拡張子を `.opus` に、MIME は `audio/opus` にする。ビットレートは `STT_GATEWAY_OPUS_BITRATE`（既定 `24k`）で調整する。stt-gateway 側が Opus 受信に対応している必要がある。既定（`false`）では従来どおり WAV を送る。
 
 レスポンス:
 
@@ -52,7 +98,7 @@ faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_
 ```
 
 ARGOS本体は読み上げ文をローカル補正せず、tts-filter へそのまま渡す。読み上げ辞書や読み間違い補正は tts-filter 側で管理する。tts-filter に接続できない場合は、元のテキストをそのまま返す。
-`argos-install --apply` または `--update` は、ARGOS本体の `.env` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む `.env` は、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
+`argos-install --apply` または `--update` は、ARGOS本体の `config.yaml` と `services/tts-filter/.env` の `TTS_FILTER_BEARER_TOKEN` を同じ値に揃える。両方が未設定または `change-me` の場合はランダムなトークンを生成する。Bearerトークンを含む設定ファイルは、インストーラーが所有者のみ読み書き可能（600）へ権限を絞る。
 
 ### VOICEVOX
 
@@ -64,6 +110,8 @@ VOICEVOX Engine は次の順で呼び出す。
 `audio_query` の JSON に `outputSamplingRate` と `VOICEVOX_SPEED_SCALE` で指定した `speedScale` を設定してから `synthesis` に渡す。
 
 `VOICEVOX_BEARER_TOKEN` が設定されている場合は、`audio_query` と `synthesis` の両方へ `Authorization: Bearer <token>` を付ける。未設定の場合は認証ヘッダーを送らない。
+
+`VOICEVOX_ACCEPT_OPUS=true` のときは、`synthesis` のリクエストに `Accept: audio/opus` を付ける。素の VOICEVOX Engine は Opus 非対応のため、これは Opus 対応ラッパーを前提とする（ラッパーが `Accept` を見て Ogg Opus を返す）。レスポンスの `Content-Type` に `opus` を含む場合は ffmpeg で WAV へデコードしてから再生へ渡す。WAV が返った場合はそのまま再生するため、既定（`false`）や非対応エンジンでもフォールバックが効く。
 
 `VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
 
@@ -81,15 +129,17 @@ ARGOS は短い読み上げ文の合成結果をWAVファイルとしてロー�
 
 HDMIダッシュボードは、現在の状態、現在のエージェントスロット名、provider、Wi-Fi接続状態、会話履歴、通知を表示する。PTT短押しで録音を破棄した場合や、PTTダブルクリックでスロットを切り替えた場合は、認証状態に応じて表示を待機中またはロック中へ戻し、録音中表示を残さない。本人確認が必要なロック中にPTTを押した場合は、通常の録音中ではなく「本人確認録音中」と表示し、PTT解放後は「本人確認中」と表示する。これにより、発話が本人確認用であることと、PTT入力が認識されたことを画面上でも示す。
 
+設定モーダルの画面レイアウト選択は通常、SP、Gridに対応する。Gridを選択すると次回のルート表示を`/grid`へ遷移させる。Grid画面の設定ボタンは設定画面を開き、設定画面の戻るリンクからGridへ復帰できる。
+
 ### LLM エージェント
 
-ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。プロバイダーは `ARGOS_AGENT_PROVIDER` で選択し、現在の既定値は `codex` とする。`codex`、`antigravity`、`hermes`、`claude` を指定できる。未対応のプロバイダーが指定された場合は起動時にエラーにする。
+ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。`codex`、`antigravity`、`hermes`、`claude`をローカルproviderとして利用できる。別のARGOSへ接続するスロットは内部的に`remote` providerとして扱う。未対応のプロバイダーが指定された場合は起動時にエラーにする。
 
 Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
 `ARGOS_AGENT_RUNNER_URL` が設定されている場合、ARGOS 本体は Codex、Antigravity、Hermes を直接起動せず、Agent Runner HTTP APIへジョブを作成する。Runnerは `argos-agent-runner` コマンドで別プロセスとして起動し、`ARGOS_AGENT_RUNNER_HOST`、`ARGOS_AGENT_RUNNER_PORT` で待ち受ける。更新系APIは `ARGOS_AGENT_RUNNER_TOKEN` によるBearer認証に対応する。
 
-Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。
+Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/` を作成し、`job.json`、`prompt.txt`、`output.txt`、`result.txt`、`error.txt` を保存する。ジョブ状態は `queued`、`running`、`completed`、`delivered`、`failed`、`failed_delivered`、`cancelled` を使い、処理完了とARGOS本体への配信済み状態を分ける。`job.json` の `response_target` は応答先を表し、既定の `local` と遠隔端末向けの `terminal` を使う。これにより、ARGOS本体が再起動してもRunner側の実行結果を後から確認でき、配信済み結果を起動のたびに繰り返し読み上げる事故を避ける。旧ジョブに同項目がない場合は `local` として扱う。
 
 `output.txt` は実行中も逐次flushされ、`GET /api/jobs/<job_id>` のレスポンスに `output` フィールドとして含まれる。ARGOS本体側の `RunnerAgentClient.ask_stream` は0.2秒ごとにポーリングし、前回までに受け取った `output` との差分だけを読み上げ用チャンクとして返す。これにより、Runner経由でもCLI側のトークン単位ストリーミングをほぼそのまま中継できる。
 
@@ -97,7 +147,33 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
-初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
+初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。通常の応答処理と未配信回収が同じ完了ジョブを同時に反映しないよう、Runnerはジョブ作成元を `delivery_owner` として保存し、期限付きの配信権を管理する。通常処理のポーリングで期限を更新し、未配信回収は `POST /api/jobs/claim` により期限切れジョブをRunner上で原子的に取得した場合だけ反映する。ARGOSが異常終了した場合も期限後には別インスタンスが回収できる。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。ただし `response_target=terminal` のジョブは、端末接続が途中で切れても完成回答を確認できるよう母艦の会話履歴と通知へ反映する一方、母艦TTSへは流さない。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
+
+### スロットタイル画面
+
+`GET /grid` は、`config.yaml` の `agent.slots` に登録された `type: local` のスロットをすべて自動タイル配置する。各タイルはスロット名、provider、モデル、処理状態、会話履歴、テキスト入力、音声入力を表示する。タイル領域はブラウザの表示高をすべて使用し、余剰高は各行へ均等に配分する。スロット数が多く最小タイル高を確保できない場合だけ、タイル領域全体をスクロールする。タイル内の会話履歴は個別にスクロールする。タイルは全体をフォーカス可能にし、会話履歴や余白のクリックでもフォーカスを移す。入力欄やボタンをクリックした場合は操作対象のフォーカスを維持する。PCではタイルのダブルクリック、タッチ端末ではヘッダーのボタンでタイルを最大化し、Escキーまたは同じ操作で解除する。フォーカス中は既存ダッシュボードの黄色を薄く背景へ重ね、実行中は既存の水色枠を使う。フォーカス外で回答が完了した場合は既存の未読色で「回答完了」を点滅表示し、タイル操作時に解除する。スロットの追加・編集、リモートスロット表示は初期版の対象外とする。
+
+会話履歴はメッセージ間と履歴コンテナの上下余白を小さくし、複数の発話を一覧しやすい密度で表示する。本文の前後にある空白行は表示時に除去し、本文内部の改行は保持する。入力送信直後は対象タイルを実行中とし、状態通知後はダッシュボードと同じ状態ラベルを表示する。
+
+タイル画面は既存の `GET /api/terminal/slots`、`GET /api/terminal/history`、`GET /api/stream`、`POST /api/terminal/turn` を利用する。スロット一覧には後方互換な追加項目として `type` を返す。
+
+`POST /api/terminal/turn` は任意のクエリパラメーター `name` と `provider` を受け付ける。両方を指定した場合、現在の選択状態を変更せず対象スロットへ入力する。両方を省略した場合は従来どおり現在スロットへ入力し、片方だけ指定した場合は `400 Bad Request` を返す。リクエスト本文、Bearer認証、SSE応答形式は変更しない。
+
+タイルまたはタイル内の入力操作部以外へフォーカスがある状態では、スペースキーまたはF13からF24として認識されるUSBペダルを押している間だけ対象タイルの音声を録音し、解放時に送信する。入力欄やボタンでは通常のキー操作を優先する。録音はGrid全体で1つに限定し、別タイルへの同時録音を行わない。
+
+音声入力の応答では音声チャンクも要求する。対象タイルにフォーカスがない間はブラウザ内に一時保留し、フォーカスされた時点で順番に再生する。ヘッダーのミュートはGridブラウザ内の再生だけを停止し、保留中の音声も破棄する。ミュート状態はブラウザのローカルストレージへ保存するため、ARGOS本体の物理音声出力設定には影響しない。
+
+明示スロット処理は共有の選択インデックスを書き換えず、スロットに対応するエージェントクライアントまたはRunnerジョブを直接選ぶ。これにより別スロットの並行実行時に送信先が入れ替わる競合を防ぐ。同一スロットへの重複依頼は既存のRunner競合制御で拒否する。別スロットの同時完了によるJSON更新競合を防ぐため、システム指示の注入状態と会話引き継ぎメモリはプロセス内ロックで直列化して保存する。
+
+Gridヘッダーの「Usage」ボタンは、登録済みローカルスロットごとの利用枠をダイアログで一覧表示する。利用枠の取得は既存の`agent.usage_commands`を使い、スロットの`usage_provider`に対応するプロバイダ情報を表示する。取得結果は既存の`GET /api/state`の`agent_usage.providers`を利用し、新しいAPIは追加しない。未取得、取得エラー、5時間・週間の残量、リセット時刻を一覧内に表示する。
+
+### リモートARGOSスロット
+
+`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、UTF-8のSSE応答差分を通常のエージェント応答として扱う。受信側も文字コードをUTF-8へ固定し、接続先がcharsetを返さない旧バージョンでも日本語を正しく復元する。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
+
+切替時には`GET /api/terminal/history`から接続先の会話履歴を取得し、接続元のリモートスロット表示へ反映する。接続先の現在スロットも共有するため、リモート選択は接続先ダッシュボードのアクティブスロットにも反映される。
+
+GPS、マイク、PTT、音声再生、車両制御は接続元ARGOSのローカル機能として動作する。GPSを会話していない間も接続先へ毎秒転送することはせず、車載ダッシュボードの地図更新はローカルで完結させる。
 
 ### Codex CLI
 
@@ -130,7 +206,7 @@ ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取�
 - `stream`（既定）: 上記の差分を逐次読み上げる。完了後に `-o` で受け取った最終出力は、途中経過を一切取得できなかった場合のフォールバックとしてのみ使う。
 - `final`: 途中経過は読み上げず、完了後に `-o` で受け取った最終出力をまとめて1回だけ読み上げる。
 
-Codex の最終出力は途中経過の単純な続きではなく、応答全体を再構成したまとめになることがある。`stream` モードで両方読み上げると同じ内容を2回話すことになるため、用途に応じて `final` へ切り替えられるようにしている。この設定は Codex 専用で、Claude CLI には影響しない（Claude CLI は `--include-partial-messages` によるトークン単位の差分のみを使い、完了後の二重読み上げは発生しない）。
+Codex の最終出力は途中経過の単純な続きではなく、応答全体を再構成したまとめになることがある。`stream` モードで両方読み上げると同じ内容を2回話すことになるため、用途に応じて `final` へ切り替えられるようにしている。この設定は Codex 専用で、Claude CLI には影響しない。Claude CLI は通常 `--include-partial-messages` によるトークン単位の差分を使い、差分本文が一件も得られなかった場合だけ完了イベントの `result` 本文へフォールバックする。
 
 ### Claude CLI
 
@@ -148,13 +224,21 @@ claude -p --output-format stream-json --verbose --permission-mode dontAsk --resu
 
 ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。
 `claude` の実行時は、 `stdin=subprocess.DEVNULL` を指定して完全に非対話（non-interactive）として認識させることで、信頼確認ダイアログなどでブロッキングするのを防ぐ。
-ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSON ストリームの `type == "assistant"` イベントから `content` 内の `text` 差分のみを抽出し、既に処理済みの文字列との差分だけをアプリへ渡す。
+ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの `stream_event` から `text_delta` を抽出してアプリへ渡す。`text_delta` が一件もなかった場合は、完了を示す `type == "result"` イベントの `result` 本文を最終応答として渡す。
 
 ### HDMI ダッシュボード
 
 `ARGOS_DASHBOARD_ENABLED=true` の場合、ARGOS はHTTPサーバーを起動する。ダッシュボード画面は1920x440の横長HDMI画面を基本とし、ARGOS状態、会話履歴、外部通知を3列で表示する。800x600程度の画面では左側操作を圧縮した3列表示を維持し、さらに狭い場合だけ通知欄を下へ回り込ませる。また、画面の高さが極端に低い場合（高さ500px以下）は、会話履歴の文字サイズを維持したまま左側操作パネルの余白（マージンやパディング）を自動で縮小し、スロットボタンや操作パネルが画面下に見切れるのを防ぐ仕様とする。
 
+既存の `/` は車載・固定ディスプレイ向け表示として維持する。`/sp` はスマートフォン・タブレット向け表示を提供し、状態欄と通知欄を左右のドロワーとして開閉する。SP表示ではツールバー左上のメニューボタン（`☰`）を押すことで、左側のステータスパネルを常時固定表示するモード（`sp-left-pinned`）と非表示モードを直接切り替えることができる。左枠固定時は中央の会話領域の幅と位置が自動調整され、背景バックドロップを非表示にしてスムーズに操作できる。固定状態はブラウザの `localStorage`（`argos-sp-left-pinned`）に保持される。
+
+また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。
+
+SP表示ではページ全体を固定ビューポートに収め、本文スクロールを禁止する。スクロール対象は会話履歴、状態ドロワー、通知ドロワーに限定する。`VisualViewport` の高さと上端位置を反映し、iOSのソフトウェアキーボード開閉時にも入力欄を表示領域内へ維持する。通知到着時はドロワーを自動表示せず、通知ボタンの未確認件数だけを更新してテキスト入力を妨げない。通知ドロワーを開いた時点で確認済みにし、最新確認時刻をブラウザの `localStorage` に保存する。通知履歴は削除せず、確認状態は端末ごとに独立させる。ダッシュボードHTMLはブラウザへキャッシュさせず、更新後の操作UIを再読み込み時に反映する。
+
 待ち受けアドレスは `ARGOS_DASHBOARD_HOST` で指定する。kioskブラウザは同一機からアクセスするため既定は `127.0.0.1`（localhostのみ）とし、状態・会話履歴・カメラ画像などGET系APIを認証なしでLANへ露出しない。LAN内の別端末から表示させる場合だけ `0.0.0.0` などへ明示的に広げる。
+
+LANへ広げる場合は `ARGOS_DASHBOARD_VIEW_KEY` に閲覧用アクセスキーを設定する。キー設定時は、画面(`/`)、静的ファイル(`/static/*`)、状態(`/api/state`)、位置情報(`/api/location`)、SSE(`/api/stream`)、カメラ画像、アップロード画像の閲覧に認証を必須とする。認証は `?key=<値>` クエリ、発行済みCookie（`argos_view_key`、HttpOnly）、または `ARGOS_DASHBOARD_TOKEN` のBearerヘッダーのいずれかで通す。正しいキー付きで画面を開いた端末にはCookieを配り、以降はキーなしURLで再読込できる。`/api/health` は死活監視用に常時開放する。キー未設定時は従来通り閲覧制限なし（後方互換）。kiosk起動スクリプトは `ARGOS_DASHBOARD_VIEW_KEY` が設定されていれば起動URLへ自動で付与する。ダッシュボードHTMLには更新用Bearerトークンが埋め込まれるため、閲覧認証を通過した端末は更新系APIも利用できる点に注意する（端末別権限分離は分散ARGOS設計で扱う）。
 
 画面更新には Server-Sent Events を使う。外部サービスは `POST /api/events` へ表示イベントを送信する。更新系APIは `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。通知ではテキスト、画像URL、リンクURLを扱える。インストーラーはARGOS本体の `.env` と `services/argos-reminder/.env` の `ARGOS_DASHBOARD_TOKEN` を同じ値に揃え、リマインダー通知が401で失敗しないようにする。将来、GPS検索、メール、Slack、車両情報などを別サービスとして追加するときは、このAPIへ表示イベントを送る。
 通知イベントでは `sound` と `speak` の真偽値を受け付ける。`sound=true` の場合はARGOS本体が通知音を鳴らし、`speak=true` の場合は通知タイトルと本文を読み上げる。どちらかが指定された通知では画面を起こす。通知音と読み上げはHTTP応答を待たせないよう、ARGOS本体側の別スレッドで処理する。
@@ -167,21 +251,24 @@ ARGOS は、 `--output-format stream-json --verbose` にて出力される NDJSO
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
 動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` は赤橙の流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は青の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。枠色はPiSugarモバイル端末（argos-terminal）のLED色と揃えてあり、`transcribing`＝赤橙・`speaking`＝青は端末側と一致する（端末は `thinking` も赤橙で扱う点だけ異なる）。
-中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルにはスロット一覧をARGOSロゴ直下の横並びチップとして表示し、現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。スロット数が増えた場合は、左側パネルの縦方向を圧迫しないよう、スロット一覧だけをタッチ操作で横スクロールできるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
+中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルの `CURRENT SLOT` 表示は外観を維持した選択ボタンとし、タップすると直下へスクロール可能なスロット一覧を重ねて表示する。一覧では現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。マイクOFF中でPTTを押した場合は、録音や本人確認はしないが黒表示だけは解除する。
 左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ直下の操作行に置き、狭い画面でも折り返して見切れないようにする。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。インストーラーは `.env` の `ARGOS_DASHBOARD_TOKEN` が空の場合、`--apply` または `--update` 実行時にランダムなトークンを自動生成する。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
 同じ領域にマイクOFFボタンを表示する。操作は `enable_microphone`、`disable_microphone`、`toggle_microphone` で受け付ける。マイクOFF中はPTT押下とウェイクワード検知による録音を行わず、進行中の録音があれば破棄する。ただしマイクOFF中でもPTT押下でスクリーンセーバー（黒表示）だけは解除する。これは読み上げミュートとは独立した一時停止で、再起動後の永続化はしない。
 左側パネルにはフォントサイズ切替ボタンを表示し、ダッシュボードの主要テキストを `小`、`中`、`大` から選べるようにする。選択値はキオスクブラウザのローカルストレージへ保存し、画面再読み込み後も維持する。未保存時は `ARGOS_DASHBOARD_DEFAULT_FONT_SIZE` を初期値にする。切替対象は会話欄、通知欄、現在スロット、状態表示、スロットチップなどの可読性に関わるテキストとする。
 左側パネルの `CURRENT SLOT` にはセッションリセットボタンを表示する。誤操作防止のため、1回目のタップで確認表示に切り替え、5秒以内にもう一度タップした場合だけ `POST /api/control` に `{"action":"reset_agent_session"}` を送る。この操作は現在スロットのエージェントセッションIDだけを削除し、ダッシュボードに残っている会話履歴や通知は削除しない。リセット後の次回エージェント呼び出しは新規セッションとして開始し、完了時に通常どおり新しいセッションIDを保存する。
 左側パネルの左端には読み上げ音量の縦スライダーを表示する。スライダーは `POST /api/control` に `{"action":"set_volume","volume":0..100}` を送信し、ARGOS本体の `AudioPlayer` が16bit PCM WAVを小分けに再生しながらソフトウェア音量を反映する。これにより `plughw` 直指定でALSAミキサーを通らない出力でも、再生中の次の小さい再生ブロックから読み上げ音量を変更できる。ALSAミキサー操作は `AUDIO_OUTPUT_CARD` が設定されている場合はそのカード、未設定の場合はデフォルトミキサーへベストエフォートで送る。起動時は `ARGOS_AUDIO_STATE_PATH` の保存済み音量を優先し、保存済み音量がない場合だけ `AUDIO_OUTPUT_VOLUME` を初期値として使う。保存値が壊れている場合は無視する。
-左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX`、`ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY`、`ARGOS_AGENT_USAGE_COMMAND_CLAUDE` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
+左側パネルには、時刻、状態、カレントスロットの順で縦並びに表示し、現在スロットのproviderに対応する利用枠取得コマンドが設定されている場合だけ、その真下にLLMエージェント利用枠を表示する。リモートスロットでは `remote_provider` に対応するローカル利用枠を表示するため、接続先でも同じアカウントを使う構成を前提とする。設定名は `ARGOS_AGENT_USAGE_COMMAND_<PROVIDER>` とし、例として `ARGOS_AGENT_USAGE_COMMAND_CODEX`、`ARGOS_AGENT_USAGE_COMMAND_ANTIGRAVITY`、`ARGOS_AGENT_USAGE_COMMAND_CLAUDE` を使える。コマンドは標準出力へJSONを返し、`{"5hour":{"remain_percentage":95.18,"use_percentage":4.82,"reset_at":"06/16 10:01"},"weekly":{"remain_percentage":34.57,"use_percentage":65.43,"reset_at":"06/19 06:59"},"other":{"text":"878 credits"}}` の形式を受け付ける。5時間枠と週の枠については、使用パーセンテージに応じたプログレスバーで表示する。`ARGOS_AGENT_USAGE_REFRESH_SECONDS` 間隔で現在providerだけを取得し、コマンド失敗時はエラーを表示する。取得処理は表示専用で、エージェント実行やリミット制御は行わない。
 
 左側パネルのARGOSロゴ横にはWi-Fi状態をバーアイコンで表示する。ARGOS本体は `/proc/net/wireless` から電波品質を読み、`iwgetid` でSSIDを取得する。更新間隔は `ARGOS_WIFI_STATUS_REFRESH_SECONDS` で指定し、未接続または取得不能の場合はWi-Fi表示自体を出さない。
 
 左側パネルの日付行には現在地に基づく天気と気温を表示する。天気アイコンは端末フォントに依存する絵文字を使わず、CSSで描画する簡易アイコンを使う。
 文字起こし、LLMエージェント、TTSフィルター、VOICEVOX、音声再生で内部エラーが起きた場合は、通知欄へ優先度 `high` の通知を追加する。直前と同一のエラーは重複追加しない。また、LLMエージェントからの応答取得でエラーが発生した際は、リミット制限エラー（`rate limit`、`quota`、`limit`など）であれば「リミット制限に達しました。」、その他の一般エラーであれば「エージェントの応答取得に失敗しました。」と音声で読み上げて報告する。
 
-キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシーで翻訳UI、Googleサインイン、同期UI、パスワード保存を無効化し、ダッシュボード上のマウスカーソルを非表示にする。起動時は `xset` と `gsettings` を使い、UbuntuとRaspberry Pi OSの両方でスクリーンセーバー、DPMS、ロック画面を可能な範囲で無効化する。
+キオスク表示は `argos-dashboard-kiosk.service` をユーザーsystemdへインストールして常駐させる。Chromiumが異常終了した場合は自動再起動する。キオスク画面では管理ポリシーで翻訳UI、Googleサインイン、同期UI、パスワード保存を無効化し、ダッシュボード上のマウスカーソルを非表示にする。タッチディスプレイでブラウザ標準のスワイプスクロールを利用できるよう、Chromiumには`--touch-events=enabled`を渡す。起動時は `xset` と `gsettings` を使い、UbuntuとRaspberry Pi OSの両方でスクリーンセーバー、DPMS、ロック画面を可能な範囲で無効化する。
+Chromiumは接続待ち画面 `scripts/kiosk-splash.html` をsnapからアクセス可能な `~/snap/chromium/common/argos-dashboard-kiosk/` へコピーし、 `#target=<エンコード済みダッシュボードURL>` 付きで開く。配置先は起動スクリプトから動的に解決し、`/opt/argos`以外へインストールした端末でも別コピーを作らず利用できる。転送先はローカルファイル名として解釈されないURLフラグメントへ渡し、認証キーを含む場合もFile not foundを防ぐ。接続待ち画面は旧版の `?target=` も受け付ける。`/api/health` へ2秒間隔で疎通確認（`no-cors` のため401でも到達扱い）を行い、母艦へ到達できたら `target` のURLへ自動遷移する。これにより起動直後やネットワーク未接続時にChromiumのオフラインエラー画面（操作手段のないキオスクでは復帰不能）が表示されるのを防ぐ。同ファイルはリモートキオスク端末（ginger等）へも配布して同じ方式で使う。
+接続待ち画面と後述の再接続オーバーレイは、端末ローカルの状態サーバ（argos-terminal内蔵、`http://127.0.0.1:8899/status`）が存在すればWi-Fi・Tailscale・母艦それぞれの接続状態を○×で表示する（無い環境では欄ごと非表示）。
+ダッシュボード自身にも接続断オーバーレイを内蔵する。SSE（`/api/stream`）が切断されて8秒以上復帰しない場合、全画面の「再接続中」表示に切り替え、以後3秒間隔で `/api/health` を確認して届き次第自動リロードで復帰する。これによりキオスク端末は表示中に母艦や経路が落ちてもオフラインエラー画面で詰まらず、自動で接続待ち状態→復帰まで遷移する。
 タッチパネルはlabwcでHDMI画面へ割り当て、`mouseEmulation=no` にしてタッチ操作によるマウスカーソル表示を抑止する。
 
 カメラ静止画は `/tmp/argos/camera-latest.jpg` に保存する。ダッシュボードHTTPサーバーは `/camera/latest.jpg` で最新画像を配信する。
@@ -224,6 +311,18 @@ ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボ�
    - 地図で `follow=1` を指定した場合、`map.html` はこのAPIを2秒ごとに呼び出して現在地マーカーを更新し、ズームレベルが変わる必要がある場合や現在地が画面外にはみ出そうになった時、または目的地の接近や離脱（最接近地点から一定距離離れて目的地ピンが削除された時）による表示の切り替え時のみ、表示範囲を自動調整する。接近しきい値 `near_threshold` や離脱しきい値 `far_offset` をクエリパラメータでカスタマイズできる。
    - ナビ地図（`nav.html`）はこのAPIを2秒ごとに呼び出し、現在地を常に画面中央へ追従させる。`orientation=north` では北を上に固定し、`orientation=heading` では取得できた進行方向を上にする。進行方向が取得できない場合は北上表示に近い挙動へフォールバックする。
 
+5. **説明付き詳細設定画面 (`GET /settings`)**
+   - ダッシュボードの「設定」から「本体設定を開く」を選ぶと、`config.yaml`に存在する全項目をカテゴリー別カード形式で変更できる。
+   - 各項目には名前だけでなく、用途、変更時の影響や注意を表示する。設定名と説明の全文検索、カテゴリー単位の折りたたみに対応する。
+   - トークン、閲覧キー、キーワードハッシュなどの機密値はブラウザへ返さず、「設定済み」とだけ表示する。空欄のまま保存した場合は既存値を維持する。
+   - `GET /api/config` と `PUT /api/config` はダッシュボードのBearer認証を必須とする。APIは現在のYAMLに存在する項目だけを更新し、任意の新規YAMLパスは受け付けない。
+   - 保存時は既存の設定構造と画面対象外の項目を維持し、`config.yaml.backup-<日時>`へ保存前の内容を退避してから原子的に置き換える。
+   - 設定は保存だけでは実行中プロセスへ反映されない。画面にはARGOSの再起動が必要であることを表示する。
+   - 設定画面の「戻る」はダッシュボードへ遷移した印をクエリで渡す。ダッシュボードはこの場合だけ初回スプラッシュを省略し、単なる画面遷移が本体再起動に見えないようにする。通常起動時や表示復帰時のスプラッシュは維持する。
+   - `GET /api/config/audio-devices` は`arecord -l`と`aplay -l`から接続中のマイク・スピーカーを名前付き候補として返す。設定画面では`audio.input_devices`、`audio.device`、`audio.output_device`を候補選択できる。
+   - `POST /api/config/test-microphone` は選択マイクを1秒録音してRMS入力レベルを返す。`POST /api/config/test-speaker` は選択スピーカーへ短い確認音を再生する。どちらもBearer認証を必須とし、ユーザーが確認ボタンを押した場合だけ実行する。
+   - タッチ操作をマウスドラッグとして通知するディスプレイ向けに、設定カードや説明文を上下へドラッグするとページをスクロールする。入力欄、選択欄、ボタン、リンク、スイッチ、カテゴリー見出しは対象外とし、各部品の通常操作を優先する。説明文や見出しは常時文字選択を無効にし、入力欄とテキストエリアだけ文字選択を許可する。指を離した後は移動速度を上限付きで引き継ぎ、フレームごとに減速する短い慣性スクロールを行う。次のドラッグ開始時には慣性を即停止する。
+
 ダッシュボードは `/static/*` へのGETリクエストを受け取った際、パッケージ内の `static` ディレクトリに配備された静的アセットを適切なMIMEタイプで返す。
 - `map.html` (地図): Leaflet.js を使用して、クエリパラメータで指定された座標をダークモード風の地図へ表示する。現在地は青い円形マーカー、目的地は赤いピンで表示する。地図の左下には距離の凡例（メートル法のスケールバー）を常時表示する。`points`（4番目のパラメータ）または `color` パラメータで各マーカーに色（例: `#ff9900` などのカラーコードやカラー名）を指定でき、目的地と経由地を異なる色で表示できる。`label_mode=permanent|hover|popup` でラベルを常時表示、ホバー時表示、タップ時のみ表示から選べる。`follow=1` が有効な場合は現在地に追従し、通常時は全マーカーを収める広域表示とし、特定の目的地に接近しきい値（`near_threshold`、デフォルト2km）以内に近づいた時はその目的地と現在地の拡大表示（ズームイン）にし、最接近地点から離脱しきい値（`far_offset`、デフォルト500m）以上離れた時は、その目的地ピンを地図から自動削除した上で、再び全体表示（ズームアウト）に自動調整する。
 - `nav.html` (ナビ地図): Leaflet.js を使用して、現在地を中心へ追従するカーナビ風の地図を表示する。`zoom`、`orientation=north|heading`、`interval` をクエリパラメータで指定できる。通常地図とは別の一時コンテンツとして扱い、中央スロットに `nav.html`、右スロットに `map.html` を同時表示できる。スキルからのナビ表示は `replace_top=true` を指定し、ズーム変更のたびに閉じる回数が増えないよう最前面を差し替える。
@@ -242,18 +341,29 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 端末APIは以下のエンドポイントを提供する。いずれも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。
 
-- `POST /api/terminal/turn`：`Content-Type: audio/wav` の生ボディで録音WAVを受け取り、STT→エージェント→TTSを母艦のパイプラインで実行して、そのターンの結果を **Server-Sent Events** でストリーム返却する。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。イベント種別は次のとおり。
+- `POST /api/terminal/turn`：入力を母艦のエージェントへ渡し、そのターンの結果を **Server-Sent Events** でストリーム返却する。`Content-Type: audio/wav` はSTT→エージェント→TTS、`audio/ogg`（または `audio/opus`）はWAVへデコード後に同じ処理を行う。`Content-Type: text/plain; charset=utf-8` はSTTを省略して本文を直接エージェントへ渡す。`Accept: text/event-stream` を指定するとTTSを省略して文字イベントだけを返す。Accept未指定または `*/*` は後方互換のため音声イベントも返す。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。未対応の入力形式は415、Opusのデコード失敗は400を返す。イベント種別は次のとおり。
   - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
   - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
-  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。
+  - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。リクエストヘッダー `X-Argos-Audio: opus` を付けると、各チャンクをOgg Opusへ変換して `{"format": "opus", ...}` で返す（変換失敗時はWAVのまま返すフォールバック付き）。
   - `done`：ターン完了。`{"text": "<応答全文>"}`。
   - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
 - `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
-- `POST /api/terminal/slots/next`：次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。端末のPTTダブルクリックに対応する。母艦の `next_slot()` を共有するため、切替はダッシュボードや目の前の端末とも一貫する。名前指定での切替（select-by-name）は今後の拡張点とする。
+- `GET /api/terminal/history?name=<name>&provider=<provider>`：指定スロットの会話履歴を返す。ARGOS間のリモートスロット切替時に使用する。
+- `POST /api/terminal/slots/next`：`ptt_cycle`がtrueの次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。全スロットがfalseの場合だけ全件を対象とする。端末のPTTダブルクリックに対応する。
+- `POST /api/terminal/slots/select`：`{"name": "...", "provider": "..."}` で指定したスロットへ切り替え、切替後の現在スロットを返す。ダッシュボード左側の `CURRENT SLOT` 一覧から利用する。母艦のスロット状態を共有するため、切替はダッシュボードや目の前の端末にも一貫して反映される。
 
 端末ターンはローカル録音と同じ本人確認ゲートを通す。母艦がロック中（本人確認が有効かつ未認証）の場合、端末の発話はLLMエージェントへ渡さず本人確認用として扱う。音声キーワードが一致すれば母艦と共有の認証状態を解除し、`text` で「本人確認しました。」を返して `done` で終える。解除できなければ `error` で本人確認を促す。顔認証は母艦のカメラに依存するため、遠隔端末からの実質的な解除手段は音声キーワードになる。認証状態は母艦と端末で共有するため、どちらで解除しても両方が解除される。本人確認が無効な場合はこのゲートを素通りする。
 
-母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンの合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+母艦は端末ターンを現在スロットのエージェントセッションで実行するため、目の前の端末・ダッシュボード・PiZero端末は同じ会話コンテキストを共有する。端末ターンがRunnerジョブを作成する場合は `response_target=terminal` を保存する。合成音声は母艦のスピーカーでは再生せず、SSEの `audio` イベントとして端末へ返す（`text` はブラウザ用に `DashboardState` にも積む）。処理の進行に合わせて母艦ダッシュボードの状態枠も更新する（文字起こし中=`transcribing`→考え中=`thinking`→読み上げ中=`speaking`、完了で待機へ戻す）。端末APIは `ARGOS_DASHBOARD_ENABLED=true` のときだけ有効になる。
+
+ダッシュボードの会話欄下部からテキストを送信できる。ブラウザは `text/plain` と `Accept: text/event-stream` を使うため、STTとTTSを実行せず、同じスロット・同じ会話コンテキストへ文字で質問し文字で回答を表示する。
+
+`conversation_history.enabled`がtrueの場合、回答完了時に全スロットの表示履歴を`conversation_history.path`へJSON保存し、起動時に復元する。ストリーミング差分ごとには書き込まず、`conversation_history.max_messages`をスロットごとの保持上限とする。リモート履歴は保存済み履歴へ重複排除して追加し、接続先再起動後の空履歴でローカル保存を消さない。Raspberry Piなど書き込みを抑えたい端末ではfalseのまま利用できる。
+
+`conversation_memory.enabled`がtrueの場合、設定画面から現在履歴の引き継ぎを開始できる。現在セッションへ要約を依頼し、要約を`conversation_memory.path`へ保存してからセッションをリセットする。保存した要約は次回プロンプトへ一度だけ付与し、応答完了後に削除する。要約生成に失敗した場合はセッションをリセットしない。
+ダッシュボードでは入力欄横のマイクボタンをタップして録音を開始し、再度タップして停止・送信できる。また、キーボードやUSBペダル等の長押し操作（Push-To-Talk: PTT）に対応し、`Space` キーや `F13`〜`F24` キーを押し続けている間録音を行い、キーを離した時点で録音停止・自動送信する。テキスト入力欄（`<input>`、`<textarea>` 等）にカーソル/フォーカスがある場合は通常の文字入力（スペース等）を優先し、PTT動作を抑止する。Safariの `audio/mp4`、Chrome系の `audio/webm`、Opus音声は母艦でffmpegを使ってWAVへ変換し、既存のSTTへ渡す。応答は端末ターンAPIのSSEからWAVチャンクを受信し、Web Audio APIで順次再生する。マイク許可と録音にはHTTPSのセキュアコンテキストを必要とする。
+テキスト送信中の操作制限はスロット単位で管理する。処理中に別の空きスロットへ切り替えた場合、そのスロットでは続けてテキストを入力・送信できる。元スロットの回答が裏で完了した場合は未読にしてスロット表示を強調し、完了通知を追加する。スロット切替時は旧スロットの一過性状態を無効化し、選択先が空いていれば待機表示へ戻す。
+送信が母艦へ届かなかった場合は、入力欄の上に理由を表示する。通信自体に失敗したときは「母艦に繋がらないみたい」と表示し、母艦がエラーを返したときは応答の `error` 本文をそのまま見せる。表示は次の送信まで残し、入力した本文は失われないよう入力欄へ戻して再送できるようにする。母艦へ届いた後の進行状況とエラーは、音声ターンと同じく状態枠と通知欄へ反映されるため、リモートで開いている別のダッシュボードからも追跡できる。この画面表示は、端末（`argos-terminal`）が送信失敗時にLCDへ「母艦に繋がらないみたい」を出しLEDをエラー色にするのと同じ役割を担う。
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
@@ -314,7 +424,7 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 - `User`、`Group` は `ARGOS_SERVICE_USER` と `ARGOS_SERVICE_GROUP` で指定し、未指定時は `argos` とする
 - systemdユニットを有効化する前に、指定したサービスユーザーとグループをOS側に作成する
 - `WorkingDirectory=/opt/argos` を本番の既定作業ディレクトリにする
-- `EnvironmentFile=/opt/argos/.env` から設定を読み込む
+- `EnvironmentFile=-/opt/argos/.env` は旧設定とsystemd環境変数の互換用として任意で読み込み、ARGOS本体は `WorkingDirectory` の `config.yaml` を直接読み込む。先頭の `-` により `.env` がなくても起動できる
 - `ExecStart=/opt/argos/.venv/bin/argos` でプロジェクトの仮想環境内コマンドを起動する
 - `PATH` にサービスユーザーの `.local/bin` と `.cargo/bin` を含め、Codex CLI を解決できるようにする
 - `network-online.target`、`tailscale-online.target`、`sound.target` の後に起動する
@@ -329,9 +439,9 @@ GPIO入力は起動直後の本人確認案内を読み上げる前に初期化�
 
 Runnerを使う場合は、`argos-agent-runner.service` を有効化したうえで、ARGOS本体側に `ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765` と `ARGOS_AGENT_RUNNER_TOKEN` を設定する。Runnerを使わない場合、ARGOS本体は従来どおり直接エージェントCLIを起動する。
 
-`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `.env` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
+`ARGOS_AGENT_RUNNER_TOKEN` が空の場合、Runner APIは認証なしで全リクエストを受け付けてしまうため、インストーラーは `--apply` または `--update` 実行時に空ならランダムなトークンを自動生成する。ARGOS本体とRunnerは同じ `config.yaml` を読むため、生成されたトークンは自動的に両者で共有される。Bearer認証の比較は `hmac.compare_digest` による定数時間比較で行う。また、Runner APIのリクエスト本文は1MiBを上限とし、サイズ超過や不正JSONは400で拒否する。
 
-実運用前に `uv sync` で `.venv/bin/argos` を作成し、`.env` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
+実運用前に `uv sync` で `.venv/bin/argos` を作成し、`config.yaml` を実機向けに設定する。GPIO や音声デバイスへのアクセスで権限エラーが出る場合は、サービスユーザーを Raspberry Pi 側の `gpio` や `audio` グループに追加してから再ログインする。
 
 ## 音声入力の設定
 
@@ -357,7 +467,10 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 
 ウェイクワードは `ARGOS_WAKEWORD_ENABLED=true` の場合だけ有効になる。既定では無効で、PTT操作には影響しない。
 
+`ARGOS_LISTEN_MODE` は音声受付の開始方式を指定する。既定の `wakeword` はLiveKitモデルで呼びかけを検知する。`vad` は物理ミュート付きマイク向けで、ミュート解除後にSilero VADが `ARGOS_WAKEWORD_VAD_THRESHOLD` 以上の発話を `ARGOS_WAKEWORD_VAD_START_SECONDS` 継続して検出すると録音を開始する。録音後は呼びかけ必須判定と先頭呼びかけ除去を行わず、通常のSTT、本人確認、エージェント処理へ渡す。どちらも既存の共有マイク入力と発話終了判定を使う。
+
 - `ARGOS_WAKEWORD_MODEL_DIR` にLiveKit形式の `argos.onnx`、`melspectrogram.onnx`、`embedding_model.onnx` を置く
+- `ARGOS_WAKEWORD_EMBEDDING_HEF`が指定されている場合は、音声埋め込みモデルをHailoRT経由でHailo-8へオフロードする。メル特徴量生成と最終分類はONNX Runtimeを継続し、HEF設定が空なら全段をCPUで実行する
 - しきい値は `ARGOS_WAKEWORD_THRESHOLD` を最優先に使う。`argos_eval.json` の `optimal_threshold` や `threshold` は学習時の参考値で、常時監視では自動採用しない
 - 入力デバイスは通常録音と同じ `AUDIO_INPUT_DEVICES` または `AUDIO_DEVICE` を使う
 - `ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE` でraw入力の実サンプルレートを指定できる。`dsnoop` が16kHz指定でも48kHzを返す環境では `48000` を指定し、ARGOS内部で16kHzへ変換してモデルとVADへ渡す
@@ -380,6 +493,8 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 - 応答の読み上げが終わったら、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけ「追いかけ受付窓」を開き、ウェイクワードを言い直さなくても続けて話せるようにする。窓の中で発話（RMSが `SILENCE_RMS_THRESHOLD` 以上）を検知したら、ウェイクワード無しでそのまま録音・処理する。追いかけ受付の録音は呼びかけを含まないため、STTの呼びかけ必須判定（`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD`）と先頭呼びかけ除去はスキップする
 - 追いかけ受付は本人確認済みのときだけ開く。ロック中は従来どおりウェイクワードと本人確認を求める。窓を開いている間はダッシュボード状態を `followup`（継続受付中）にして画面を起こしたままにし、無音のまま窓が締め切られたら待機表示へ戻す。窓の中で発話に応答したら、その応答のあとに再び窓を開き、会話が続く限り連続で受け付ける。PTT押下時は窓を閉じる。自己音声対策のクールダウンは追いかけ受付には適用しない
 - `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` の場合、ウェイクワード後録音のSTT結果が「アルゴス」などの呼びかけから始まる時だけ本文処理へ進む。自宅など通信遅延が小さく誤検知を強く抑えたい環境向けの設定とする
+- 通常のウェイクワード録音が、STT結果なし、呼びかけなし、呼びかけのみのいずれかで破棄された場合、`ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE=true` なら録音と判定情報JSONを `ARGOS_WAKEWORD_FALSE_POSITIVE_DIR/hard_negative/` へ保存する。既定保存先はtmpfs上の `/tmp/argos/wakeword-candidates` とし、追いかけ受付、本人確認ロック中の無言録音、正常に処理した発話は保存しない
+- 保存音声は誤検知の候補であり、自動では学習データへ追加しない。内容を確認して本当に誤検知したものだけwakeword trainerの `raw-dataset/hard_negative/` へ移し、正しい呼びかけや私的な会話を誤って負例にしない
 - 短い発話の先頭を取りこぼさないよう、`ARGOS_WAKEWORD_PRE_ROLL_SECONDS` 秒ぶんの検知直前音声もWAV先頭へ含める
 - 発話録音は既定でSilero VADを使う。`ARGOS_WAKEWORD_ENDPOINT_MODE=vad` の場合、`ARGOS_WAKEWORD_VAD_THRESHOLD` 以上を発話、`ARGOS_WAKEWORD_VAD_MIN_SILENCE_SECONDS` 継続を終了候補として扱う
 - `ARGOS_WAKEWORD_ENDPOINT_MODE=rms` の場合、`ARGOS_WAKEWORD_RECORD_MIN_SECONDS` 以上録音した後、`SILENCE_RMS_THRESHOLD` 未満の状態が `ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS` 続いたら終了する
@@ -420,23 +535,30 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 書式:
 
 ```text
-名前,provider,cwd[,voicevox_speaker]
+名前,provider,cwd[,voicevox_speaker[,model]]
 ```
 
 - `名前`: 読み上げるスロット名
 - `provider`: `codex` などのエージェント種別
 - `cwd`: エージェントの作業ディレクトリ
 - `voicevox_speaker`: 任意。指定した場合、このスロットの読み上げだけ指定VOICEVOX話者IDを使う
+- `model`: 任意。指定した場合、このスロットのCLI起動時にモデルを指定する。話者を省略してモデルだけ指定する場合は4項目目を空にする
+
+3項目の旧形式とVOICEVOX話者までの4項目形式はそのまま読み込む。モデル未指定時は、Codexでは既存の `ARGOS_CODEX_MODEL`、Claudeでは `ARGOS_CLAUDE_MODEL`、Antigravityでは `ARGOS_ANTIGRAVITY_MODEL`、Hermesでは既存の `ARGOS_HERMES_MODEL` を使い、それも空なら各CLIの既定モデルに任せる。
 
 スロットを指定しない場合は、`ARGOS_AGENT_SLOT_NAME`、`ARGOS_AGENT_PROVIDER`、`ARGOS_AGENT_CWD` から既定スロットを作る。既定スロットのVOICEVOX話者IDは `ARGOS_AGENT_SLOT_VOICEVOX_SPEAKER` で指定できる。旧 `ARGOS_CODEX_SLOT_N` は互換のため読み込むが、新規設定では `ARGOS_AGENT_SLOT_N` を使う。
 
-新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとに `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存のスロット設定を維持する。
+新規インストール時の `argos-install --configure` は、利用するproviderを `codex`、`antigravity`、`claude`、`hermes` から選ばせ、選択したproviderごとにスロット名、作業ディレクトリ、VOICEVOX話者、モデルを確認して `ARGOS_AGENT_SLOT_N` を生成する。空入力の場合は既存値またはprovider全体設定を維持する。
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
 ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
 
-Codex固有の `CODEX_HOME` とモデルはスロットではなく、`ARGOS_CODEX_HOME` と `ARGOS_CODEX_MODEL` で全体設定として指定する。
+Codex固有の `CODEX_HOME` は `ARGOS_CODEX_HOME` で全体設定として指定する。`ARGOS_CODEX_MODEL` はスロットにモデルがない場合の後方互換フォールバックとして扱う。
+
+モデルを変更してもスロットの保存キーとprovider側セッションIDは維持し、次の発話から新しいモデルで同じ会話を再開する。モデル変更を理由に自動リセットはしない。providerが継続を拒否した場合はエラーを表示し、必要な場合だけ利用者が既存のセッションリセットを実行する。
+
+ダッシュボードのCURRENT SLOTには `provider · model` を表示する。モデル未指定でCLI既定に任せている場合はproviderだけを表示する。
 
 ## Antigravity CLI
 

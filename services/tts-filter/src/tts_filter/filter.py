@@ -50,6 +50,7 @@ DEFAULT_CONFIG = {
         "YAML": "ヤムル",
     },
     "terms": {
+        "誤検知": "ごけんち",
         "誤変換": "ごへんかん",
     },
     "extensions": {

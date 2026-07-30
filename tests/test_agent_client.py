@@ -82,6 +82,33 @@ def test_create_agent_client_uses_runner_when_url_is_set():
     assert client.current_provider == "codex"
 
 
+def test_system_prompt_is_not_injected_for_remote_slot(monkeypatch, tmp_path):
+    """リモート側Argosがシステム指示を担当するため接続元では付与しない。"""
+
+    class FakeRemote:
+        """受信プロンプトを記録するリモートクライアント。"""
+
+        current_name = "自宅"
+        current_provider = "remote"
+        current_model = "codex@remote"
+
+        def ask_stream(self, prompt):
+            """受信内容をそのまま返す。"""
+            yield prompt
+
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_slots": (AgentSlot("自宅", "remote", "https://home.example"),),
+            "agent_system_prompt": "追加指示",
+            "agent_system_prompt_state_path": str(tmp_path / "state.json"),
+        }
+    )
+    client = SystemPromptAgentClient(FakeRemote(), settings)
+
+    assert "".join(client.ask_stream("そのまま")) == "そのまま"
+
+
 def test_unknown_agent_provider_raises():
     """未対応プロバイダーは起動時に検出できる。"""
     settings = Settings(**{**_settings().__dict__, "agent_slots": (AgentSlot("謎", "unknown", "/tmp"),)})
@@ -157,6 +184,15 @@ def test_routed_agent_client_delegates_to_current_slot(monkeypatch):
     assert client.ask("最初") == "作業:最初"
     assert client.next_slot() == "調査"
     assert list(client.ask_stream("次")) == ["調査:次"]
+    assert client.select_slot("作業", "codex") == "作業"
+    assert client.current_provider == "codex"
+    try:
+        client.select_slot("なし", "codex")
+    except ValueError as exc:
+        assert "見つかりません" in str(exc)
+    else:
+        raise AssertionError("ValueError が発生しませんでした")
+    client.select_slot("調査", "hermes")
     client.reset_current()
 
     assert providers[0].calls == [("ask", "最初")]
@@ -405,6 +441,40 @@ def test_system_prompt_agent_client_injects_per_slot(tmp_path):
     assert "ユーザー発話:\n作業1" in fake.prompts[0]
     assert "ユーザー発話:\n調査1" in fake.prompts[1]
     assert fake.prompts[2] == "作業2"
+
+
+def test_resume_memory_is_injected_once(tmp_path):
+    """保存した引き継ぎ要約は次の依頼へ一度だけ付与する。"""
+
+    class FakeAgent:
+        """受け取ったプロンプトを記録する。"""
+
+        current_name = "作業"
+        current_provider = "codex"
+
+        def ask(self, prompt):
+            """プロンプトを記録して応答する。"""
+            self.prompt = prompt
+            return "応答"
+
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_system_prompt": "",
+            "agent_default_system_prompt": "",
+            "conversation_memory_enabled": True,
+            "conversation_memory_path": str(tmp_path / "memory.json"),
+            "agent_slots": (AgentSlot("作業", "codex", "/tmp/a"),),
+        }
+    )
+    fake = FakeAgent()
+    client = SystemPromptAgentClient(fake, settings)
+    client.save_resume_memory("未完了はテスト実行")
+
+    assert client.ask("続きをして") == "応答"
+    assert "未完了はテスト実行" in fake.prompt
+    assert "続きをして" in fake.prompt
+    assert client._memory_store.load_memory(client._current_key()) == ""
 
 
 def test_system_prompt_agent_client_delegates_runner_delivery_methods(tmp_path):

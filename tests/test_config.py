@@ -1,4 +1,14 @@
-from argos.config import load_settings
+import json
+
+import pytest
+
+from argos.config import AgentSlot, load_settings, resolve_agent_slot_model
+
+
+@pytest.fixture(autouse=True)
+def _clear_unified_slots(monkeypatch):
+    """各テストが実機config.yamlのスロット設定に影響されないようにする。"""
+    monkeypatch.delenv("ARGOS_AGENT_SLOTS_JSON", raising=False)
 
 
 def test_load_default_slot(monkeypatch):
@@ -21,6 +31,17 @@ def test_load_wakeword_followup_seconds(monkeypatch):
 
     monkeypatch.setenv("ARGOS_WAKEWORD_FOLLOWUP_SECONDS", "5.5")
     assert load_settings().wakeword_followup_seconds == 5.5
+
+
+def test_load_vad_listen_mode(monkeypatch):
+    """物理ミュート運用向けのVAD常時受付設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_LISTEN_MODE", "VAD")
+    monkeypatch.setenv("ARGOS_WAKEWORD_VAD_START_SECONDS", "0.24")
+
+    settings = load_settings()
+
+    assert settings.listen_mode == "vad"
+    assert settings.wakeword_vad_start_seconds == 0.24
 
 
 def test_load_wakeword_bargein_enabled(monkeypatch):
@@ -126,6 +147,17 @@ def test_load_wakeword_score_log_path(monkeypatch):
     assert settings.wakeword_score_log_path == "/tmp/argos/wakeword-score.log"
 
 
+def test_load_wakeword_false_positive_settings(monkeypatch):
+    """ウェイクワード誤検知候補の保存設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_WAKEWORD_FALSE_POSITIVE_CAPTURE", "false")
+    monkeypatch.setenv("ARGOS_WAKEWORD_FALSE_POSITIVE_DIR", "/tmp/wakeword-candidates")
+
+    settings = load_settings()
+
+    assert settings.wakeword_false_positive_capture is False
+    assert settings.wakeword_false_positive_dir == "/tmp/wakeword-candidates"
+
+
 def test_load_default_slot_uses_pi_home(monkeypatch):
     monkeypatch.delenv("ARGOS_AGENT_SLOT_1", raising=False)
     monkeypatch.delenv("ARGOS_CODEX_SLOT_1", raising=False)
@@ -151,6 +183,36 @@ def test_load_numbered_slots(monkeypatch):
     assert settings.agent_slots[1].cwd == "/tmp/b"
 
 
+def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
+    """YAML由来の統合スロットはローカル・リモートの順序を維持する。"""
+    monkeypatch.setenv(
+        "ARGOS_AGENT_SLOTS_JSON",
+        json.dumps(
+            [
+                {
+                    "type": "remote",
+                    "name": "自宅",
+                    "url": "https://home.example/",
+                    "token": "secret",
+                    "remote_name": "作業",
+                    "remote_provider": "codex",
+                    "ptt_cycle": False,
+                },
+                {"type": "local", "name": "車載", "provider": "claude", "cwd": "/opt/argos"},
+            ]
+        ),
+    )
+
+    settings = load_settings()
+
+    assert [slot.name for slot in settings.agent_slots] == ["自宅", "車載"]
+    assert settings.agent_slots[0].provider == "remote"
+    assert settings.agent_slots[0].remote_url == "https://home.example"
+    assert settings.agent_slots[0].remote_token == "secret"
+    assert settings.agent_slots[0].ptt_cycle is False
+    assert settings.agent_slots[1].provider == "claude"
+
+
 def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):
     """スロットごとのVOICEVOX話者IDを読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_SLOT_1", "一番,codex,/tmp/a,8")
@@ -161,6 +223,36 @@ def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):
 
     assert settings.agent_slots[0].voicevox_speaker == 8
     assert settings.agent_slots[1].voicevox_speaker == 14
+
+
+def test_load_numbered_slots_with_model_keeps_old_formats(monkeypatch):
+    """5項目目のモデルを読み、従来の3・4項目形式も維持する。"""
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_1", "作業,codex,/tmp/a,8,gpt-test")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_2", "調査,claude,/tmp/b,,opus")
+    monkeypatch.setenv("ARGOS_AGENT_SLOT_3", "既存,antigravity,/tmp/c,14")
+    monkeypatch.delenv("ARGOS_AGENT_SLOT_4", raising=False)
+
+    settings = load_settings()
+
+    assert settings.agent_slots[0].model == "gpt-test"
+    assert settings.agent_slots[1].model == "opus"
+    assert settings.agent_slots[1].voicevox_speaker is None
+    assert settings.agent_slots[2].model == ""
+    assert settings.agent_slots[2].voicevox_speaker == 14
+
+
+def test_resolve_agent_slot_model_prefers_slot_and_falls_back_to_global(monkeypatch):
+    """スロットモデルを優先し、未指定なら既存の全体設定を使う。"""
+    monkeypatch.setenv("ARGOS_CODEX_MODEL", "global-codex")
+    monkeypatch.setenv("ARGOS_CLAUDE_MODEL", "global-claude")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_MODEL", "global-agy")
+
+    settings = load_settings()
+
+    assert resolve_agent_slot_model(settings, AgentSlot("A", "codex", "/tmp", model="slot-codex")) == "slot-codex"
+    assert resolve_agent_slot_model(settings, AgentSlot("B", "codex", "/tmp")) == "global-codex"
+    assert resolve_agent_slot_model(settings, AgentSlot("C", "claude", "/tmp")) == "global-claude"
+    assert resolve_agent_slot_model(settings, AgentSlot("D", "antigravity", "/tmp")) == "global-agy"
 
 
 def test_load_default_slot_voicevox_speaker(monkeypatch):
@@ -255,6 +347,7 @@ def test_load_wakeword_settings(monkeypatch):
     """ウェイクワード設定を読み込む。"""
     monkeypatch.setenv("ARGOS_WAKEWORD_ENABLED", "true")
     monkeypatch.setenv("ARGOS_WAKEWORD_MODEL_DIR", "/tmp/wakeword")
+    monkeypatch.setenv("ARGOS_WAKEWORD_EMBEDDING_HEF", "/tmp/wakeword/embedding.hef")
     monkeypatch.setenv("ARGOS_WAKEWORD_THRESHOLD", "0.7")
     monkeypatch.setenv("ARGOS_WAKEWORD_CAPTURE_SAMPLE_RATE", "48000")
     monkeypatch.setenv("ARGOS_WAKEWORD_WINDOW_SECONDS", "2.5")
@@ -277,6 +370,7 @@ def test_load_wakeword_settings(monkeypatch):
 
     assert settings.wakeword_enabled is True
     assert settings.wakeword_model_dir == "/tmp/wakeword"
+    assert settings.wakeword_embedding_hef == "/tmp/wakeword/embedding.hef"
     assert settings.wakeword_threshold == 0.7
     assert settings.wakeword_capture_sample_rate == 48000
     assert settings.wakeword_window_seconds == 2.5
@@ -528,8 +622,10 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_HOST", "0.0.0.0")
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
+    monkeypatch.setenv("ARGOS_DASHBOARD_VIEW_KEY", "viewkey")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
+    monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "sp")
     monkeypatch.setenv("ARGOS_LOCATION_PROVIDER", "remote")
     monkeypatch.setenv("ARGOS_REMOTE_LOCATION_URL", "http://example.test/gps")
     monkeypatch.setenv("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "1.5")
@@ -540,8 +636,10 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_host == "0.0.0.0"
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
+    assert settings.dashboard_view_key == "viewkey"
     assert settings.dashboard_screensaver_seconds == 12.5
     assert settings.dashboard_default_font_size == "small"
+    assert settings.dashboard_default_layout == "sp"
     assert settings.location_provider == "remote"
     assert settings.remote_location_url == "http://example.test/gps"
     assert settings.remote_location_timeout_seconds == 1.5

@@ -13,11 +13,12 @@ from argos.services.tts.voicevox import VoicevoxClient
 
 
 class Response:
-    def __init__(self, status_code=200, payload=None, content=b"wav", text=""):
+    def __init__(self, status_code=200, payload=None, content=b"wav", text="", headers=None):
         self.status_code = status_code
         self._payload = payload or {}
         self.content = content
         self.text = text or json.dumps(self._payload)
+        self.headers = headers or {}
 
     def json(self):
         return self._payload
@@ -43,7 +44,7 @@ def test_stt_gateway_transcribe(monkeypatch, tmp_path):
         assert url == "http://stt/transcribe"
         filename, file_obj, content_type = files["file"]
         assert filename == "utterance-1234abcd.wav"
-        assert file_obj.read() == b"RIFFdata"
+        assert file_obj == b"RIFFdata"
         assert content_type == "audio/wav"
         assert data == {"language": "ja"}
         assert headers == {"Authorization": "Bearer token"}
@@ -52,6 +53,66 @@ def test_stt_gateway_transcribe(monkeypatch, tmp_path):
     monkeypatch.setattr(client._session, "post", fake_post)
 
     assert client.transcribe(str(wav_path)) == "こんにちは"
+
+
+def test_stt_gateway_transcribe_opus(monkeypatch, tmp_path):
+    """Opus送信有効時はWAVをエンコードし.opus名・audio/opusで送る。"""
+    wav_path = tmp_path / "utterance-1234abcd.wav"
+    wav_path.write_bytes(b"RIFFdata")
+    monkeypatch.setattr(
+        "argos.services.stt.gateway.encode_wav_to_opus",
+        lambda data, bitrate: b"OGGopus:" + data + b":" + bitrate.encode(),
+    )
+    client = SttGatewayClient("http://stt", "ja", "token", use_opus=True, opus_bitrate="16k")
+
+    def fake_post(url, files, data, headers, timeout):
+        filename, payload, content_type = files["file"]
+        assert filename == "utterance-1234abcd.opus"
+        assert payload == b"OGGopus:RIFFdata:16k"
+        assert content_type == "audio/opus"
+        return Response(payload={"ok": True, "text": "こんにちは"})
+
+    monkeypatch.setattr(client._session, "post", fake_post)
+
+    assert client.transcribe(str(wav_path)) == "こんにちは"
+
+
+def test_voicevox_synthesize_opus(monkeypatch):
+    """Opus受信有効時はAcceptを付け、opus応答をWAVへデコードする。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"OggSopus-bytes", headers={"Content-Type": "audio/opus"})
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    monkeypatch.setattr(
+        "argos.services.tts.voicevox.decode_opus_to_wav",
+        lambda data: b"decoded-wav:" + data,
+    )
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1, accept_opus=True)
+
+    assert client.synthesize("こんにちは") == b"decoded-wav:OggSopus-bytes"
+    assert calls[1][1]["headers"]["Accept"] == "audio/opus"
+
+
+def test_voicevox_synthesize_without_opus_keeps_wav(monkeypatch):
+    """Opus受信無効時はAcceptを付けずWAVをそのまま返す。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        if url.endswith("/audio_query"):
+            return Response(payload={"speedScale": 1.0})
+        return Response(content=b"wave-bytes", headers={"Content-Type": "audio/wav"})
+
+    monkeypatch.setattr("argos.services.tts.voicevox.requests.post", fake_post)
+    client = VoicevoxClient("http://voicevox", 2, 48000, 1.1)
+
+    assert client.synthesize("こんにちは") == b"wave-bytes"
+    assert "Accept" not in calls[1][1]["headers"]
 
 
 def test_faster_whisper_transcribe(monkeypatch, tmp_path):

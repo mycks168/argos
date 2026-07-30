@@ -1,0 +1,222 @@
+audio:
+  input_devices:
+    - default
+  device: default
+  output_device: default
+  output_card: ''
+  output_volume: 70
+  sample_rate: 16000
+  state_path: ~/.local/state/argos/audio-state.json
+  listen_mode: wakeword
+  silence_rms_threshold: 200
+ptt:
+  gpio: ''
+network:
+  wifi_status_refresh_seconds: 10
+runtime:
+  dry_run: false
+wakeword:
+  aliases: []
+  enabled: true
+  model_dir: models/wakeword
+  embedding_hef: ''
+  threshold: 0.5
+  capture_sample_rate: 48000
+  window_seconds: 2.0
+  interval_seconds: 0.25
+  chunk_ms: 80
+  record_min_seconds: 1.0
+  record_max_seconds: 12.0
+  record_silence_seconds: 1.0
+  pre_roll_seconds: 3.0
+  min_actual_seconds: 0.2
+  endpoint_mode: vad
+  vad_model: models/wakeword/silero_vad_v6.onnx
+  vad_threshold: 0.35
+  vad_start_seconds: 0.16
+  vad_min_silence_seconds: 1.5
+  vad_check_seconds: 0.32
+  tts_cooldown_seconds: 2.0
+  bargein_enabled: false
+  score_log_path: /tmp/argos/wakeword-score.log
+  require_stt_wakeword: false
+  false_positive_capture: true
+  false_positive_dir: /tmp/argos/wakeword-candidates
+agent:
+  progress_start_phrases: []
+  progress_wait_phrases: []
+  provider: codex
+  state_path: ~/.argos/agent-sessions.json
+  system_prompt: ''
+  system_prompt_file: ''
+  system_prompt_state_path: ~/.argos/agent-system-prompts.json
+  default_system_prompt: ''
+  skills_dir: /opt/argos/skills
+  cwd: /opt/argos
+  usage_refresh_seconds: 60
+  usage_timeout_seconds: 5
+  progress_voice: true
+  progress_first_delay_seconds: 15
+  progress_interval_seconds: 30
+  slots:
+    - type: local
+      name: Codex
+      ptt_cycle: true
+      provider: codex
+      cwd: /opt/argos
+      voicevox_speaker: 2
+      model: ''
+    - type: remote
+      name: 自宅Codex
+      ptt_cycle: false
+      url: https://home.example.ts.net
+      token: ''
+      remote_name: 作業
+      remote_provider: codex
+      voicevox_speaker: 2
+      model: ''
+  usage_commands:
+    codex: cat /opt/argos/services/agent-limit/codex.json
+    antigravity: cat /opt/argos/services/agent-limit/antigravity.json
+    claude: cat /opt/argos/services/agent-limit/claude.json
+    hermes: cat /opt/argos/services/agent-limit/hermes.json
+remote_argos:
+  timeout_seconds: 600
+conversation_history:
+  enabled: false
+  path: ~/.local/state/argos/conversation-history.json
+  max_messages: 100
+conversation_memory:
+  enabled: false
+  path: ~/.local/state/argos/conversation-memory.json
+agents:
+  codex:
+    extra_args: []
+    home: ''
+    model: ''
+    sandbox: workspace-write
+    bypass_sandbox: true
+    approval: on-request
+    stream_mode: stream
+  antigravity:
+    extra_args: []
+    command: agy
+    home: ~/.gemini/antigravity-cli
+    model: ''
+    skip_permissions: false
+    sandbox: false
+    print_timeout: 10m0s
+    continue_session: true
+    resume_saved: true
+    prompt_prefix: ''
+  hermes:
+    extra_args: []
+    command: hermes
+    model: ''
+    provider: ''
+    toolsets: ''
+    skills: ''
+    source: argos
+    pass_session_id: true
+    resume_saved: true
+  claude:
+    model: ''
+location:
+  provider: remote
+  osrm_url: ''
+  remote:
+    url: http://localhost:8080/gps
+    timeout_seconds: 2
+acknowledgement:
+  url: http://127.0.0.1:23032
+  token: ''
+runner:
+  url: http://127.0.0.1:28765
+  token: ''
+  host: 127.0.0.1
+  port: 28765
+  state_dir: ~/.local/state/argos/agent-runner
+dashboard:
+  enabled: true
+  host: 127.0.0.1
+  port: 8765
+  token: ''
+  view_key: ''
+  screensaver_seconds: 1800
+  default_font_size: medium
+  camera_snapshot_path: /tmp/argos/camera-latest.jpg
+greeting:
+  enabled: true
+  state_path: ~/.local/state/argos/greeting-state.json
+startup:
+  splash_enabled: true
+  splash_seconds: 3
+  sound_enabled: true
+whisper:
+  model_size: small
+  device: auto
+  compute_type: int8
+kokoro:
+  voice: jf_alpha
+  speed: 1.0
+  repo_id: hexgrad/Kokoro-82M
+  sample_rate: 24000
+stt:
+  url: ''
+  language: ja
+  bearer_token: ''
+  use_opus: false
+  opus_bitrate: 24k
+auth:
+  enabled: false
+  keyword_hash: ''
+  trust_seconds: 1800
+  failure_threshold: 3
+  face_enabled: false
+  face_samples_dir: ~/.local/share/argos/face-auth
+  face_capture_command: rpicam-still --nopreview --timeout 700 --width 640 --height
+    480 -o {path}
+  face_capture_path: /tmp/argos/auth-face.jpg
+  face_image_rotation: 0
+  face_threshold: 68
+  face_min_matches: 1
+  face_detection_enabled: true
+  face_min_detected_faces: 1
+  face_max_detected_faces: 1
+  face_detector_model_path: ~/.local/share/argos/face-models/face_detection_yunet_2023mar.onnx
+  face_recognizer_model_path: ~/.local/share/argos/face-models/face_recognition_sface_2021dec.onnx
+  face_sface_threshold: 0.363
+  alert_command: ''
+  warning_sound_enabled: true
+  warning_delay_seconds: 10
+  alert_delay_seconds: 30
+  warning_interval_seconds: 10
+tts:
+  url: http://127.0.0.1:9191
+  bearer_token: ''
+  delimiters: 。！？!?
+  cache:
+    enabled: true
+    max_chars: 30
+    max_size_mb: 200
+    dir: cache/tts
+lcd:
+  enabled: false
+  width: 76
+  height: 284
+  x_offset: 82
+  y_offset: 18
+  dc_pin: D25
+  cs_pin: D5
+  reset_pin: D24
+  baudrate: 4000000
+  font_path: ''
+  font_size: 16
+voicevox:
+  url: http://localhost:50021
+  bearer_token: ''
+  speaker: 2
+  sample_rate: 48000
+  speed_scale: 1.1
+  volume_scale: 2.0
+  accept_opus: false

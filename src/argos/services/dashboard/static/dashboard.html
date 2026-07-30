@@ -258,7 +258,9 @@
       display: grid;
       grid-template-columns: minmax(250px, 0.82fr) minmax(660px, 2fr) minmax(320px, 1fr);
       gap: 1px;
-      min-height: 100vh;
+      /* 会話欄を画面内でスクロールさせるため、高さを画面に固定する。
+         min-height だと中身に応じて伸び、会話欄の flex による高さ制約が外れる。 */
+      height: 100vh;
       background: #26323b;
     }
     section { min-width: 0; background: #0b1117; padding: 14px 18px; overflow: hidden; }
@@ -355,14 +357,76 @@
       border-left: 3px solid #69b7e4;
       background: #101820;
     }
-    .agent-label { color: #8ca0ad; font-size: 11px; font-weight: 700; }
-    .agent-name { margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
-    .agent-provider { margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; }
+    .agent-label { display: block; color: #8ca0ad; font-size: 11px; font-weight: 700; }
+    .agent-name { display: block; margin-top: 3px; color: #edf3f7; font-size: var(--agent-name-font-size); font-weight: 800; overflow-wrap: anywhere; }
+    .agent-provider { display: block; margin-top: 2px; color: #f4d35e; font-size: 13px; font-weight: 700; text-transform: uppercase; overflow-wrap: anywhere; }
     .agent {
       margin-top: 10px;
       padding: 6px 8px;
       border-left: 3px solid #69b7e4;
+      border-top: 0;
+      border-right: 0;
+      border-bottom: 0;
       background: #101820;
+      width: 100%;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      cursor: pointer !important;
+      position: relative;
+    }
+    .agent::after {
+      content: "▾";
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      color: #8ca0ad;
+      transform: translateY(-50%);
+    }
+    .agent[aria-expanded="true"]::after { content: "▴"; color: #69b7e4; }
+    .agent-selector-wrap { position: relative; }
+    .slot-menu {
+      display: none;
+      position: absolute;
+      z-index: 30;
+      left: 0;
+      right: 0;
+      top: calc(100% + 4px);
+      max-height: min(48vh, 320px);
+      overflow-y: auto;
+      padding: 4px;
+      border: 1px solid #526775;
+      border-radius: 4px;
+      background: #0d151c;
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45);
+    }
+    .slot-menu[data-open="true"] { display: block; }
+    .slot-menu-button {
+      display: block;
+      width: 100%;
+      min-height: 38px;
+      padding: 6px 8px;
+      border: 0;
+      border-left: 3px solid transparent;
+      background: transparent;
+      color: #edf3f7;
+      font: inherit;
+      font-size: var(--slot-font-size);
+      font-weight: 800;
+      text-align: left;
+      cursor: pointer !important;
+    }
+    .slot-menu-button[data-active="true"] {
+      border-left-color: #69b7e4;
+      background: #102131;
+    }
+    .slot-menu-button[data-unread="true"] { color: #f4d35e; }
+    .slot-menu-provider {
+      display: block;
+      margin-top: 1px;
+      color: #8ca0ad;
+      font-size: 10px;
+      text-transform: uppercase;
     }
     .agent-usage {
       display: none;
@@ -415,39 +479,6 @@
       border-radius: 3px;
       transition: width 0.3s ease;
     }
-    .slots {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
-      min-height: 30px;
-      max-width: 100%;
-      overflow-x: auto;
-      overflow-y: hidden;
-      overscroll-behavior-x: contain;
-      scrollbar-width: none;
-      touch-action: pan-x;
-    }
-    .slots::-webkit-scrollbar { display: none; }
-    .slot-button {
-      flex: 0 0 auto;
-      max-width: 132px;
-      border: 1px solid #354855;
-      border-radius: 999px;
-      background: #0d151c;
-      color: #aebdc6;
-      padding: 5px 9px;
-      font: inherit;
-      font-size: var(--slot-font-size);
-      font-weight: 800;
-      line-height: 1.2;
-      text-align: center;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .slot-button[data-active="true"] { border-color: #69b7e4; color: #edf3f7; background: #102131; }
-    .slot-button[data-unread="true"] { border-color: #f4d35e; color: #f4d35e; background: #211d0e; }
-    .slot-button[data-busy="true"] { border-color: #8ca0ad; }
     .status {
       display: flex; align-items: center; gap: 10px; margin-top: 10px;
       font-size: var(--status-font-size); font-weight: 700;
@@ -518,13 +549,93 @@
     }
     .messages, .notifications { display: flex; flex-direction: column; gap: 8px; overflow: hidden; }
     .messages {
-      height: calc(100vh - 43px);
+      flex: 1;
+      min-height: 0;
       overflow-y: auto;
       overscroll-behavior-y: contain;
       scrollbar-width: none;
       touch-action: pan-y;
     }
     .messages::-webkit-scrollbar { display: none; }
+    #conversation-view { display: flex; flex-direction: column; }
+    .text-composer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 44px;
+      gap: 8px;
+      padding-top: 10px;
+      padding-bottom: env(safe-area-inset-bottom, 0);
+      border-top: 1px solid #26323b;
+      background: #0b1117;
+    }
+    .text-composer textarea {
+      width: 100%;
+      min-height: 44px;
+      max-height: 120px;
+      resize: none;
+      box-sizing: border-box;
+      border: 1px solid #526775;
+      border-radius: 8px;
+      padding: 10px 12px;
+      background: #101820;
+      color: #edf3f7;
+      font: inherit;
+      font-size: 16px;
+      line-height: 1.35;
+    }
+    .text-composer textarea:focus { outline: 2px solid #69b7e4; outline-offset: 1px; }
+    /* 送信が母艦へ届かなかったことに気づけるよう、入力欄のすぐ上へ理由を出す。 */
+    .text-composer-error {
+      grid-column: 1 / -1;
+      margin: 0 0 2px;
+      color: #ff9d9d;
+      font-size: 13px;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .text-composer-error[hidden] { display: none; }
+    .text-send-button {
+      width: 44px;
+      height: 44px;
+      border: 0;
+      border-radius: 8px;
+      background: #69b7e4;
+      color: #071018;
+      font-size: 22px;
+      font-weight: 900;
+      cursor: pointer !important;
+    }
+    .text-send-button:disabled { opacity: 0.45; cursor: default !important; }
+    .voice-input-button {
+      display: none;
+      width: 44px;
+      height: 44px;
+      border: 1px solid #526775;
+      border-radius: 8px;
+      background: #101820;
+      color: #edf3f7;
+      font-size: 20px;
+      touch-action: manipulation;
+    }
+    body[data-layout="sp"] .text-composer {
+      grid-template-columns: minmax(0, 1fr) 44px 44px;
+    }
+    body[data-layout="sp"] .voice-input-button { display: block; }
+    .voice-input-button[data-state="recording"] {
+      border-color: #ff4a1e;
+      background: #5a1b12;
+      color: #fff;
+      animation: listening-frame-pulse 1.05s ease-in-out infinite alternate;
+    }
+    .voice-input-button[data-state="processing"] {
+      border-color: #f4d35e;
+      color: #f4d35e;
+    }
+    .voice-input-button[data-state="playing"] {
+      border-color: #69b7e4;
+      background: #102131;
+      color: #69b7e4;
+    }
+    .voice-input-button:disabled { opacity: 0.45; }
     .message { border-left: 3px solid #526775; padding: 4px 0 4px 12px; }
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
@@ -548,13 +659,16 @@
 
     @media (max-width: 1200px) {
       body { overflow: auto; }
-      .dashboard { grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
+      /* この幅ではページ全体をスクロールさせるので、画面高さへの固定を解く。 */
+      .dashboard { height: auto; min-height: 100vh; grid-template-columns: minmax(220px, 0.8fr) minmax(520px, 2fr); }
       .notifications-panel { grid-column: 1 / -1; min-height: 180px; }
       .messages, .notifications { height: auto; max-height: 420px; }
+      #conversation-view { min-height: 480px; }
     }
     @media (min-width: 761px) and (max-width: 900px) {
       body { overflow: hidden; }
-      .dashboard { grid-template-columns: minmax(178px, 0.74fr) minmax(345px, 1.55fr) minmax(235px, 0.95fr); }
+      /* ページを固定表示に戻すため、会話欄の高さ制約も画面高さへ戻す。 */
+      .dashboard { height: 100vh; min-height: 0; grid-template-columns: minmax(178px, 0.74fr) minmax(345px, 1.55fr) minmax(235px, 0.95fr); }
       section { padding: 10px 12px; }
       .status-panel { padding-left: 44px; }
       .volume-control { left: 8px; top: 12px; bottom: 12px; width: 30px; gap: 5px; }
@@ -566,12 +680,10 @@
       .brand-controls .control-button { padding: 5px 3px; font-size: 10px; border-radius: 6px; }
       .clock-date-row { margin-top: 8px; gap: 6px; }
       .agent { margin-top: 7px; padding: 5px 6px; }
-      .slots { margin-top: 6px; min-height: 26px; gap: 4px; }
-      .slot-button { max-width: 102px; padding: 4px 6px; }
       .status { margin-top: 7px; gap: 7px; }
       .agent-usage { margin-top: 6px; padding: 5px 6px; }
       .notifications-panel { grid-column: auto; min-height: 0; }
-      .messages, .notifications { height: calc(100vh - 21px); max-height: none; }
+      .messages, .notifications { max-height: none; }
     }
     @media (max-width: 760px) {
       .dashboard { display: block; }
@@ -747,10 +859,6 @@
     .weather-label {
       color: #69b7e4;
     }
-    .slots-container {
-      margin-top: auto;
-    }
-
     /* 画面の高さが低い（ウルトラワイド画面など）場合のコンパクトレイアウト */
     @media (max-height: 500px) {
       section { padding: 2px 18px; }
@@ -767,9 +875,6 @@
       .agent-usage-title { margin-bottom: 1px; }
       .agent-usage-row-wrapper { margin-top: 2px; }
       .agent-usage-progress-container { height: 4px; margin-top: 2px; }
-      .slots { margin-top: 4px; min-height: 24px; gap: 4px; }
-      .slot-button { padding: 3px 6px; line-height: 1.1; }
-      .slots-container p.eyebrow { margin-top: 3px !important; margin-bottom: 2px !important; }
       .session-reset-button { margin-top: 4px; padding-top: 5px; padding-bottom: 5px; }
       .font-size-control { margin-top: 4px; gap: 4px; }
       .font-size-button { padding: 3px 0; }
@@ -824,9 +929,165 @@
       font-size: 12px;
       font-weight: 700;
     }
+    .sp-toolbar, .sp-drawer-backdrop { display: none; }
+    body[data-layout="sp"] {
+      position: fixed;
+      top: var(--sp-viewport-top, 0);
+      left: 0;
+      width: 100%;
+      height: var(--sp-viewport-height, 100dvh);
+      min-height: 0;
+      overflow: hidden;
+      overscroll-behavior: none;
+      --sp-left-width: min(84vw, 340px);
+    }
+    body[data-layout="sp"] *, body[data-layout="sp"] *::before, body[data-layout="sp"] *::after {
+      cursor: auto !important;
+    }
+    body[data-layout="sp"] .sp-toolbar {
+      position: fixed;
+      z-index: 35;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 52px;
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) 48px;
+      align-items: center;
+      padding: 4px 8px;
+      border-bottom: 1px solid #354855;
+      background: #0b1117;
+    }
+    .sp-toolbar-title {
+      overflow: hidden;
+      color: #edf3f7;
+      font-size: 16px;
+      font-weight: 800;
+      text-align: center;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sp-toolbar-button {
+      position: relative;
+      width: 44px;
+      height: 44px;
+      border: 1px solid #354855;
+      border-radius: 8px;
+      background: #101820;
+      color: #edf3f7;
+      font: inherit;
+      font-size: 22px;
+      touch-action: manipulation;
+    }
+    .sp-notification-count {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      min-width: 17px;
+      height: 17px;
+      padding: 0 4px;
+      border-radius: 8px;
+      background: #e63946;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 800;
+      line-height: 17px;
+      text-align: center;
+    }
+    .sp-notification-count[hidden] { display: none; }
+    body[data-layout="sp"] .dashboard {
+      position: absolute;
+      inset: 52px 0 0;
+      display: block;
+      height: auto;
+      min-height: 0;
+      overflow: hidden;
+      background: #070b0f;
+    }
+    body[data-layout="sp"] #slot-center {
+      position: absolute;
+      inset: 0;
+      min-height: 0;
+      padding: 10px 12px;
+      overflow: hidden;
+    }
+    body[data-layout="sp"] #conversation-view {
+      height: 100%;
+      min-height: 0;
+    }
+    body[data-layout="sp"] .messages {
+      height: auto;
+      max-height: none;
+    }
+    body[data-layout="sp"] .status-panel,
+    body[data-layout="sp"] #slot-right {
+      position: fixed;
+      z-index: 34;
+      top: 52px;
+      bottom: 0;
+      display: flex !important;
+      width: min(84vw, 340px);
+      height: auto;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      transition: transform 180ms ease;
+      box-shadow: 0 0 28px rgba(0, 0, 0, 0.55);
+    }
+    body[data-layout="sp"] .status-panel {
+      left: 0;
+      transform: translateX(-105%);
+    }
+    body[data-layout="sp"] #slot-right {
+      right: 0;
+      padding: 14px 16px;
+      transform: translateX(105%);
+    }
+    body[data-layout="sp"].sp-left-open .status-panel,
+    body[data-layout="sp"].sp-right-open #slot-right {
+      transform: translateX(0);
+    }
+    body[data-layout="sp"] #notifications-view,
+    body[data-layout="sp"] .notifications {
+      height: 100%;
+      max-height: none;
+      min-height: 0;
+    }
+    body[data-layout="sp"] .sp-drawer-backdrop {
+      position: fixed;
+      z-index: 33;
+      inset: 52px 0 0;
+      background: rgba(0, 0, 0, 0.42);
+    }
+    body[data-layout="sp"].sp-left-open .sp-drawer-backdrop,
+    body[data-layout="sp"].sp-right-open .sp-drawer-backdrop {
+      display: block;
+    }
+    body[data-layout="sp"].sp-left-pinned .status-panel {
+      transform: translateX(0);
+      border-right: 1px solid #354855;
+      box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4);
+    }
+    body[data-layout="sp"].sp-left-pinned #slot-center {
+      left: var(--sp-left-width);
+      width: calc(100% - var(--sp-left-width));
+    }
+    body[data-layout="sp"].sp-left-pinned .sp-drawer-backdrop {
+      left: var(--sp-left-width);
+    }
+    body[data-layout="sp"].sp-left-pinned:not(.sp-right-open) .sp-drawer-backdrop {
+      display: none !important;
+    }
+    @media (max-width: 480px) {
+      body[data-layout="sp"] { --sp-left-width: min(92vw, 340px); }
+      body[data-layout="sp"] #slot-center { padding: 8px; }
+      body[data-layout="sp"] .status-panel,
+      body[data-layout="sp"] #slot-right { width: min(92vw, 340px); }
+      body[data-layout="sp"] .text-composer { padding-top: 7px; }
+    }
   </style>
 </head>
-<body>
+<body data-layout=__ARGOS_DASHBOARD_LAYOUT__>
   <div id="screensaver" class="screensaver" aria-hidden="true"></div>
   <div id="center-alert" class="center-alert" aria-hidden="true">
     <div class="center-alert-card">
@@ -854,7 +1115,23 @@
       </div>
       <div class="settings-modal-body">
         <div class="settings-row">
-          <span class="settings-label">画面レイアウト</span>
+          <span class="settings-label">画面レイアウト切替</span>
+          <div class="font-size-control" role="group" aria-label="画面レイアウト">
+            <button id="layout-switch-standard" class="font-size-button" type="button">通常</button>
+            <button id="layout-switch-sp" class="font-size-button" type="button">SP</button>
+            <button id="layout-switch-grid" class="font-size-button" type="button">Grid</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">初期表示デフォルト</span>
+          <div class="font-size-control" role="group" aria-label="デフォルトレイアウト">
+            <button class="default-layout-button" type="button" data-default-layout-option="standard" aria-pressed="true">通常</button>
+            <button class="default-layout-button" type="button" data-default-layout-option="sp" aria-pressed="false">SP</button>
+            <button class="default-layout-button" type="button" data-default-layout-option="grid" aria-pressed="false">Grid</button>
+          </div>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">画面配置</span>
           <button id="swap-button" class="control-button" type="button" style="width: 100%;">左右入れ替え</button>
         </div>
         <div class="settings-row">
@@ -868,10 +1145,24 @@
         <div class="settings-row">
           <span class="settings-label">会話セッション</span>
           <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
+          <button id="session-compact-button" class="control-button" type="button">履歴を引き継いで新規セッション</button>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">ARGOS本体</span>
+          <a class="control-button" href="/settings" style="display:block;text-align:center;text-decoration:none;">本体設定を開く</a>
         </div>
       </div>
     </div>
   </div>
+
+  <header class="sp-toolbar" aria-label="SPダッシュボード操作">
+    <button id="sp-status-button" class="sp-toolbar-button" type="button" aria-label="左枠を固定/解除" aria-expanded="false" aria-pressed="false">&#9776;</button>
+    <div id="sp-toolbar-title" class="sp-toolbar-title">ARGOS</div>
+    <button id="sp-notifications-button" class="sp-toolbar-button" type="button" aria-label="通知を開く" aria-expanded="false">
+      &#128276;<span id="sp-notification-count" class="sp-notification-count" hidden>0</span>
+    </button>
+  </header>
+  <div id="sp-drawer-backdrop" class="sp-drawer-backdrop" aria-hidden="true"></div>
 
   <main class="dashboard">
     <section class="status-panel" style="display: flex; flex-direction: column;">
@@ -903,18 +1194,16 @@
         <span class="status-dot"></span><span id="status-label">待機中</span>
       </div>
 
-      <div class="agent">
-        <div class="agent-label">CURRENT SLOT</div>
-        <div id="agent-name" class="agent-name">--</div>
-        <div id="agent-provider" class="agent-provider">--</div>
+      <div class="agent-selector-wrap">
+        <button id="agent-selector" class="agent" type="button" aria-haspopup="listbox" aria-expanded="false">
+          <span class="agent-label">CURRENT SLOT</span>
+          <span id="agent-name" class="agent-name">--</span>
+          <span id="agent-provider" class="agent-provider">--</span>
+        </button>
+        <div id="slot-menu" class="slot-menu" role="listbox" aria-label="エージェントスロット" data-open="false"></div>
       </div>
 
       <div id="agent-usage" class="agent-usage" aria-live="polite"></div>
-
-      <div class="slots-container">
-        <p class="eyebrow" style="margin-top: 10px; margin-bottom: 4px;">SLOTS</p>
-        <div id="slots" class="slots" aria-label="エージェントスロット"></div>
-      </div>
     </section>
     
     <!-- 中央スロット (スロット1) -->
@@ -923,6 +1212,12 @@
         <div id="conversation-view" class="slot-container">
           <p class="eyebrow">CONVERSATION</p>
           <div id="messages" class="messages"></div>
+          <form id="text-composer" class="text-composer">
+            <p id="text-composer-error" class="text-composer-error" role="alert" hidden></p>
+            <textarea id="text-input" rows="1" maxlength="4000" aria-label="メッセージ" placeholder="メッセージ"></textarea>
+            <button id="voice-input-button" class="voice-input-button" type="button" data-state="idle" aria-label="音声入力を開始" title="音声入力">&#127908;</button>
+            <button id="text-send-button" class="text-send-button" type="submit" aria-label="送信" title="送信">&#8593;</button>
+          </form>
         </div>
         <div id="overlay-center" class="slot-overlay">
           <div class="overlay-header">
@@ -958,7 +1253,22 @@
 
   <script>
     const messages = document.getElementById("messages");
+    const textComposer = document.getElementById("text-composer");
+    const textInput = document.getElementById("text-input");
+    const textSendButton = document.getElementById("text-send-button");
+    const textComposerError = document.getElementById("text-composer-error");
+    const voiceInputButton = document.getElementById("voice-input-button");
     const notifications = document.getElementById("notifications");
+    const dashboardLayout = document.body.dataset.layout || "standard";
+    const spStatusButton = document.getElementById("sp-status-button");
+    const spNotificationsButton = document.getElementById("sp-notifications-button");
+    const spNotificationCount = document.getElementById("sp-notification-count");
+    const spDrawerBackdrop = document.getElementById("sp-drawer-backdrop");
+    const spToolbarTitle = document.getElementById("sp-toolbar-title");
+    const layoutSwitchStandard = document.getElementById("layout-switch-standard");
+    const layoutSwitchSp = document.getElementById("layout-switch-sp");
+    const layoutSwitchGrid = document.getElementById("layout-switch-grid");
+    const defaultLayoutButtons = Array.from(document.querySelectorAll("[data-default-layout-option]"));
     const screensaver = document.getElementById("screensaver");
     const centerAlert = document.getElementById("center-alert");
     const centerAlertSource = document.getElementById("center-alert-source");
@@ -973,14 +1283,17 @@
     const agentUsage = document.getElementById("agent-usage");
     const networkStatus = document.getElementById("network-status");
     const networkLabel = document.getElementById("network-label");
-    const slots = document.getElementById("slots");
+    const agentSelector = document.getElementById("agent-selector");
+    const slotMenu = document.getElementById("slot-menu");
     const muteButton = document.getElementById("mute-button");
     const microphoneButton = document.getElementById("microphone-button");
     const sessionResetButton = document.getElementById("session-reset-button");
+    const sessionCompactButton = document.getElementById("session-compact-button");
     const volumeSlider = document.getElementById("volume-slider");
     const volumeLabel = document.getElementById("volume-label");
     const fontSizeButtons = Array.from(document.querySelectorAll("[data-font-size-option]"));
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+    let availableSlots = [];
 
     const swapButton = document.getElementById("swap-button");
 
@@ -1003,10 +1316,23 @@
     const screensaverTimeoutMs = Math.max(0, Number(__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__) * 1000);
     const defaultFontSize = __ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__;
     const fontSizeStorageKey = "argos-dashboard-font-size";
+    const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
     let previousNotifications = "";
     let followLatestMessage = true;
+    let currentAgentSlotKey = "";
+    let currentAgentSlotBusy = false;
+    const inFlightTextSlots = new Set();
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceChunks = [];
+    let voiceState = "idle";
+    let voiceSlotKey = "";
+    let voiceAudioContext = null;
+    let voicePlaybackChain = Promise.resolve();
+    let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
+    let latestNotifications = [];
     
     // スロットごとの表示キャッシュ
     let prevSlotsState = {
@@ -1022,6 +1348,22 @@
 
       const centerTop = stacks.center[stacks.center.length - 1];
       const rightTop = stacks.right[stacks.right.length - 1];
+
+      if (dashboardLayout === "sp") {
+        if (conversationView.parentNode !== slotContainerCenter) {
+          slotContainerCenter.insertBefore(conversationView, overlayCenter);
+        }
+        if (notificationsView.parentNode !== slotContainerRight) {
+          slotContainerRight.insertBefore(notificationsView, overlayRight);
+        }
+        const normalizedCenter = ["conversation", "notifications"].includes(centerTop.type)
+          ? {type: "conversation", title: "会話"} : centerTop;
+        const normalizedRight = ["conversation", "notifications"].includes(rightTop.type)
+          ? {type: "notifications", title: "通知"} : rightTop;
+        renderSlot("center", normalizedCenter, conversationView, overlayCenter, overlayTitleCenter, iframeCenter);
+        renderSlot("right", normalizedRight, notificationsView, overlayRight, overlayTitleRight, iframeRight);
+        return;
+      }
 
       // デフォルトビューの物理的な配置（アペンド先）をスタックに合わせて移動する
       if (centerTop.type === "conversation") {
@@ -1223,19 +1565,31 @@
     }
     centerAlert.addEventListener("click", closeCenterAlert);
     function render(state) {
-      status.dataset.code = state.status.code;
-      document.body.dataset.statusCode = state.status.code || "ready";
-      statusLabel.textContent = state.status.label;
+      const activeAgentSlot = (state.slots || []).find(slot => slot.active);
+      currentAgentSlotKey = activeAgentSlot
+        ? `${activeAgentSlot.provider || ""}\u0000${activeAgentSlot.name || ""}` : "";
+      currentAgentSlotBusy = Boolean(activeAgentSlot?.busy);
+      const displayStatus = currentAgentSlotBusy && state.status.code === "ready"
+        ? {code: "thinking", label: "考え中"} : state.status;
+      status.dataset.code = displayStatus.code;
+      document.body.dataset.statusCode = displayStatus.code || "ready";
+      statusLabel.textContent = displayStatus.label;
       agentName.textContent = state.agent?.name || "--";
-      agentProvider.textContent = state.agent?.provider || "--";
+      const provider = state.agent?.provider || "--";
+      const model = state.agent?.model || "";
+      agentProvider.textContent = model ? `${provider} · ${model}` : provider;
+      spToolbarTitle.textContent = state.agent?.name ? `ARGOS · ${state.agent.name}` : "ARGOS";
       renderNetworkStatus(state.network?.wifi);
       renderAgentUsage(state.agent_usage?.current);
-      slots.innerHTML = (state.slots || []).map(slot => `
-        <button class="slot-button" type="button" disabled
+      availableSlots = state.slots || [];
+      slotMenu.innerHTML = availableSlots.map((slot, index) => `
+        <button class="slot-menu-button" type="button" role="option"
+          data-index="${index}"
           data-active="${slot.active ? "true" : "false"}"
           data-unread="${slot.unread ? "true" : "false"}"
-          data-busy="${slot.busy ? "true" : "false"}">
+          aria-selected="${slot.active ? "true" : "false"}">
           ${escapeHtml(slot.name || "--")}${slot.busy ? " ..." : ""}${slot.unread ? " / 未読" : ""}
+          <span class="slot-menu-provider">${escapeHtml(slot.provider || "")}${slot.model ? ` · ${escapeHtml(slot.model)}` : ""}</span>
         </button>`).join("");
       muted = Boolean(state.audio?.muted);
       muteButton.textContent = muted ? "ミュート中" : "ミュート";
@@ -1243,16 +1597,19 @@
       microphoneEnabled = state.microphone?.enabled !== false;
       microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
       microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
+      sessionCompactButton.disabled = !state.capabilities?.conversation_memory;
+      sessionCompactButton.title = sessionCompactButton.disabled ? "config.yamlで会話引き継ぎを有効にしてください" : "";
       const volume = Number.isFinite(Number(state.audio?.volume)) ? Number(state.audio.volume) : Number(volumeSlider.value);
       if (!changingVolume) {
         volumeSlider.value = volume;
         volumeLabel.textContent = String(volume);
       }
-      if (state.status.code === "booting") {
+      updateTextComposerAvailability();
+      if (displayStatus.code === "booting") {
         showSplash();
       }
       const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening", "followup"]);
-      if (activeStates.has(state.status.code)) {
+      if (activeStates.has(displayStatus.code)) {
         resetScreensaver();
       }
       const displayActivitySequence = state.display_activity?.sequence ?? 0;
@@ -1281,6 +1638,8 @@
         }
       }
       const recentNotices = state.notifications.slice().reverse();
+      latestNotifications = state.notifications;
+      updateSpNotificationBadge();
       const nextNotifications = JSON.stringify(recentNotices);
       if (nextNotifications !== previousNotifications) {
         notifications.innerHTML = recentNotices.length ? recentNotices.map(item => `
@@ -1434,6 +1793,405 @@
         sessionResetButton.disabled = false;
       }
     }
+    async function selectAgentSlot(name, provider) {
+      const headers = {"Content-Type": "application/json"};
+      if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+      const response = await fetch("/api/terminal/slots/select", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({name, provider}),
+      });
+      if (!response.ok) throw new Error(await response.text());
+      await refresh();
+    }
+    function setSlotMenuOpen(open) {
+      slotMenu.dataset.open = open ? "true" : "false";
+      agentSelector.setAttribute("aria-expanded", open ? "true" : "false");
+    }
+    agentSelector.addEventListener("click", () => {
+      setSlotMenuOpen(slotMenu.dataset.open !== "true");
+    });
+    slotMenu.addEventListener("click", event => {
+      const button = event.target.closest(".slot-menu-button");
+      if (!button) return;
+      const selected = availableSlots[Number(button.dataset.index)];
+      if (!selected) return;
+      if (selected.active) {
+        setSlotMenuOpen(false);
+        return;
+      }
+      if (voiceState === "recording") {
+        setTextComposerError("録音を停止してからスロットを切り替えてね");
+        return;
+      }
+      setSlotMenuOpen(false);
+      agentSelector.disabled = true;
+      selectAgentSlot(selected.name || "", selected.provider || "")
+        .catch(error => console.error("Failed to select agent slot:", error))
+        .finally(() => { agentSelector.disabled = false; });
+    });
+    document.addEventListener("click", event => {
+      if (!event.target.closest(".agent-selector-wrap")) setSlotMenuOpen(false);
+    });
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") setSlotMenuOpen(false);
+    });
+    async function sendTextTurn(value) {
+      const text = value.trim();
+      const slotKey = currentAgentSlotKey;
+      if (!text || !slotKey || currentAgentSlotBusy || inFlightTextSlots.has(slotKey)) return;
+      inFlightTextSlots.add(slotKey);
+      textInput.value = "";
+      textInput.style.height = "auto";
+      setTextComposerError("");
+      updateTextComposerAvailability();
+      try {
+        const headers = {"Content-Type": "text/plain; charset=utf-8", "Accept": "text/event-stream"};
+        if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+        const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: text});
+        if (!response.ok) throw new Error(await describeTurnResponseError(response));
+        if (!response.body) throw new Error("応答ストリームを取得できませんでした");
+        const reader = response.body.getReader();
+        while (!(await reader.read()).done) {
+          // 会話表示は共通のダッシュボードSSEが更新する。
+        }
+      } catch (error) {
+        console.error("Failed to send text turn:", error);
+        setTextComposerError(describeTurnSendError(error));
+        if (currentAgentSlotKey === slotKey && !textInput.value) {
+          textInput.value = text;
+        }
+      } finally {
+        inFlightTextSlots.delete(slotKey);
+        updateTextComposerAvailability();
+        if (currentAgentSlotKey === slotKey) textInput.focus();
+      }
+    }
+    function setTextComposerError(message) {
+      // 空文字なら消す。次の送信まで表示は残す（端末のエラー表示と同じ振る舞い）。
+      textComposerError.textContent = message;
+      textComposerError.hidden = !message;
+    }
+    async function describeTurnResponseError(response) {
+      // 母艦は {"error": "..."} を返すので、その理由をそのまま見せる。
+      let detail = "";
+      try {
+        const body = await response.text();
+        try {
+          detail = String(JSON.parse(body).error || "");
+        } catch (parseError) {
+          detail = body.trim();
+        }
+      } catch (readError) {
+        detail = "";
+      }
+      if (response.status === 401) return detail || "母艦の認証に失敗したよ";
+      return detail || `母艦がエラーを返したよ (${response.status})`;
+    }
+    function describeTurnSendError(error) {
+      // fetch自体が失敗したときは母艦へ届いていない（TypeError）。
+      if (error instanceof TypeError) return "母艦に繋がらないみたい";
+      return error && error.message ? error.message : "送信できなかったよ";
+    }
+    function updateTextComposerAvailability() {
+      const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || inFlightTextSlots.has(currentAgentSlotKey);
+      textInput.disabled = false;
+      textSendButton.disabled = unavailable;
+      voiceInputButton.disabled = (voiceState !== "recording" && unavailable)
+        || voiceState === "processing"
+        || voiceState === "playing";
+    }
+    function setVoiceState(nextState) {
+      voiceState = nextState;
+      voiceInputButton.dataset.state = nextState;
+      const labels = {
+        idle: "音声入力を開始",
+        recording: "録音を停止して送信",
+        processing: "音声を処理中",
+        playing: "回答を再生中",
+      };
+      voiceInputButton.setAttribute("aria-label", labels[nextState]);
+      voiceInputButton.title = labels[nextState];
+      updateTextComposerAvailability();
+    }
+    function selectRecordingMimeType() {
+      if (!window.MediaRecorder) return "";
+      const candidates = [
+        "audio/mp4;codecs=mp4a.40.2",
+        "audio/mp4",
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/ogg;codecs=opus",
+      ];
+      return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
+    }
+    async function startVoiceRecording() {
+      if (!currentAgentSlotKey || currentAgentSlotBusy) return;
+      if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+        setTextComposerError("このブラウザは音声録音に対応していないよ");
+        return;
+      }
+      setTextComposerError("");
+      try {
+        voiceAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
+        await voiceAudioContext.resume();
+        voiceStream = await navigator.mediaDevices.getUserMedia({
+          audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
+        });
+        const mimeType = selectRecordingMimeType();
+        voiceRecorder = new MediaRecorder(voiceStream, mimeType ? {mimeType} : undefined);
+        voiceChunks = [];
+        voiceSlotKey = currentAgentSlotKey;
+        voicePlaybackChain = Promise.resolve();
+        voiceRecorder.addEventListener("dataavailable", event => {
+          if (event.data.size) voiceChunks.push(event.data);
+        });
+        voiceRecorder.start();
+        setVoiceState("recording");
+      } catch (error) {
+        stopVoiceStream();
+        setVoiceState("idle");
+        setTextComposerError(error?.name === "NotAllowedError"
+          ? "Safariのマイク利用を許可してね"
+          : "マイクを開始できなかったよ");
+      }
+    }
+    function stopVoiceStream() {
+      voiceStream?.getTracks().forEach(track => track.stop());
+      voiceStream = null;
+    }
+    async function stopVoiceRecording() {
+      if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+      const recorder = voiceRecorder;
+      const stopped = new Promise(resolve => recorder.addEventListener("stop", resolve, {once: true}));
+      recorder.stop();
+      await stopped;
+      stopVoiceStream();
+      const audio = new Blob(voiceChunks, {type: recorder.mimeType || "audio/webm"});
+      voiceRecorder = null;
+      voiceChunks = [];
+      if (!audio.size) {
+        setVoiceState("idle");
+        setTextComposerError("音声を録音できなかったよ");
+        return;
+      }
+      await sendVoiceTurn(audio, voiceSlotKey);
+    }
+    async function sendVoiceTurn(audio, slotKey) {
+      inFlightTextSlots.add(slotKey);
+      setVoiceState("processing");
+      setTextComposerError("");
+      try {
+        const headers = {"Content-Type": audio.type, "Accept": "text/event-stream, audio/wav"};
+        if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
+        const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: audio});
+        if (!response.ok) throw new Error(await describeTurnResponseError(response));
+        if (!response.body) throw new Error("応答ストリームを取得できませんでした");
+        await consumeVoiceTurnEvents(response.body);
+        await voicePlaybackChain;
+      } catch (error) {
+        console.error("Failed to send voice turn:", error);
+        setTextComposerError(describeTurnSendError(error));
+      } finally {
+        inFlightTextSlots.delete(slotKey);
+        voiceSlotKey = "";
+        setVoiceState("idle");
+      }
+    }
+    async function consumeVoiceTurnEvents(streamBody) {
+      const reader = streamBody.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const {value, done} = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), {stream: !done}).replace(/\r\n/g, "\n");
+        const blocks = buffer.split("\n\n");
+        buffer = done ? "" : blocks.pop();
+        for (const block of blocks) {
+          const dataLine = block.split("\n").find(line => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.event === "audio" && event.data) queueVoiceAudio(event.data);
+          if (event.event === "error") throw new Error(event.message || "音声処理に失敗したよ");
+        }
+        if (done) break;
+      }
+    }
+    function queueVoiceAudio(base64Data) {
+      setVoiceState("playing");
+      voicePlaybackChain = voicePlaybackChain.then(() => playVoiceWav(base64Data));
+    }
+    async function playVoiceWav(base64Data) {
+      const binary = atob(base64Data);
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+      const audioBuffer = await voiceAudioContext.decodeAudioData(bytes.buffer);
+      await new Promise(resolve => {
+        const source = voiceAudioContext.createBufferSource();
+        source.buffer = audioBuffer;
+        source.connect(voiceAudioContext.destination);
+        source.addEventListener("ended", resolve, {once: true});
+        source.start();
+      });
+    }
+    voiceInputButton.addEventListener("click", () => {
+      if (voiceState === "idle") {
+        startVoiceRecording();
+      } else if (voiceState === "recording") {
+        stopVoiceRecording();
+      }
+    });
+    textComposer.addEventListener("submit", event => {
+      event.preventDefault();
+      sendTextTurn(textInput.value);
+    });
+    textInput.addEventListener("keydown", event => {
+      if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        textComposer.requestSubmit();
+      }
+    });
+    textInput.addEventListener("input", () => {
+      textInput.style.height = "auto";
+      textInput.style.height = `${Math.min(textInput.scrollHeight, 120)}px`;
+    });
+
+    let pttActiveKey = null;
+
+    document.addEventListener("keydown", event => {
+      if (event.repeat) return;
+      const activeEl = document.activeElement;
+      const isInputActive = activeEl && (
+        activeEl.tagName === "INPUT" ||
+        activeEl.tagName === "TEXTAREA" ||
+        activeEl.tagName === "SELECT" ||
+        activeEl.isContentEditable
+      );
+      if (isInputActive) return;
+
+      const isPttKey = event.code === "Space" || (event.key && /^F(1[3-9]|2[0-4])$/.test(event.key));
+      if (isPttKey) {
+        if (event.code === "Space") event.preventDefault();
+        if (voiceState === "idle" && !currentAgentSlotBusy && currentAgentSlotKey) {
+          pttActiveKey = event.code || event.key;
+          startVoiceRecording();
+        }
+      }
+    });
+
+    document.addEventListener("keyup", event => {
+      const key = event.code || event.key;
+      if (pttActiveKey && (key === pttActiveKey || event.code === "Space" || /^F(1[3-9]|2[0-4])$/.test(event.key))) {
+        if (event.code === "Space") event.preventDefault();
+        pttActiveKey = null;
+        if (voiceState === "recording") {
+          stopVoiceRecording();
+        }
+      }
+    });
+    const defaultLayoutStorageKey = "argos-dashboard-default-layout";
+    const spPinnedStorageKey = "argos-sp-left-pinned";
+
+    function setCookie(name, value, days = 365) {
+      document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; Max-Age=${days * 86400}; SameSite=Lax`;
+    }
+
+    function setSpDrawer(side) {
+      if (dashboardLayout !== "sp") return;
+      const leftOpen = side === "left" && !document.body.classList.contains("sp-left-open");
+      const rightOpen = side === "right" && !document.body.classList.contains("sp-right-open");
+      if (rightOpen) markSpNotificationsSeen();
+      document.body.classList.toggle("sp-left-open", leftOpen);
+      document.body.classList.toggle("sp-right-open", rightOpen);
+      spStatusButton.setAttribute("aria-expanded", leftOpen ? "true" : "false");
+      spNotificationsButton.setAttribute("aria-expanded", rightOpen ? "true" : "false");
+    }
+    function updateSpNotificationBadge() {
+      if (dashboardLayout !== "sp") return;
+      const unreadCount = latestNotifications.filter(item => String(item.created_at || "") > spNotificationSeenAt).length;
+      spNotificationCount.textContent = unreadCount > 99 ? "99+" : String(unreadCount);
+      spNotificationCount.hidden = unreadCount === 0;
+    }
+    function markSpNotificationsSeen() {
+      const latestCreatedAt = latestNotifications.reduce(
+        (latest, item) => String(item.created_at || "") > latest ? String(item.created_at || "") : latest,
+        spNotificationSeenAt,
+      );
+      spNotificationSeenAt = latestCreatedAt;
+      localStorage.setItem(spNotificationSeenAtStorageKey, spNotificationSeenAt);
+      updateSpNotificationBadge();
+    }
+    spStatusButton.addEventListener("click", () => {
+      if (dashboardLayout !== "sp") return;
+      const isPinned = document.body.classList.toggle("sp-left-pinned");
+      spStatusButton.setAttribute("aria-pressed", isPinned ? "true" : "false");
+      spStatusButton.setAttribute("aria-expanded", isPinned ? "true" : "false");
+      localStorage.setItem(spPinnedStorageKey, isPinned ? "true" : "false");
+    });
+    spNotificationsButton.addEventListener("click", () => setSpDrawer("right"));
+    spDrawerBackdrop.addEventListener("click", () => setSpDrawer(""));
+
+    if (layoutSwitchStandard) {
+      layoutSwitchStandard.addEventListener("click", () => {
+        setCookie("argos_layout", "standard");
+        localStorage.setItem(defaultLayoutStorageKey, "standard");
+        window.location.href = "/";
+      });
+    }
+    if (layoutSwitchSp) {
+      layoutSwitchSp.addEventListener("click", () => {
+        setCookie("argos_layout", "sp");
+        localStorage.setItem(defaultLayoutStorageKey, "sp");
+        window.location.href = "/sp";
+      });
+    }
+    if (layoutSwitchGrid) {
+      layoutSwitchGrid.addEventListener("click", () => {
+        setCookie("argos_layout", "grid");
+        localStorage.setItem(defaultLayoutStorageKey, "grid");
+        window.location.href = "/grid";
+      });
+    }
+
+    function updateDefaultLayoutUI(selected) {
+      defaultLayoutButtons.forEach(btn => {
+        const opt = btn.dataset.defaultLayoutOption;
+        const active = opt === selected;
+        btn.setAttribute("aria-pressed", active ? "true" : "false");
+      });
+    }
+    const currentDefaultLayout = localStorage.getItem(defaultLayoutStorageKey) || "standard";
+    updateDefaultLayoutUI(currentDefaultLayout);
+
+    defaultLayoutButtons.forEach(btn => {
+      btn.addEventListener("click", () => {
+        const opt = btn.dataset.defaultLayoutOption;
+        localStorage.setItem(defaultLayoutStorageKey, opt);
+        setCookie("argos_layout", opt);
+        updateDefaultLayoutUI(opt);
+      });
+    });
+
+    function updateSpViewport() {
+      if (dashboardLayout !== "sp") return;
+      const viewport = window.visualViewport;
+      const height = viewport ? viewport.height : window.innerHeight;
+      const offsetTop = viewport ? viewport.offsetTop : 0;
+      document.body.style.setProperty("--sp-viewport-height", `${height}px`);
+      document.body.style.setProperty("--sp-viewport-top", `${offsetTop}px`);
+      window.scrollTo(0, 0);
+    }
+    if (dashboardLayout === "sp") {
+      const isPinned = localStorage.getItem(spPinnedStorageKey) === "true";
+      if (isPinned) {
+        document.body.classList.add("sp-left-pinned");
+        spStatusButton.setAttribute("aria-pressed", "true");
+        spStatusButton.setAttribute("aria-expanded", "true");
+      }
+      updateSpViewport();
+      window.visualViewport?.addEventListener("resize", updateSpViewport);
+      window.visualViewport?.addEventListener("scroll", updateSpViewport);
+      window.addEventListener("orientationchange", updateSpViewport);
+    }
     function applyControlResult(result) {
       if (!result || typeof result !== "object") return;
       if (typeof result.muted === "boolean") {
@@ -1473,6 +2231,12 @@
       sessionResetButton.dataset.confirm = "false";
       sessionResetButton.textContent = "セッションリセット";
       sendControl("reset_agent_session").catch(error => console.error(error));
+    });
+    sessionCompactButton.addEventListener("click", () => {
+      sessionCompactButton.disabled = true;
+      sendControl("compact_agent_session")
+        .catch(error => console.error(error))
+        .finally(() => { sessionCompactButton.disabled = false; });
     });
     volumeSlider.addEventListener("input", () => {
       changingVolume = true;
@@ -1547,7 +2311,15 @@
       window.addEventListener(eventName, resetScreensaver, {passive: true});
     });
     resetScreensaver();
-    showSplash();
+    const pageQuery = new URLSearchParams(window.location.search);
+    const skipInitialSplash = ["settings", "grid"].includes(pageQuery.get("from"));
+    const shouldOpenSettings = pageQuery.get("open") === "settings";
+    if (skipInitialSplash) {
+      // 設定画面から戻っただけの場合は、再起動と誤解しやすい起動演出を省く。
+      window.history.replaceState({}, "", window.location.pathname);
+    } else {
+      showSplash();
+    }
     refresh();
 
     // オーバーレイ消去などのイベント送信用のヘルパー関数
@@ -1592,6 +2364,10 @@
         settingsModal.setAttribute("aria-hidden", "true");
       }
     });
+    if (shouldOpenSettings) {
+      settingsModal.style.display = "flex";
+      settingsModal.setAttribute("aria-hidden", "false");
+    }
     overlayCloseButtons.forEach(button => {
       button.addEventListener("click", () => {
         const slot = button.getAttribute("data-slot");
@@ -1606,6 +2382,94 @@
     const stream = new EventSource("/api/stream");
     stream.addEventListener("open", refresh);
     stream.addEventListener("update", refresh);
+
+    // ===== 接続断オーバーレイ =====
+    // SSEが切れたまま戻らないときに全画面の「再接続中」表示へ切り替え、
+    // 母艦へ届くようになったら自動でリロードして復帰する。
+    // キオスク端末(タッチ・キーボード無し)がChromiumのオフライン
+    // エラーページで詰まないようにするための仕組み。
+    (function () {
+      const style = document.createElement("style");
+      style.textContent = `
+        #conn-lost { position: fixed; inset: 0; z-index: 9999; display: none;
+          background: radial-gradient(ellipse at center, #101a33 0%, #070b18 70%);
+          color: #e6ecff; text-align: center; font-family: inherit; }
+        #conn-lost.show { display: flex; align-items: center; justify-content: center; }
+        #conn-lost .cl-logo { font-size: 64px; font-weight: 700; letter-spacing: .35em;
+          margin-left: .35em; color: #7fd4ff; text-shadow: 0 0 28px rgba(127,212,255,.55); }
+        #conn-lost .cl-ring { margin: 36px auto 0; width: 52px; height: 52px;
+          border: 4px solid rgba(127,212,255,.15); border-top-color: #7fd4ff;
+          border-radius: 50%; animation: clspin 1.1s linear infinite; }
+        @keyframes clspin { to { transform: rotate(360deg); } }
+        #conn-lost .cl-msg { margin-top: 24px; font-size: 24px; color: #9fb0d8; }
+        #conn-lost .cl-diag { display: none; margin: 24px auto 0; padding: 12px 26px;
+          border: 1px solid rgba(127,212,255,.2); border-radius: 12px; font-size: 17px;
+          color: #9fb0d8; text-align: left; width: fit-content; line-height: 1.9; }
+        #conn-lost .ok { color: #7dffb0; }
+        #conn-lost .ng { color: #ff8f8f; }
+      `;
+      document.head.appendChild(style);
+      const overlay = document.createElement("div");
+      overlay.id = "conn-lost";
+      overlay.innerHTML = `
+        <div>
+          <div class="cl-logo">ARGOS</div>
+          <div class="cl-ring"></div>
+          <div class="cl-msg">母艦との接続が切れたよ。再接続中…</div>
+          <div class="cl-diag" id="cl-diag">
+            <div>Wi-Fi: <span id="cl-wifi">-</span></div>
+            <div>Tailscale: <span id="cl-ts">-</span></div>
+            <div>母艦: <span id="cl-hub">-</span></div>
+          </div>
+        </div>`;
+      document.body.appendChild(overlay);
+
+      const GRACE_MS = 8000;   // 一時的なSSE再接続では表示しない猶予
+      let lostSince = null;
+      let reloading = false;
+      stream.addEventListener("open", () => {
+        lostSince = null;
+        overlay.classList.remove("show");
+      });
+      stream.addEventListener("error", () => {
+        if (lostSince === null) lostSince = Date.now();
+      });
+
+      function mark(id, ok, label) {
+        const el = document.getElementById(id);
+        if (ok === null || ok === undefined) { el.textContent = "不明"; el.className = ""; return; }
+        el.textContent = ok ? "接続OK" + (label ? "（" + label + "）" : "") : "未接続";
+        el.className = ok ? "ok" : "ng";
+      }
+      async function pollLocalDiag() {
+        // 端末ローカルの状態サーバ(argos-terminal内蔵)があれば詳細を出す
+        try {
+          const res = await fetch("http://127.0.0.1:8899/status", { cache: "no-store" });
+          const s = await res.json();
+          document.getElementById("cl-diag").style.display = "block";
+          mark("cl-wifi", s.wifi, s.ssid);
+          mark("cl-ts", s.tailscale);
+          mark("cl-hub", s.hub);
+        } catch (err) { /* 状態サーバ無し */ }
+      }
+      async function watch() {
+        if (lostSince !== null && Date.now() - lostSince > GRACE_MS) {
+          overlay.classList.add("show");
+          pollLocalDiag();
+          // 母艦へ届くのにSSEが戻らないときはリロードで復帰する
+          try {
+            const res = await fetch("/api/health", { cache: "no-store" });
+            if (res.ok && !reloading) {
+              reloading = true;
+              location.reload();
+              return;
+            }
+          } catch (err) { /* まだ届かない */ }
+        }
+        setTimeout(watch, 3000);
+      }
+      watch();
+    })();
   </script>
 </body>
 </html>

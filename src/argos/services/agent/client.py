@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import hashlib
-import json
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
-from argos.config import AgentSlot
-from argos.config import Settings
+from argos.config import AgentSlot, Settings, resolve_agent_slot_model
+from argos.services.agent.prompt_state import SystemPromptStateStore
 from argos.services.antigravity import AntigravityCliClient
 from argos.services.claude.cli import ClaudeCliClient
 from argos.services.codex.cli import CodexCliClient
+from argos.services.conversation_store import ConversationStore
 from argos.services.hermes import HermesCliClient
 
 
@@ -28,8 +28,15 @@ class AgentClient(Protocol):
     def current_provider(self) -> str:
         """現在の会話スロットのprovider名を返す。"""
 
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替え、名前を返す。"""
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
@@ -39,6 +46,9 @@ class AgentClient(Protocol):
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """現在の会話スロットへプロンプトを送り、応答差分を順に返す。"""
+
+    def ask_slot_stream(self, name: str, provider: str, prompt: str) -> Iterable[str]:
+        """指定した会話スロットへプロンプトを送り、応答差分を順に返す。"""
 
 
 @dataclass
@@ -59,6 +69,10 @@ class SystemPromptAgentClient:
         self._slots = settings.agent_slots
         self._index = 0
         self._store = SystemPromptStateStore(Path(settings.agent_system_prompt_state_path).expanduser())
+        self._memory_store = ConversationStore(
+            Path(settings.conversation_memory_path).expanduser(),
+            settings.conversation_memory_enabled,
+        )
 
     def __getattr__(self, name: str) -> object:
         """共通インターフェース外の機能は実クライアントへ委譲する。"""
@@ -74,12 +88,28 @@ class SystemPromptAgentClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._client.current_provider
 
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return self._client.current_model
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
         name = self._client.next_slot()
-        if self._slots:
-            self._index = (self._index + 1) % len(self._slots)
+        for index, slot in enumerate(self._slots):
+            if slot.name == self.current_name and slot.provider == self.current_provider:
+                self._index = index
+                break
         return name
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        selected = self._client.select_slot(name, provider)
+        for index, slot in enumerate(self._slots):
+            if slot.name == name and slot.provider == provider:
+                self._index = index
+                break
+        return selected
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
@@ -88,92 +118,103 @@ class SystemPromptAgentClient:
 
     def ask(self, prompt: str) -> str:
         """必要な場合だけ共通指示を付与して最終応答を返す。"""
-        prompt_to_send, injected = self._prepare_prompt(prompt)
+        prompt_to_send, system_injected, memory_injected = self._prepare_prompt(prompt)
         response = self._client.ask(prompt_to_send)
-        if injected:
+        if system_injected:
             self._store.mark_injected(self._current_key())
+        if memory_injected:
+            self._memory_store.clear_memory(self._current_key())
         return response
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """必要な場合だけ共通指示を付与して応答差分を順に返す。"""
-        prompt_to_send, injected = self._prepare_prompt(prompt)
+        yield from self._ask_slot_stream(self._index, prompt, is_explicit=False)
+
+    def ask_slot_stream(self, name: str, provider: str, prompt: str) -> Iterable[str]:
+        """選択中スロットを変えず、指定スロットへ応答を依頼する。"""
+        index = self._find_slot_index(name, provider)
+        yield from self._ask_slot_stream(index, prompt, is_explicit=True)
+
+    def _ask_slot_stream(
+        self,
+        index: int,
+        prompt: str,
+        *,
+        is_explicit: bool,
+    ) -> Iterable[str]:
+        """指定インデックスの共通指示と引き継ぎ状態を安全に反映する。"""
+        slot = self._slots[index]
+        key = self._slot_key(index)
+        prompt_to_send, system_injected, memory_injected = self._prepare_prompt_for_slot(
+            slot,
+            key,
+            prompt,
+        )
         completed = False
         try:
-            for chunk in self._client.ask_stream(prompt_to_send):
-                yield chunk
+            stream = (
+                self._client.ask_slot_stream(slot.name, slot.provider, prompt_to_send)
+                if is_explicit
+                else self._client.ask_stream(prompt_to_send)
+            )
+            yield from stream
             completed = True
         finally:
-            if injected and completed:
-                self._store.mark_injected(self._current_key())
+            if system_injected and completed:
+                self._store.mark_injected(key)
+            if memory_injected and completed:
+                self._memory_store.clear_memory(key)
 
-    def _prepare_prompt(self, prompt: str) -> tuple[str, bool]:
-        """現在スロットが未注入ならシステム指示を付与する。"""
+    def save_resume_memory(self, summary: str) -> None:
+        """現在スロットの次回セッションへ渡す要約を保存する。"""
+        self._memory_store.save_memory(self._current_key(), summary)
+
+    def _prepare_prompt(self, prompt: str) -> tuple[str, bool, bool]:
+        """未注入の共通指示と引き継ぎ要約をプロンプトへ付与する。"""
         key = self._current_key()
-        if self._store.is_injected(key):
-            return prompt, False
-        prompt_to_send = build_agent_prompt(prompt, self._settings)
-        return prompt_to_send, prompt_to_send != prompt
+        slot = self._slots[self._index]
+        return self._prepare_prompt_for_slot(slot, key, prompt)
+
+    def _prepare_prompt_for_slot(
+        self,
+        slot: AgentSlot,
+        key: str,
+        prompt: str,
+    ) -> tuple[str, bool, bool]:
+        """指定スロットの未注入指示と引き継ぎ要約を付与する。"""
+        system_injected = False
+        prompt_to_send = prompt
+        if slot.provider != "remote" and not self._store.is_injected(key):
+            prompt_to_send = build_agent_prompt(prompt_to_send, self._settings)
+            system_injected = prompt_to_send != prompt
+        memory = self._memory_store.load_memory(key)
+        if memory:
+            prompt_to_send = (
+                "以下は以前のセッションから引き継いだ要約です。事実として参照し、"
+                "現在の依頼を優先してください。\n\n"
+                f"{memory}\n\n現在の依頼:\n{prompt_to_send}"
+            )
+        return prompt_to_send, system_injected, bool(memory)
+
+    def _find_slot_index(self, name: str, provider: str) -> int:
+        """名前とproviderが一致するスロットのインデックスを返す。"""
+        for index, slot in enumerate(self._slots):
+            if slot.name == name and slot.provider == provider:
+                return index
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
 
     def _current_key(self) -> str:
         """現在スロットの注入済み状態キーを返す。"""
         if self._slots:
-            slot = self._slots[self._index]
-            raw = "\0".join((slot.name, slot.provider, slot.cwd))
-        else:
-            raw = "\0".join((self.current_name, self.current_provider))
+            return self._slot_key(self._index)
+        raw = f"{self.current_name}\0{self.current_provider}"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
-
-class SystemPromptStateStore:
-    """システムプロンプト注入済み状態を保存する。"""
-
-    def __init__(self, path: Path) -> None:
-        """保存先ファイルを保持する。"""
-        self._path = path
-
-    def is_injected(self, key: str) -> bool:
-        """指定スロットへシステムプロンプトを注入済みならTrueを返す。"""
-        return bool(self._read().get(key))
-
-    def mark_injected(self, key: str) -> None:
-        """指定スロットを注入済みにする。"""
-        data = self._read()
-        if data.get(key) is True:
-            return
-        data[key] = True
-        self._write(data)
-
-    def clear(self, key: str) -> None:
-        """指定スロットの注入済み状態を消す。"""
-        data = self._read()
-        if key not in data:
-            return
-        del data[key]
-        self._write(data)
-
-    def _read(self) -> dict[str, bool]:
-        """保存ファイルをJSONとして読み込む。"""
-        try:
-            raw = self._path.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            return {}
-        except OSError:
-            return {}
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            return {}
-        if not isinstance(data, dict):
-            return {}
-        return {str(key): bool(value) for key, value in data.items()}
-
-    def _write(self, data: dict[str, bool]) -> None:
-        """保存ファイルへJSONを書き込む。"""
-        try:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            self._path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError:
-            return
+    def _slot_key(self, index: int) -> str:
+        """スロット固有の状態保存キーを返す。"""
+        slot = self._slots[index]
+        raw = f"{slot.name}\0{slot.provider}\0{slot.cwd}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class RoutedAgentClient:
@@ -181,6 +222,7 @@ class RoutedAgentClient:
 
     def __init__(self, settings: Settings) -> None:
         """設定から各スロットのproviderクライアントを作成する。"""
+        self._settings = settings
         self._routes = [AgentRoute(slot=slot, client=create_provider_client(settings, slot)) for slot in settings.agent_slots]
         if not self._routes:
             raise ValueError("エージェントスロットが設定されていません")
@@ -196,10 +238,29 @@ class RoutedAgentClient:
         """現在の会話スロットのprovider名を返す。"""
         return self._routes[self._index].slot.provider
 
+    @property
+    def current_model(self) -> str:
+        """現在の会話スロットで指定するモデルを返す。"""
+        return resolve_agent_slot_model(self._settings, self._routes[self._index].slot)
+
     def next_slot(self) -> str:
         """次の会話スロットへ切り替え、名前を返す。"""
-        self._index = (self._index + 1) % len(self._routes)
+        candidates = [index for index, route in enumerate(self._routes) if route.slot.ptt_cycle]
+        if not candidates:
+            candidates = list(range(len(self._routes)))
+        self._index = next(
+            (index for index in candidates if index > self._index),
+            candidates[0],
+        )
         return self.current_name
+
+    def select_slot(self, name: str, provider: str) -> str:
+        """名前とproviderが一致する会話スロットへ切り替える。"""
+        for index, route in enumerate(self._routes):
+            if route.slot.name == name and route.slot.provider == provider:
+                self._index = index
+                return self.current_name
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
@@ -212,6 +273,18 @@ class RoutedAgentClient:
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """現在の会話スロットへプロンプトを送り、応答差分を順に返す。"""
         return self._routes[self._index].client.ask_stream(prompt)
+
+    def ask_slot_stream(self, name: str, provider: str, prompt: str) -> Iterable[str]:
+        """選択中スロットを変えず、指定スロットへ応答を依頼する。"""
+        for route in self._routes:
+            if route.slot.name == name and route.slot.provider == provider:
+                return route.client.ask_stream(prompt)
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+
+    def load_current_history(self) -> list[dict[str, object]]:
+        """現在スロットが対応していれば外部会話履歴を返す。"""
+        loader = getattr(self._routes[self._index].client, "load_current_history", None)
+        return loader() if callable(loader) else []
 
 
 def create_agent_client(settings: Settings) -> AgentClient:
@@ -235,6 +308,10 @@ def create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
         return HermesCliClient(slot_settings)
     if provider in {"claude", "claudecode"}:
         return ClaudeCliClient(slot_settings)
+    if provider == "remote":
+        from argos.services.agent.remote_argos import RemoteArgosClient
+
+        return RemoteArgosClient(settings, slot)
     raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")
 
 
