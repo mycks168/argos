@@ -371,6 +371,17 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "tile.tabIndex = 0" in grid_html
         assert 'tile.setAttribute("role", "group")' in grid_html
         assert 'tile.focus({preventScroll: true})' in grid_html
+        assert 'class="maximize"' in grid_html
+        assert 'title="最大化">⛶</button>' in grid_html
+        assert 'class="tile-actions"' in grid_html
+        assert 'messages.scrollTop = messages.scrollHeight' in grid_html
+        assert 'requestAnimationFrame(scrollToLatest)' in grid_html
+        assert 'window.setTimeout(scrollToLatest, 100)' in grid_html
+        assert 'grid.scrollTop = gridScroll.top' in grid_html
+        assert 'event.type === "dblclick"' not in grid_html
+        assert 'tile.addEventListener("dblclick"' in grid_html
+        assert 'classList.toggle("is-maximized")' in grid_html
+        assert 'event.key !== "Escape"' in grid_html
         assert 'id="mute-button"' in grid_html
         assert 'event.code === "Space"' in grid_html
         assert '/^F(1[3-9]|2[0-4])$/' in grid_html
