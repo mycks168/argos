@@ -13,21 +13,24 @@
     #connection { color: #8fa9bb; }
     #grid { min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); grid-auto-rows: minmax(360px, 1fr); gap: 12px; padding: 12px; overflow: auto; }
     .tile { min-height: 360px; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; border: 1px solid #294154; border-radius: 14px; background: #0d1924; box-shadow: 0 8px 24px #0006; }
-    .tile[data-busy="true"] { border-color: #62d4ff; box-shadow: 0 0 0 1px #62d4ff55, 0 8px 24px #0006; }
-    .tile:focus-within { border-color: #f4d35e; }
+    .tile[data-busy="true"] { border-color: #5ed3ff; box-shadow: 0 0 0 1px #5ed3ff55, 0 8px 24px #0006; }
+    .tile:focus { outline: none; }
+    .tile:focus-within { border-color: #f4d35e; box-shadow: inset 0 0 0 999px #f4d35e0d, 0 8px 24px #0006; }
+    .tile[data-attention="true"] .tile-status { color: #f4d35e; animation: completion-pulse 1.05s ease-in-out infinite alternate; }
     .tile-header { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #233746; }
     .tile-title { font-weight: 700; }
     .tile-meta, .tile-status { color: #8fa9bb; font-size: 12px; }
     .messages { min-height: 0; overflow: auto; padding: 10px; }
     .message { width: fit-content; max-width: 92%; margin: 6px 0; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #172736; }
     .message.user { margin-left: auto; background: #16475e; }
-    .message.streaming::after { content: "…"; color: #62d4ff; }
+    .message.streaming::after { content: "…"; color: #5ed3ff; }
     .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 7px; padding: 10px; border-top: 1px solid #233746; }
     textarea { min-height: 42px; max-height: 120px; resize: vertical; border: 1px solid #355266; border-radius: 9px; padding: 9px; background: #071018; color: inherit; }
     button { border: 1px solid #3a6179; border-radius: 9px; padding: 8px 12px; background: #16374a; color: inherit; cursor: pointer; }
     button:disabled { opacity: .45; cursor: default; }
     .recording { background: #7d2935; border-color: #ff8090; }
     .empty { padding: 30px; color: #8fa9bb; text-align: center; }
+    @keyframes completion-pulse { from { opacity: .45; } to { opacity: 1; text-shadow: 0 0 10px #f4d35e; } }
     @media (max-width: 520px) {
       #grid { padding: 7px; gap: 7px; }
       .composer { grid-template-columns: 1fr auto; }
@@ -46,6 +49,7 @@
     const grid = document.getElementById("grid");
     const connection = document.getElementById("connection");
     const slotElements = new Map();
+    const previousUnread = new Map();
     let localSlots = [];
     let recorder = null;
     let recorderStream = null;
@@ -63,7 +67,11 @@
       const key = slotKey(slot);
       const tile = document.createElement("section");
       tile.className = "tile";
+      tile.tabIndex = 0;
+      tile.setAttribute("role", "group");
+      tile.setAttribute("aria-label", `${slot.name}スロット`);
       tile.dataset.key = key;
+      tile.dataset.attention = "false";
       tile.innerHTML = `
         <div class="tile-header">
           <div><div class="tile-title">${escapeHtml(slot.name)}</div>
@@ -85,8 +93,26 @@
         sendTurn(slot, new Blob([text], {type: "text/plain; charset=utf-8"}));
       });
       tile.querySelector(".voice").addEventListener("click", () => toggleRecording(slot));
+      tile.addEventListener("focusin", () => clearAttention(tile));
+      tile.addEventListener("click", event => {
+        if (!event.target.closest("textarea, button, input, select, a")) {
+          tile.focus({preventScroll: true});
+        }
+        clearAttention(tile);
+      });
       slotElements.set(key, tile);
       return tile;
+    }
+
+    function clearAttention(tile) {
+      tile.dataset.attention = "false";
+      if (tile.dataset.busy !== "true") tile.querySelector(".tile-status").textContent = "待機中";
+    }
+
+    function showCompletion(tile) {
+      if (tile.matches(":focus-within")) return;
+      tile.dataset.attention = "true";
+      tile.querySelector(".tile-status").textContent = "回答完了";
     }
 
     function renderSlots() {
@@ -130,12 +156,17 @@
 
     function applyState(state) {
       for (const slot of state.slots || []) {
-        const tile = slotElements.get(slotKey(slot));
+        const key = slotKey(slot);
+        const tile = slotElements.get(key);
         if (!tile) continue;
+        const hasNewUnread = Boolean(slot.unread) && previousUnread.get(key) !== true;
+        previousUnread.set(key, Boolean(slot.unread));
         tile.dataset.busy = String(Boolean(slot.busy));
-        tile.querySelector(".tile-status").textContent = slot.busy ? "実行中" : (slot.unread ? "完了・未読" : "待機中");
+        if (hasNewUnread) showCompletion(tile);
+        if (slot.busy) tile.querySelector(".tile-status").textContent = "実行中";
+        else if (tile.dataset.attention !== "true") tile.querySelector(".tile-status").textContent = "待機中";
         tile.querySelectorAll("button, textarea").forEach(element => {
-          element.disabled = Boolean(slot.busy) && slotKey(slot) !== recordingSlotKey;
+          element.disabled = Boolean(slot.busy) && key !== recordingSlotKey;
         });
       }
       refreshHistories().catch(error => console.error("履歴更新に失敗しました", error));
@@ -143,8 +174,10 @@
 
     async function sendTurn(slot, body) {
       const tile = slotElements.get(slotKey(slot));
+      clearAttention(tile);
       tile.dataset.busy = "true";
       const query = new URLSearchParams({name: slot.name, provider: slot.provider});
+      let didComplete = false;
       try {
         const response = await fetch(`/api/terminal/turn?${query}`, {
           method: "POST",
@@ -152,14 +185,34 @@
           body,
         });
         if (!response.ok) throw new Error(`送信に失敗しました: ${response.status}`);
-        const reader = response.body.getReader();
-        while (!(await reader.read()).done) {
-          await refreshHistories();
-        }
+        didComplete = await consumeTurnEvents(response);
       } catch (error) {
         tile.querySelector(".tile-status").textContent = error.message;
       } finally {
         await refreshState();
+      }
+      if (didComplete) showCompletion(tile);
+    }
+
+    async function consumeTurnEvents(response) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      let didComplete = false;
+      while (true) {
+        const result = await reader.read();
+        pending += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
+        const blocks = pending.split(/\r?\n\r?\n/);
+        pending = blocks.pop() || "";
+        for (const block of blocks) {
+          const dataLine = block.split(/\r?\n/).find(line => line.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+          if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
+          if (event.event === "done") didComplete = true;
+        }
+        await refreshHistories();
+        if (result.done) return didComplete;
       }
     }
 

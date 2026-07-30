@@ -362,6 +362,14 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "grid-template-rows: auto minmax(0, 1fr)" in grid_html
         assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
         assert ".messages { min-height: 0; overflow: auto;" in grid_html
+        assert '#5ed3ff' in grid_html
+        assert '#f4d35e0d' in grid_html
+        assert 'tile.dataset.attention = "true"' in grid_html
+        assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
+        assert "consumeTurnEvents(response)" in grid_html
+        assert "tile.tabIndex = 0" in grid_html
+        assert 'tile.setAttribute("role", "group")' in grid_html
+        assert 'tile.focus({preventScroll: true})' in grid_html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
