@@ -520,7 +520,7 @@ class ArgosApp:
             except Exception:
                 log.exception("リモートArgosの会話履歴を取得できませんでした")
         self._publish_agent_usage_pending()
-        self._refresh_current_agent_usage()
+        self._refresh_agent_usage()
 
     def _current_agent_model(self) -> str:
         """現在のスロット設定から表示・実行対象モデルを返す。"""
@@ -545,36 +545,34 @@ class ArgosApp:
         self._agent_usage_monitor = PeriodicMonitor(
             "agent-usage",
             max(10.0, self._settings.agent_usage_refresh_seconds),
-            self._refresh_current_agent_usage,
+            self._refresh_agent_usage,
             self._shutdown,
         )
         self._agent_usage_monitor.start()
 
     def _publish_agent_usage_pending(self) -> None:
-        """取得対象プロバイダなら、初期表示として取得待ちを出す。"""
-        provider = self._current_agent_usage_provider()
-        if not self._agent_usage.has_provider(provider) or self._dashboard_state.has_agent_usage(provider):
-            return
-        self._dashboard_state.set_agent_usage(
-            provider,
-            {
-                "provider": provider.lower(),
-                "available": False,
-                "label": "取得待ち",
-                "five_hour": None,
-                "weekly": None,
-                "other_text": "",
-                "error": "",
-            },
-        )
+        """取得対象プロバイダをすべて取得待ちとして初期表示する。"""
+        for provider in self._agent_usage.providers:
+            if self._dashboard_state.has_agent_usage(provider):
+                continue
+            self._dashboard_state.set_agent_usage(
+                provider,
+                {
+                    "provider": provider.lower(),
+                    "available": False,
+                    "label": "取得待ち",
+                    "five_hour": None,
+                    "weekly": None,
+                    "other_text": "",
+                    "error": "",
+                },
+            )
 
-    def _refresh_current_agent_usage(self) -> None:
-        """現在プロバイダの利用枠を取得してダッシュボードへ反映する。"""
-        provider = self._current_agent_usage_provider()
-        if not self._agent_usage.has_provider(provider):
-            return
-        snapshot = self._agent_usage.fetch(provider)
-        self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
+    def _refresh_agent_usage(self) -> None:
+        """設定済みプロバイダの利用枠を取得してダッシュボードへ反映する。"""
+        for provider in self._agent_usage.providers:
+            snapshot = self._agent_usage.fetch(provider)
+            self._dashboard_state.set_agent_usage(provider, snapshot.to_dict())
 
     def _start_wifi_status_monitor(self) -> None:
         """Wi-Fi接続状態を定期的にダッシュボードへ反映する。"""
@@ -877,6 +875,7 @@ class ArgosApp:
                 "provider": slot.provider,
                 "type": slot.slot_type,
                 "model": resolve_agent_slot_model(self._settings, slot),
+                "usage_provider": slot.remote_provider.strip().lower() if slot.slot_type == "remote" and slot.remote_provider.strip() else slot.provider.strip().lower(),
                 "active": slot.name == current_name and slot.provider == current_provider,
             }
             for slot in self._settings.agent_slots

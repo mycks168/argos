@@ -363,8 +363,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "grid-template-rows: auto minmax(0, 1fr)" in grid_html
         assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
         assert ".messages { min-height: 0; overflow: auto;" in grid_html
-        assert '#5ed3ff' in grid_html
+        assert '#69b7e4' in grid_html
         assert '#f4d35e0d' in grid_html
+        assert 'background: #070b0f' in grid_html
+        assert '"#00b140"' in grid_html
+        assert '"#ff4d4d"' in grid_html
         assert 'tile.dataset.attention = "true"' in grid_html
         assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
         assert "consumeTurnEvents(response, key)" in grid_html
@@ -374,6 +377,12 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'class="maximize"' in grid_html
         assert 'title="最大化">⛶</button>' in grid_html
         assert 'class="tile-actions"' in grid_html
+        assert 'id="usage-button"' in grid_html
+        assert 'id="usage-dialog"' in grid_html
+        assert 'latestState?.agent_usage?.providers' in grid_html
+        assert 'class="usage-progress-bar"' in grid_html
+        assert 'usageBucketMarkup("5時間"' in grid_html
+        assert 'usageBucketMarkup("週間"' in grid_html
         assert 'messages.scrollTop = messages.scrollHeight' in grid_html
         assert 'requestAnimationFrame(scrollToLatest)' in grid_html
         assert 'window.setTimeout(scrollToLatest, 100)' in grid_html

@@ -5,35 +5,51 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARGOS スロット一覧</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071018; color: #eef6ff; }
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #070b0f; color: #edf3f7; }
     * { box-sizing: border-box; }
-    body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: radial-gradient(circle at top, #13283a, #071018 60%); }
-    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 18px; background: #071018e8; border-bottom: 1px solid #294154; }
+    body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: #070b0f; }
+    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 18px; background: #0b1117; border-bottom: 1px solid #26323b; }
     .header-controls { display: flex; align-items: center; gap: 10px; }
     h1 { margin: 0; font-size: 20px; }
-    #connection { color: #8fa9bb; }
-    #grid { min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); grid-auto-rows: minmax(360px, 1fr); gap: 12px; padding: 12px; overflow: auto; }
-    .tile { min-height: 360px; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; border: 1px solid #294154; border-radius: 14px; background: #0d1924; box-shadow: 0 8px 24px #0006; }
-    .tile[data-busy="true"] { border-color: #5ed3ff; box-shadow: 0 0 0 1px #5ed3ff55, 0 8px 24px #0006; }
+    #connection { color: #8ca0ad; }
+    #grid { min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); grid-auto-rows: minmax(360px, 1fr); gap: 12px; padding: 12px; overflow: auto; background: #0b1117; }
+    .tile { min-height: 360px; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; border: 1px solid #526775; border-radius: 8px; background: #101820; box-shadow: none; }
+    .tile[data-busy="true"] { border-color: #69b7e4; box-shadow: 0 0 0 1px #69b7e455; }
     .tile:focus { outline: none; }
-    .tile:focus-within { border-color: #f4d35e; box-shadow: inset 0 0 0 999px #f4d35e0d, 0 8px 24px #0006; }
+    .tile:focus-within { border-color: #f4d35e; box-shadow: inset 0 0 0 999px #f4d35e0d; }
     .tile.is-maximized { position: fixed; inset: 12px; z-index: 10; min-height: 0; grid-template-rows: auto 1fr auto; }
     body.has-maximized-tile { overflow: hidden; }
     .tile[data-attention="true"] .tile-status { color: #f4d35e; animation: completion-pulse 1.05s ease-in-out infinite alternate; }
-    .tile-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #233746; }
+    .tile-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #26323b; }
     .tile-heading { min-width: 0; }
     .tile-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
     .tile-title { font-weight: 700; }
-    .tile-meta, .tile-status { color: #8fa9bb; font-size: 12px; }
+    .tile-meta, .tile-status { color: #8ca0ad; font-size: 12px; }
     .messages { min-height: 0; overflow: auto; padding: 10px; }
-    .message { width: fit-content; max-width: 92%; margin: 6px 0; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #172736; }
-    .message.user { margin-left: auto; background: #16475e; }
-    .message.streaming::after { content: "…"; color: #5ed3ff; }
-    .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 7px; padding: 10px; border-top: 1px solid #233746; }
-    textarea { min-height: 42px; max-height: 120px; resize: vertical; border: 1px solid #355266; border-radius: 9px; padding: 9px; background: #071018; color: inherit; }
-    button { border: 1px solid #3a6179; border-radius: 9px; padding: 8px 12px; background: #16374a; color: inherit; cursor: pointer; }
+    .message { width: fit-content; max-width: 92%; margin: 6px 0; padding: 8px 10px; border-radius: 0; white-space: pre-wrap; overflow-wrap: anywhere; background: #0d151c; border-left: 3px solid #69b7e4; }
+    .message.user { margin-left: auto; background: #2a2413; border-left-color: #f4d35e; }
+    .message.streaming::after { content: "…"; color: #69b7e4; }
+    .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 7px; padding: 10px; border-top: 1px solid #26323b; }
+    textarea { min-height: 42px; max-height: 120px; resize: vertical; border: 1px solid #526775; border-radius: 0; padding: 9px; background: #101820; color: inherit; }
+    button { border: 1px solid #526775; border-radius: 0; padding: 8px 12px; background: #101820; color: inherit; cursor: pointer; }
     .maximize { min-width: 34px; padding: 5px 8px; font-size: 18px; line-height: 1; }
     button:disabled { opacity: .45; cursor: default; }
+    dialog { width: min(760px, calc(100vw - 28px)); max-height: min(80dvh, 720px); padding: 0; border: 1px solid #526775; border-radius: 0; background: #101820; color: inherit; box-shadow: 0 18px 60px #000b; }
+    dialog::backdrop { background: #0009; }
+    .usage-dialog-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px; border-bottom: 1px solid #26323b; }
+    .usage-dialog-header h2 { margin: 0; font-size: 18px; }
+    .usage-list { display: grid; gap: 10px; padding: 14px 16px 18px; overflow: auto; }
+    .usage-item { padding: 10px 12px; border: 1px solid #354855; border-radius: 0; background: #0d151c; }
+    .usage-item-title { display: flex; justify-content: space-between; gap: 8px; font-weight: 700; }
+    .usage-item-provider { color: #f4d35e; font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .usage-item-detail { margin-top: 5px; color: #edf3f7; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .usage-item-error { color: #ff8c42; }
+    .usage-bucket { margin-top: 8px; }
+    .usage-bucket-head { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; }
+    .usage-bucket-value { color: #f4d35e; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .usage-bucket-reset { color: #8ca0ad; font-size: 11px; }
+    .usage-progress { height: 6px; margin-top: 4px; overflow: hidden; border-radius: 3px; background: #20303c; }
+    .usage-progress-bar { height: 100%; border-radius: 3px; transition: width 0.3s ease; }
     .recording { background: #7d2935; border-color: #ff8090; }
     .empty { padding: 30px; color: #8fa9bb; text-align: center; }
     @keyframes completion-pulse { from { opacity: .45; } to { opacity: 1; text-shadow: 0 0 10px #f4d35e; } }
@@ -48,16 +64,25 @@
   <header>
     <h1>ARGOS スロット一覧</h1>
     <div class="header-controls">
+      <button id="usage-button" type="button">Usage</button>
       <button id="mute-button" type="button" aria-pressed="false">ミュート</button>
       <span id="connection">接続中</span>
     </div>
   </header>
   <main id="grid" aria-live="polite"></main>
+  <dialog id="usage-dialog" aria-labelledby="usage-dialog-title">
+    <div class="usage-dialog-header"><h2 id="usage-dialog-title">スロット別 Usage</h2><button id="usage-close" type="button" aria-label="Usageを閉じる">閉じる</button></div>
+    <div id="usage-list" class="usage-list"></div>
+  </dialog>
   <script>
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const grid = document.getElementById("grid");
     const connection = document.getElementById("connection");
     const muteButton = document.getElementById("mute-button");
+    const usageButton = document.getElementById("usage-button");
+    const usageDialog = document.getElementById("usage-dialog");
+    const usageClose = document.getElementById("usage-close");
+    const usageList = document.getElementById("usage-list");
     const slotElements = new Map();
     const previousUnread = new Map();
     const pendingAudio = new Map();
@@ -71,6 +96,7 @@
     let audioContext = null;
     let playbackChain = Promise.resolve();
     let activeAudioSource = null;
+    let latestState = null;
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
     const authHeaders = extra => dashboardToken
@@ -205,6 +231,8 @@
     }
 
     function applyState(state) {
+      latestState = state;
+      if (usageDialog.open) renderUsageDialog();
       for (const slot of state.slots || []) {
         const key = slotKey(slot);
         const tile = slotElements.get(key);
@@ -220,6 +248,35 @@
         });
       }
       refreshHistories().catch(error => console.error("履歴更新に失敗しました", error));
+    }
+
+    function usageBucketMarkup(label, bucket) {
+      if (!bucket) return "";
+      const remain = Math.max(0, Math.min(100, Number(bucket.remain_percentage ?? 0)));
+      const used = Math.max(0, Math.min(100, Number(bucket.use_percentage ?? (100 - remain))));
+      const color = used >= 80 ? "#ff4d4d" : used >= 50 ? "#f4d35e" : "#00b140";
+      const reset = bucket.reset_at ? `<span class="usage-bucket-reset">更新: ${escapeHtml(bucket.reset_at)}</span>` : "";
+      return `<div class="usage-bucket"><div class="usage-bucket-head"><span>${escapeHtml(label)} <span class="usage-bucket-reset">残り ${remain}%</span></span><span class="usage-bucket-value">使用 ${used}% ${reset}</span></div><div class="usage-progress"><div class="usage-progress-bar" style="width: ${used}%; background-color: ${color};"></div></div></div>`;
+    }
+
+    function renderUsageDialog() {
+      const providers = latestState?.agent_usage?.providers || {};
+      const usageItems = localSlots.map(slot => {
+        const provider = String(slot.usage_provider || slot.provider || "").toLowerCase();
+        const usage = providers[provider];
+        const details = usage ? [usageBucketMarkup("5時間", usage.five_hour), usageBucketMarkup("週間", usage.weekly)].filter(Boolean).join("") : "";
+        const otherText = usage?.other_text ? `<div class="usage-item-detail">${escapeHtml(usage.other_text)}</div>` : "";
+        const detailClass = usage?.error ? "usage-item-detail usage-item-error" : "usage-item-detail";
+        const status = usage?.error ? `<div class="${detailClass}">${escapeHtml(usage.error)}</div>` : (!details && !otherText ? `<div class="usage-item-detail">${escapeHtml(usage?.label || "情報なし")}</div>` : "");
+        return `<div class="usage-item"><div class="usage-item-title"><span>${escapeHtml(slot.name)}</span><span class="usage-item-provider">${escapeHtml(provider)}</span></div>${details || (!usage ? '<div class="usage-item-detail">取得待ち</div>' : "")}${otherText}${status}</div>`;
+      });
+      usageList.innerHTML = usageItems.length ? usageItems.join("") : '<p class="empty">ローカルスロットがありません。</p>';
+    }
+
+    function openUsageDialog() {
+      renderUsageDialog();
+      if (typeof usageDialog.showModal === "function") usageDialog.showModal();
+      else usageDialog.setAttribute("open", "");
     }
 
     async function sendTurn(slot, body) {
@@ -413,6 +470,11 @@
     });
 
     muteButton.addEventListener("click", toggleMute);
+    usageButton.addEventListener("click", openUsageDialog);
+    usageClose.addEventListener("click", () => usageDialog.close());
+    usageDialog.addEventListener("click", event => {
+      if (event.target === usageDialog) usageDialog.close();
+    });
 
     async function refreshState() {
       const response = await fetch("/api/state", {headers: authHeaders({})});
