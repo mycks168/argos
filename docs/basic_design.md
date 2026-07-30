@@ -167,6 +167,8 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
 
 Gridヘッダーの「Usage」ボタンは、登録済みローカルスロットごとの利用枠をダイアログで一覧表示する。利用枠の取得は既存の`agent.usage_commands`を使い、スロットの`usage_provider`に対応するプロバイダ情報を表示する。取得結果は既存の`GET /api/state`の`agent_usage.providers`を利用し、新しいAPIは追加しない。未取得、取得エラー、5時間・週間の残量、リセット時刻を一覧内に表示する。
 
+Gridのターン応答はSSEの`text`差分、音声、`done`イベントを受信し、イベント境界がネットワークチャンクの途中に分割されても末尾まで処理する。完了後はスロット履歴を再取得して最終表示を確定する。
+
 ### リモートARGOSスロット
 
 `config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、UTF-8のSSE応答差分を通常のエージェント応答として扱う。受信側も文字コードをUTF-8へ固定し、接続先がcharsetを返さない旧バージョンでも日本語を正しく復元する。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
