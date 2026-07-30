@@ -91,6 +91,7 @@ def test_read_ssid_handles_iwgetid_results(monkeypatch):
             self.returncode = returncode
             self.stdout = stdout
 
+    monkeypatch.setattr(network, "_iwgetid_command", lambda: "iwgetid")
     monkeypatch.setattr(network.subprocess, "run", lambda *_args, **_kwargs: Result(0, "CarWiFi\n"))
     assert network._read_ssid("wlan0") == "CarWiFi"
 

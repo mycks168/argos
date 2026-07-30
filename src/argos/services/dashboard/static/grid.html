@@ -313,19 +313,21 @@
       const decoder = new TextDecoder();
       let pending = "";
       let didComplete = false;
+      const processBlock = block => {
+        const dataLine = block.split(/\r?\n/).find(line => line.startsWith("data: "));
+        if (!dataLine) return;
+        const event = JSON.parse(dataLine.slice(6));
+        if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
+        if (event.event === "audio" && event.data) queueAudio(key, event.data);
+        if (event.event === "done") didComplete = true;
+      };
       while (true) {
         const result = await reader.read();
         pending += decoder.decode(result.value || new Uint8Array(), {stream: !result.done});
         const blocks = pending.split(/\r?\n\r?\n/);
         pending = blocks.pop() || "";
-        for (const block of blocks) {
-          const dataLine = block.split(/\r?\n/).find(line => line.startsWith("data: "));
-          if (!dataLine) continue;
-          const event = JSON.parse(dataLine.slice(6));
-          if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
-          if (event.event === "audio" && event.data) queueAudio(key, event.data);
-          if (event.event === "done") didComplete = true;
-        }
+        blocks.forEach(processBlock);
+        if (result.done && pending.trim()) processBlock(pending);
         await refreshHistories();
         if (result.done) return didComplete;
       }

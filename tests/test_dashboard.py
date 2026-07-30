@@ -378,6 +378,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'tile.querySelector(".tile-status").textContent = "実行中"' in grid_html
         assert 'state.status.code !== "ready"' in grid_html
         assert "consumeTurnEvents(response, key)" in grid_html
+        assert "if (result.done && pending.trim()) processBlock(pending);" in grid_html
+        assert "const processBlock = block =>" in grid_html
         assert "tile.tabIndex = 0" in grid_html
         assert 'tile.setAttribute("role", "group")' in grid_html
         assert 'tile.focus({preventScroll: true})' in grid_html
