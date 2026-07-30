@@ -362,7 +362,10 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "height: 100dvh" in grid_html
         assert "grid-template-rows: auto minmax(0, 1fr)" in grid_html
         assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
-        assert ".messages { min-height: 0; overflow: auto;" in grid_html
+        assert ".messages { min-height: 0; overflow: auto; padding: 6px 8px; }" in grid_html
+        assert ".message { width: fit-content; max-width: 92%; margin: 3px 0; padding: 4px 8px;" in grid_html
+        assert 'const text = String(message.text ?? "").trim();' in grid_html
+        assert '>${escapeHtml(text)}</div>`' in grid_html
         assert '#69b7e4' in grid_html
         assert '#f4d35e0d' in grid_html
         assert 'background: #070b0f' in grid_html
