@@ -40,6 +40,8 @@ class FakeTerminalHandler:
         self.received_wav = None
         self.received_text = None
         self.want_audio = None
+        self.slot_name = ""
+        self.slot_provider = ""
 
     def list_slots(self):
         return {"slots": [{"name": "作業", "provider": "codex", "active": True}], "current": {"name": "作業", "provider": "codex"}}
@@ -58,10 +60,20 @@ class FakeTerminalHandler:
             raise ValueError("エージェントスロットが見つかりません")
         return {"messages": [{"role": "assistant", "text": f"{name}:{provider}"}]}
 
-    def process_turn(self, wav_bytes=None, *, text=None, want_audio=True):
+    def process_turn(
+        self,
+        wav_bytes=None,
+        *,
+        text=None,
+        want_audio=True,
+        slot_name="",
+        slot_provider="",
+    ):
         self.received_wav = wav_bytes
         self.received_text = text
         self.want_audio = want_audio
+        self.slot_name = slot_name
+        self.slot_provider = slot_provider
         yield from self._turn_events
 
 
@@ -186,6 +198,27 @@ def test_terminal_turn_streams_sse_events():
         server.stop()
 
 
+def test_terminal_turn_targets_explicit_slot_without_changing_legacy_body():
+    """任意指定されたスロットを同じターンAPIからハンドラへ渡す。"""
+    handler = FakeTerminalHandler([{"event": "done", "text": "了解"}])
+    server, base_url = _start_server(handler)
+    try:
+        query = urlencode({"name": "調査", "provider": "codex"})
+        with _request(
+            base_url + f"/api/terminal/turn?{query}",
+            method="POST",
+            body="確認".encode(),
+            content_type="text/plain; charset=utf-8",
+            accept="text/event-stream",
+        ) as response:
+            assert _read_sse_events(response)[-1][0] == "done"
+        assert handler.received_text == "確認"
+        assert handler.slot_name == "調査"
+        assert handler.slot_provider == "codex"
+    finally:
+        server.stop()
+
+
 def test_terminal_turn_rejects_empty_body():
     """ターンAPIは空ボディを拒否する。"""
     handler = FakeTerminalHandler([])
@@ -282,6 +315,25 @@ def test_app_terminal_process_text_turn_skips_stt_and_tts(monkeypatch):
     assert [event["event"] for event in events] == ["transcript", "text", "done"]
     assert events[0]["text"] == "質問です"
     assert events[-1]["text"] == "応答"
+
+
+def test_app_terminal_process_turn_targets_slot_without_selecting(monkeypatch):
+    """明示指定ターンは現在選択を変えず対象スロットへ送る。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    events = list(
+        app._terminal_process_turn(
+            text="対象へ送信",
+            want_audio=False,
+            slot_name="作業",
+            slot_provider="codex",
+        )
+    )
+
+    assert events[-1] == {"event": "done", "text": "応答"}
+    assert app._agent.targeted == [("作業", "codex", "対象へ送信")]
+    assert app._agent.current_name == "作業"
 
 
 def test_app_terminal_process_turn_updates_dashboard_status(monkeypatch):

@@ -875,6 +875,7 @@ class ArgosApp:
             {
                 "name": slot.name,
                 "provider": slot.provider,
+                "type": slot.slot_type,
                 "model": resolve_agent_slot_model(self._settings, slot),
                 "active": slot.name == current_name and slot.provider == current_provider,
             }
@@ -924,6 +925,8 @@ class ArgosApp:
         *,
         text: str | None = None,
         want_audio: bool = True,
+        slot_name: str = "",
+        slot_provider: str = "",
     ) -> Iterator[dict[str, object]]:
         """端末ターンを処理し、SSE用イベントを順に生成する。
 
@@ -933,8 +936,19 @@ class ArgosApp:
         ときは応答テキストの差分だけを返す（母艦のスピーカーでは再生しない）。
         発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
         """
-        slot_name = self._agent.current_name
-        slot_provider = self._agent.current_provider
+        has_explicit_slot = bool(slot_name or slot_provider)
+        if has_explicit_slot and (not slot_name or not slot_provider):
+            yield {"event": "error", "message": "スロット名とproviderが必要です"}
+            return
+        if not has_explicit_slot:
+            slot_name = self._agent.current_name
+            slot_provider = self._agent.current_provider
+        if not any(
+            slot.name == slot_name and slot.provider == slot_provider
+            for slot in self._settings.agent_slots
+        ):
+            yield {"event": "error", "message": "エージェントスロットが見つかりません"}
+            return
         slot_key = _app_slot_key(slot_name, slot_provider)
         # 端末ターンの進行を母艦ダッシュボードの状態枠へも反映する。
         token = self._status.current_generation()
@@ -979,13 +993,28 @@ class ArgosApp:
                     yield {"event": "done", "text": "本人確認しました。"}
                 return
             self._status.set(token, "thinking", "考え中")
-            self._dashboard_state.add_message("user", transcript)
+            self._dashboard_state.add_message_to_slot(
+                slot_name,
+                slot_provider,
+                "user",
+                transcript,
+            )
             self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
-            dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
+            dashboard_message_id = self._dashboard_state.add_message_to_slot(
+                slot_name,
+                slot_provider,
+                "assistant",
+                "",
+                streaming=True,
+            )
             seq = 0
             full_response = ""
             try:
-                deltas = self._terminal_agent_stream(transcript)
+                deltas = self._terminal_agent_stream(
+                    transcript,
+                    slot_name if has_explicit_slot else "",
+                    slot_provider if has_explicit_slot else "",
+                )
                 if want_audio:
                     # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
                     for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
@@ -1034,11 +1063,19 @@ class ArgosApp:
             if tmp_path:
                 self._remove_recording_file(tmp_path)
 
-    def _terminal_agent_stream(self, prompt: str) -> Iterator[str]:
+    def _terminal_agent_stream(
+        self,
+        prompt: str,
+        slot_name: str = "",
+        slot_provider: str = "",
+    ) -> Iterator[str]:
         """Terminal起点のRunnerジョブへ応答先を付けて差分を返す。"""
         response_target = getattr(self._agent, "response_target", None)
         context = response_target("terminal") if callable(response_target) else nullcontext()
         with context:
+            if slot_name and slot_provider:
+                yield from self._agent.ask_slot_stream(slot_name, slot_provider, prompt)
+                return
             yield from self._agent.ask_stream(prompt)
 
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
@@ -1426,13 +1463,21 @@ class _TerminalGateway:
         *,
         text: str | None = None,
         want_audio: bool = True,
+        slot_name: str = "",
+        slot_provider: str = "",
     ) -> Iterator[dict[str, object]]:
         """録音WAVまたはテキストを処理し、SSE用イベントを順に生成する。
 
         ``text`` を渡すとSTTをスキップしてそのままエージェントへ入力する。
         ``want_audio`` が False のときはTTS合成を省き、応答テキストのみ返す。
         """
-        return self._app._terminal_process_turn(wav_bytes, text=text, want_audio=want_audio)
+        return self._app._terminal_process_turn(
+            wav_bytes,
+            text=text,
+            want_audio=want_audio,
+            slot_name=slot_name,
+            slot_provider=slot_provider,
+        )
 
 
 def _app_slot_key(name: str, provider: str) -> str:

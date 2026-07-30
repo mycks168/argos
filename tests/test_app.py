@@ -188,12 +188,19 @@ class FakeCodex:
         self.current_name = "作業"
         self.current_provider = "codex"
         self.asked = []
+        self.targeted = []
 
     def ask(self, text):
         self.asked.append(text)
         return "応答"
 
     def ask_stream(self, text):
+        self.asked.append(text)
+        yield "応答"
+
+    def ask_slot_stream(self, name, provider, text):
+        """選択状態を変えず指定スロットの応答を返す。"""
+        self.targeted.append((name, provider, text))
         self.asked.append(text)
         yield "応答"
 

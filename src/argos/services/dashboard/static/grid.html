@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ARGOS スロット一覧</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #071018; color: #eef6ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 100dvh; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; background: radial-gradient(circle at top, #13283a, #071018 60%); }
+    header { position: sticky; top: 0; z-index: 2; display: flex; justify-content: space-between; padding: 12px 18px; background: #071018e8; border-bottom: 1px solid #294154; }
+    h1 { margin: 0; font-size: 20px; }
+    #connection { color: #8fa9bb; }
+    #grid { min-height: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); grid-auto-rows: minmax(360px, 1fr); gap: 12px; padding: 12px; overflow: auto; }
+    .tile { min-height: 360px; display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; border: 1px solid #294154; border-radius: 14px; background: #0d1924; box-shadow: 0 8px 24px #0006; }
+    .tile[data-busy="true"] { border-color: #62d4ff; box-shadow: 0 0 0 1px #62d4ff55, 0 8px 24px #0006; }
+    .tile:focus-within { border-color: #f4d35e; }
+    .tile-header { display: flex; justify-content: space-between; gap: 10px; padding: 10px 12px; border-bottom: 1px solid #233746; }
+    .tile-title { font-weight: 700; }
+    .tile-meta, .tile-status { color: #8fa9bb; font-size: 12px; }
+    .messages { min-height: 0; overflow: auto; padding: 10px; }
+    .message { width: fit-content; max-width: 92%; margin: 6px 0; padding: 8px 10px; border-radius: 10px; white-space: pre-wrap; overflow-wrap: anywhere; background: #172736; }
+    .message.user { margin-left: auto; background: #16475e; }
+    .message.streaming::after { content: "…"; color: #62d4ff; }
+    .composer { display: grid; grid-template-columns: 1fr auto auto; gap: 7px; padding: 10px; border-top: 1px solid #233746; }
+    textarea { min-height: 42px; max-height: 120px; resize: vertical; border: 1px solid #355266; border-radius: 9px; padding: 9px; background: #071018; color: inherit; }
+    button { border: 1px solid #3a6179; border-radius: 9px; padding: 8px 12px; background: #16374a; color: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    .recording { background: #7d2935; border-color: #ff8090; }
+    .empty { padding: 30px; color: #8fa9bb; text-align: center; }
+    @media (max-width: 520px) {
+      #grid { padding: 7px; gap: 7px; }
+      .composer { grid-template-columns: 1fr auto; }
+      .voice { grid-column: 1 / -1; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>ARGOS スロット一覧</h1>
+    <span id="connection">接続中</span>
+  </header>
+  <main id="grid" aria-live="polite"></main>
+  <script>
+    const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
+    const grid = document.getElementById("grid");
+    const connection = document.getElementById("connection");
+    const slotElements = new Map();
+    let localSlots = [];
+    let recorder = null;
+    let recorderStream = null;
+    let recordingSlotKey = "";
+    let audioChunks = [];
+
+    const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
+    const authHeaders = extra => dashboardToken
+      ? {...extra, Authorization: `Bearer ${dashboardToken}`} : extra;
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => (
+      {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character]
+    ));
+
+    function createTile(slot) {
+      const key = slotKey(slot);
+      const tile = document.createElement("section");
+      tile.className = "tile";
+      tile.dataset.key = key;
+      tile.innerHTML = `
+        <div class="tile-header">
+          <div><div class="tile-title">${escapeHtml(slot.name)}</div>
+            <div class="tile-meta">${escapeHtml(slot.provider)}${slot.model ? ` · ${escapeHtml(slot.model)}` : ""}</div></div>
+          <div class="tile-status">待機中</div>
+        </div>
+        <div class="messages"></div>
+        <form class="composer">
+          <textarea name="prompt" aria-label="${escapeHtml(slot.name)}への入力" placeholder="メッセージを入力"></textarea>
+          <button type="submit">送信</button>
+          <button type="button" class="voice">音声入力</button>
+        </form>`;
+      tile.querySelector("form").addEventListener("submit", event => {
+        event.preventDefault();
+        const input = tile.querySelector("textarea");
+        const text = input.value.trim();
+        if (!text) return;
+        input.value = "";
+        sendTurn(slot, new Blob([text], {type: "text/plain; charset=utf-8"}));
+      });
+      tile.querySelector(".voice").addEventListener("click", () => toggleRecording(slot));
+      slotElements.set(key, tile);
+      return tile;
+    }
+
+    function renderSlots() {
+      const expectedKeys = new Set(localSlots.map(slotKey));
+      for (const [key, tile] of slotElements) {
+        if (!expectedKeys.has(key)) {
+          tile.remove();
+          slotElements.delete(key);
+        }
+      }
+      for (const slot of localSlots) {
+        const key = slotKey(slot);
+        if (!slotElements.has(key)) grid.appendChild(createTile(slot));
+      }
+      if (!localSlots.length) grid.innerHTML = '<p class="empty">ローカルスロットがありません。</p>';
+    }
+
+    function renderMessages(slot, messages) {
+      const container = slotElements.get(slotKey(slot))?.querySelector(".messages");
+      if (!container) return;
+      const signature = JSON.stringify(messages);
+      if (container.dataset.signature === signature) return;
+      const shouldFollow = container.scrollHeight - container.scrollTop - container.clientHeight < 30;
+      container.dataset.signature = signature;
+      container.innerHTML = messages.map(message => `
+        <div class="message ${message.role === "user" ? "user" : "assistant"}${message.streaming ? " streaming" : ""}">
+          ${escapeHtml(message.text)}
+        </div>`).join("");
+      if (shouldFollow) container.scrollTop = container.scrollHeight;
+    }
+
+    async function refreshHistories() {
+      await Promise.all(localSlots.map(async slot => {
+        const query = new URLSearchParams({name: slot.name, provider: slot.provider});
+        const response = await fetch(`/api/terminal/history?${query}`, {headers: authHeaders({})});
+        if (!response.ok) return;
+        const payload = await response.json();
+        renderMessages(slot, payload.messages || []);
+      }));
+    }
+
+    function applyState(state) {
+      for (const slot of state.slots || []) {
+        const tile = slotElements.get(slotKey(slot));
+        if (!tile) continue;
+        tile.dataset.busy = String(Boolean(slot.busy));
+        tile.querySelector(".tile-status").textContent = slot.busy ? "実行中" : (slot.unread ? "完了・未読" : "待機中");
+        tile.querySelectorAll("button, textarea").forEach(element => {
+          element.disabled = Boolean(slot.busy) && slotKey(slot) !== recordingSlotKey;
+        });
+      }
+      refreshHistories().catch(error => console.error("履歴更新に失敗しました", error));
+    }
+
+    async function sendTurn(slot, body) {
+      const tile = slotElements.get(slotKey(slot));
+      tile.dataset.busy = "true";
+      const query = new URLSearchParams({name: slot.name, provider: slot.provider});
+      try {
+        const response = await fetch(`/api/terminal/turn?${query}`, {
+          method: "POST",
+          headers: authHeaders({"Content-Type": body.type, Accept: "text/event-stream"}),
+          body,
+        });
+        if (!response.ok) throw new Error(`送信に失敗しました: ${response.status}`);
+        const reader = response.body.getReader();
+        while (!(await reader.read()).done) {
+          await refreshHistories();
+        }
+      } catch (error) {
+        tile.querySelector(".tile-status").textContent = error.message;
+      } finally {
+        await refreshState();
+      }
+    }
+
+    async function toggleRecording(slot) {
+      const key = slotKey(slot);
+      if (recorder && recorder.state === "recording") {
+        recorder.stop();
+        return;
+      }
+      try {
+        recorderStream = await navigator.mediaDevices.getUserMedia({audio: true});
+        audioChunks = [];
+        recordingSlotKey = key;
+        recorder = new MediaRecorder(recorderStream);
+        recorder.addEventListener("dataavailable", event => {
+          if (event.data.size) audioChunks.push(event.data);
+        });
+        recorder.addEventListener("stop", () => {
+          const audio = new Blob(audioChunks, {type: recorder.mimeType || "audio/webm"});
+          recorderStream.getTracks().forEach(track => track.stop());
+          const button = slotElements.get(key)?.querySelector(".voice");
+          if (button) {
+            button.textContent = "音声入力";
+            button.classList.remove("recording");
+          }
+          recordingSlotKey = "";
+          sendTurn(slot, audio);
+        }, {once: true});
+        recorder.start();
+        const button = slotElements.get(key).querySelector(".voice");
+        button.textContent = "録音停止";
+        button.classList.add("recording");
+      } catch (error) {
+        slotElements.get(key).querySelector(".tile-status").textContent = "マイクを利用できません";
+      }
+    }
+
+    async function refreshState() {
+      const response = await fetch("/api/state", {headers: authHeaders({})});
+      if (response.ok) applyState(await response.json());
+    }
+
+    async function initialize() {
+      const response = await fetch("/api/terminal/slots", {headers: authHeaders({})});
+      if (!response.ok) throw new Error(`スロット取得に失敗しました: ${response.status}`);
+      const payload = await response.json();
+      localSlots = (payload.slots || []).filter(slot => (slot.type || "local") === "local");
+      renderSlots();
+      await refreshState();
+      connection.textContent = "接続済み";
+      const source = new EventSource("/api/stream");
+      source.onmessage = event => applyState(JSON.parse(event.data));
+      source.onerror = () => { connection.textContent = "再接続中"; };
+      source.onopen = () => { connection.textContent = "接続済み"; };
+    }
+
+    initialize().catch(error => {
+      connection.textContent = "接続エラー";
+      grid.innerHTML = `<p class="empty">${escapeHtml(error.message)}</p>`;
+    });
+  </script>
+</body>
+</html>

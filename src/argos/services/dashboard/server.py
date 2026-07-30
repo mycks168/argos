@@ -207,6 +207,8 @@ def _create_handler(
                 self._send_settings_html()
             elif path in {"/sp", "/sp/"}:
                 self._send_html("sp")
+            elif path in {"/grid", "/grid/"}:
+                self._send_grid_html()
             elif path.startswith("/static/"):
                 self._send_static_file(path)
             elif path == "/api/health":
@@ -327,7 +329,21 @@ def _create_handler(
                 if terminal_handler is None:
                     self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                     return
-                self._send_terminal_turn(terminal_handler, upload_max_bytes)
+                query = parse_qs(urlparse(self.path).query)
+                slot_name = str(query.get("name", [""])[0]).strip()
+                slot_provider = str(query.get("provider", [""])[0]).strip()
+                if bool(slot_name) != bool(slot_provider):
+                    self._send_json(
+                        {"error": "スロット名とproviderは両方指定してください"},
+                        HTTPStatus.BAD_REQUEST,
+                    )
+                    return
+                self._send_terminal_turn(
+                    terminal_handler,
+                    upload_max_bytes,
+                    slot_name,
+                    slot_provider,
+                )
                 return
             if path not in {"/api/events", "/api/control"}:
                 self.send_error(HTTPStatus.NOT_FOUND)
@@ -444,13 +460,31 @@ def _create_handler(
 
         def _send_settings_html(self) -> None:
             """初心者向け設定画面を返す。"""
-            html_text = files("argos.services.dashboard.static").joinpath("settings.html").read_text(encoding="utf-8")
-            html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
+            self._send_static_html("settings.html")
+
+        def _send_grid_html(self) -> None:
+            """ローカルスロットを一覧操作するタイル画面を返す。"""
+            self._send_static_html("grid.html")
+
+        def _send_static_html(self, filename: str) -> None:
+            """トークンを埋め込んだ静的HTMLをキャッシュせず返す。"""
+            html_text = files("argos.services.dashboard.static").joinpath(filename).read_text(
+                encoding="utf-8",
+            )
+            html_text = html_text.replace(
+                "__ARGOS_DASHBOARD_TOKEN__",
+                json.dumps(token, ensure_ascii=False),
+            )
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(html)))
             self.send_header("Cache-Control", "no-store")
+            if view_key:
+                self.send_header(
+                    "Set-Cookie",
+                    f"{VIEW_KEY_COOKIE}={view_key}; Path=/; HttpOnly; SameSite=Lax; Max-Age=31536000",
+                )
             self.end_headers()
             self.wfile.write(html)
 
@@ -564,7 +598,13 @@ def _create_handler(
             finally:
                 state.unsubscribe(subscriber)
 
-        def _send_terminal_turn(self, handler: Any, max_bytes: int) -> None:
+        def _send_terminal_turn(
+            self,
+            handler: Any,
+            max_bytes: int,
+            slot_name: str = "",
+            slot_provider: str = "",
+        ) -> None:
             """端末ターンを受け取り、STT/直接テキスト→エージェント→(TTS)結果をSSEで返す。
 
             入力形式はリクエストの Content-Type で決まる。
@@ -618,7 +658,22 @@ def _create_handler(
             self.send_header("Connection", "close")
             self.end_headers()
             try:
-                for event in handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio):
+                turn_events = (
+                    handler.process_turn(
+                        wav_bytes,
+                        text=text_input,
+                        want_audio=want_audio,
+                        slot_name=slot_name,
+                        slot_provider=slot_provider,
+                    )
+                    if slot_name and slot_provider
+                    else handler.process_turn(
+                        wav_bytes,
+                        text=text_input,
+                        want_audio=want_audio,
+                    )
+                )
+                for event in turn_events:
                     if wants_opus and event.get("event") == "audio" and event.get("format") == "wav":
                         event = _encode_audio_event_to_opus(event)
                     name = str(event.get("event", "message"))

@@ -224,7 +224,14 @@ class DashboardState:
             self._publish_locked()
         return message_id
 
-    def add_message_to_slot(self, name: str, provider: str, role: str, text: str) -> str:
+    def add_message_to_slot(
+        self,
+        name: str,
+        provider: str,
+        role: str,
+        text: str,
+        streaming: bool = False,
+    ) -> str:
         """指定スロットへ会話メッセージを追加し、メッセージIDを返す。"""
         message_id = uuid.uuid4().hex
         key = _slot_key(name, provider)
@@ -235,7 +242,7 @@ class DashboardState:
                     "id": message_id,
                     "role": role,
                     "text": text,
-                    "streaming": False,
+                    "streaming": streaming,
                     "created_at": _now_iso(),
                 }
             )

@@ -136,6 +136,23 @@ def test_dashboard_state_keeps_messages_per_agent_slot():
     assert first_id != second_id
 
 
+def test_dashboard_state_streams_message_to_inactive_slot():
+    """選択状態を変えず指定スロットの応答を逐次更新できる。"""
+    state = DashboardState()
+    state.set_agent("作業", "codex")
+    message_id = state.add_message_to_slot(
+        "調査",
+        "claude",
+        "assistant",
+        "",
+        streaming=True,
+    )
+
+    state.append_message(message_id, "回答")
+    assert state.slot_messages("調査", "claude")[0]["text"] == "回答"
+    assert state.slot_messages("調査", "claude")[0]["streaming"] is True
+
+
 def test_dashboard_state_tracks_slot_unread_and_busy():
     """スロットごとの未読と処理中状態を保持する。"""
     state = DashboardState()
@@ -333,6 +350,18 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";' in sp_html
         assert "if (rightOpen) markSpNotificationsSeen();" in sp_html
         assert "latestNotifications.filter" in sp_html
+
+        with urlopen(base_url + "/grid", timeout=2) as response:
+            assert response.headers["Cache-Control"] == "no-store"
+            grid_html = response.read().decode("utf-8")
+        assert "ARGOS スロット一覧" in grid_html
+        assert "/api/terminal/turn?${query}" in grid_html
+        assert '(slot.type || "local") === "local"' in grid_html
+        assert 'const dashboardToken = "secret";' in grid_html
+        assert "height: 100dvh" in grid_html
+        assert "grid-template-rows: auto minmax(0, 1fr)" in grid_html
+        assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
+        assert ".messages { min-height: 0; overflow: auto;" in grid_html
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

@@ -81,6 +81,18 @@ class RunnerAgentClient:
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """Runnerにジョブを作成し、出力の差分をポーリングしながら返す。"""
         slot = self._slots[self._index]
+        yield from self._ask_slot_stream(slot, prompt)
+
+    def ask_slot_stream(self, name: str, provider: str, prompt: str) -> Iterable[str]:
+        """選択中スロットを変えず、指定スロットのRunnerジョブを開始する。"""
+        for slot in self._slots:
+            if slot.name == name and slot.provider == provider:
+                yield from self._ask_slot_stream(slot, prompt)
+                return
+        raise ValueError(f"エージェントスロットが見つかりません: {name} ({provider})")
+
+    def _ask_slot_stream(self, slot: AgentSlot, prompt: str) -> Iterable[str]:
+        """指定スロットのRunner出力を差分として返す。"""
         response_target = str(getattr(self._request_context, "response_target", "local"))
         job = self._request(
             "POST",
