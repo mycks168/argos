@@ -5,11 +5,11 @@ description: ARGOSのリマインダーを登録、一覧、削除する。ユ�
 
 # ARGOS Reminder
 
-`/home/yuki/argos-reminder` のCLIでARGOSへ通知するリマインダーを管理する。
+`~/argos-reminder` のCLIでARGOSへ通知するリマインダーを管理する。
 
 ## 基本ルール
 
-- コマンドは `/home/yuki/argos-reminder` で `uv run argos-reminder ...` として実行する。
+- コマンドは `~/argos-reminder` で `uv run argos-reminder ...` として実行する。
 - 実行後のリマインダーIDは、ユーザーに求められた場合だけ伝える。通常は読み上げない。
 - `.env` にはBearer tokenが入るため、内容を表示しない。
 - `argos-reminder.service` が常駐して期限到達や位置到着を検出する。登録だけならサービス再起動は不要。

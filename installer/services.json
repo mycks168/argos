@@ -108,10 +108,10 @@
     },
     {
       "name": "stt-gateway",
-      "description": "音声文字起こしAPI。現環境ではclove側の外部サービスを参照している",
+      "description": "音声文字起こしAPI。別ホストの外部サービスをURLで参照する",
       "kind": "external",
       "bundle": "external",
-      "endpoint": "http://clove:23000",
+      "endpoint": "http://stt-gateway.example:23000",
       "enabled_by_default": false
     },
     {

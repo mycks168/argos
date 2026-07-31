@@ -41,8 +41,8 @@ def test_image_formats_are_read_as_japanese():
 
 
 def test_autossh_service_is_read_as_japanese():
-    got = normalize_for_tts("SSH と autossh-clove.service と service を確認して")
-    assert "エスエスエイチ と オートエスエスエイチ clove サービス と サービス を確認して" in got
+    got = normalize_for_tts("SSH と autossh-relay.service と service を確認して")
+    assert "エスエスエイチ と オートエスエスエイチ relay サービス と サービス を確認して" in got
 
 
 def test_gpsd_is_read_as_japanese():

@@ -5,9 +5,9 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/yuki/argos-reminder
-EnvironmentFile=/home/yuki/argos-reminder/.env
-ExecStart=/home/yuki/argos-reminder/.venv/bin/argos-reminder-daemon
+WorkingDirectory=@PROJECT_DIR@/services/argos-reminder
+EnvironmentFile=@PROJECT_DIR@/services/argos-reminder/.env
+ExecStart=@PROJECT_DIR@/services/argos-reminder/.venv/bin/argos-reminder-daemon
 Restart=always
 RestartSec=5
 

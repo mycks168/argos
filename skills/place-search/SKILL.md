@@ -13,7 +13,7 @@ Web検索の代わりに本スキルが提供するスクリプトを実行す�
 ### 1. コンビニを探す
 現在地周辺のコンビニを最大5kmの範囲で検索します。
 ```bash
-python /home/yuki/skills/place-search/scripts/search_places.py \
+python ~/skills/place-search/scripts/search_places.py \
   --lat 40.590215 \
   --lon 140.327849 \
   --radius 5000 \
@@ -23,7 +23,7 @@ python /home/yuki/skills/place-search/scripts/search_places.py \
 ### 2. ガソリンスタンドを探す
 現在地周辺のガソリンスタンドを検索します。
 ```bash
-python /home/yuki/skills/place-search/scripts/search_places.py \
+python ~/skills/place-search/scripts/search_places.py \
   --lat 40.590215 \
   --lon 140.327849 \
   --radius 10000 \
@@ -32,7 +32,7 @@ python /home/yuki/skills/place-search/scripts/search_places.py \
 
 ### 3. 飲食店・カフェを探す
 ```bash
-python /home/yuki/skills/place-search/scripts/search_places.py \
+python ~/skills/place-search/scripts/search_places.py \
   --lat 40.590215 \
   --lon 140.327849 \
   --type restaurant
