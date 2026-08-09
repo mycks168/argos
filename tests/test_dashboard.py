@@ -428,7 +428,6 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '/^F(1[3-9]|2[0-4])$/' in grid_html
         assert "playPendingAudio(key)" in grid_html
         assert 'event.event === "audio" && event.data' in grid_html
-        assert 'localStorage.setItem("argos-grid-muted"' in grid_html
         assert 'action: "cancel_audio"' in grid_html
         assert "function cancelGridAudio()" in grid_html
         assert "new ArgosBrowserAudio.AudioPlayer" in grid_html

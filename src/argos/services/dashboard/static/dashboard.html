@@ -1493,6 +1493,12 @@
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
+    function updateDashboardMuteState(nextMuted) {
+      if (nextMuted && !muted) voicePlayer.cancel();
+      muted = nextMuted;
+      muteButton.textContent = muted ? "ミュート中" : "ミュート";
+      muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+    }
     function updateClock() {
       const now = new Date();
       document.getElementById("clock").textContent = now.toLocaleTimeString("ja-JP", {hour:"2-digit", minute:"2-digit"});
@@ -1618,9 +1624,7 @@
           ${escapeHtml(slot.name || "--")}${slot.busy ? " ..." : ""}${slot.unread ? " / 未読" : ""}
           <span class="slot-menu-provider">${escapeHtml(slot.provider || "")}${slot.model ? ` · ${escapeHtml(slot.model)}` : ""}</span>
         </button>`).join("");
-      muted = Boolean(state.audio?.muted);
-      muteButton.textContent = muted ? "ミュート中" : "ミュート";
-      muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+      updateDashboardMuteState(Boolean(state.audio?.muted));
       microphoneEnabled = state.microphone?.enabled !== false;
       microphoneButton.textContent = microphoneEnabled ? "マイクOFF" : "マイクOFF中";
       microphoneButton.setAttribute("aria-pressed", microphoneEnabled ? "false" : "true");
@@ -2081,6 +2085,7 @@
       }
     }
     function queueVoiceAudio(base64Data, playbackGeneration) {
+      if (muted) return;
       voicePlayer.enqueueBase64(base64Data, playbackGeneration);
     }
     voiceInputButton.addEventListener("click", () => {
@@ -2248,9 +2253,7 @@
     function applyControlResult(result) {
       if (!result || typeof result !== "object") return;
       if (typeof result.muted === "boolean") {
-        muted = result.muted;
-        muteButton.textContent = muted ? "ミュート中" : "ミュート";
-        muteButton.setAttribute("aria-pressed", muted ? "true" : "false");
+        updateDashboardMuteState(result.muted);
       }
       if (typeof result.microphone_enabled === "boolean") {
         microphoneEnabled = result.microphone_enabled;

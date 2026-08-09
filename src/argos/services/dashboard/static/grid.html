@@ -96,7 +96,7 @@
     let audioChunks = [];
     let pttActiveKey = "";
     let pttReleasePending = false;
-    let isMuted = localStorage.getItem("argos-grid-muted") === "true";
+    let isMuted = false;
     let recordingPlaybackGeneration = 0;
     const audioPlayer = new ArgosBrowserAudio.AudioPlayer({
       onError: error => {
@@ -241,6 +241,7 @@
 
     function applyState(state) {
       latestState = state;
+      updateMuteState(Boolean(state.audio?.muted));
       if (usageDialog.open) renderUsageDialog();
       for (const slot of state.slots || []) {
         const key = slotKey(slot);
@@ -418,14 +419,33 @@
       muteButton.setAttribute("aria-pressed", String(isMuted));
     }
 
-    function toggleMute() {
-      isMuted = !isMuted;
-      localStorage.setItem("argos-grid-muted", String(isMuted));
-      if (isMuted) {
+    function updateMuteState(nextMuted) {
+      if (nextMuted && !isMuted) {
         pendingAudio.clear();
         audioPlayer.cancel();
       }
+      isMuted = nextMuted;
       applyMuteState();
+    }
+
+    async function toggleMute() {
+      muteButton.disabled = true;
+      try {
+        const response = await fetch("/api/control", {
+          method: "POST",
+          headers: authHeaders({"Content-Type": "application/json"}),
+          body: JSON.stringify({action: isMuted ? "unmute" : "mute"}),
+        });
+        if (!response.ok) throw new Error(`ミュート操作に失敗しました: ${response.status}`);
+        const result = await response.json();
+        updateMuteState(Boolean(result.muted));
+        connection.textContent = "接続済み";
+      } catch (error) {
+        console.error("ミュート操作に失敗しました", error);
+        connection.textContent = "ミュート操作エラー";
+      } finally {
+        muteButton.disabled = false;
+      }
     }
 
     function cancelGridAudio() {
@@ -492,7 +512,9 @@
       if (tile) toggleMaximize(tile);
     });
 
-    muteButton.addEventListener("click", toggleMute);
+    muteButton.addEventListener("click", () => {
+      toggleMute();
+    });
     usageButton.addEventListener("click", openUsageDialog);
     usageClose.addEventListener("click", () => usageDialog.close());
     usageDialog.addEventListener("click", event => {
