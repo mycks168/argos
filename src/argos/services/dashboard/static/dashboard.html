@@ -1329,6 +1329,7 @@
     let voiceChunks = [];
     let voiceState = "idle";
     let voiceSlotKey = "";
+    let pttReleasePending = false;
     let voiceAudioContext = null;
     let voicePlaybackChain = Promise.resolve();
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
@@ -1569,7 +1570,9 @@
       currentAgentSlotKey = activeAgentSlot
         ? `${activeAgentSlot.provider || ""}\u0000${activeAgentSlot.name || ""}` : "";
       currentAgentSlotBusy = Boolean(activeAgentSlot?.busy);
-      const displayStatus = currentAgentSlotBusy && state.status.code === "ready"
+      const displayStatus = voiceState === "recording"
+        ? {code: "listening", label: "録音中"}
+        : currentAgentSlotBusy && state.status.code === "ready"
         ? {code: "thinking", label: "考え中"} : state.status;
       status.dataset.code = displayStatus.code;
       document.body.dataset.statusCode = displayStatus.code || "ready";
@@ -1903,6 +1906,15 @@
     }
     function setVoiceState(nextState) {
       voiceState = nextState;
+      if (nextState === "recording") {
+        status.dataset.code = "listening";
+        document.body.dataset.statusCode = "listening";
+        statusLabel.textContent = "録音中";
+      } else if (nextState === "idle" && status.dataset.code === "listening") {
+        status.dataset.code = "ready";
+        document.body.dataset.statusCode = "ready";
+        statusLabel.textContent = "待機中";
+      }
       voiceInputButton.dataset.state = nextState;
       const labels = {
         idle: "音声入力を開始",
@@ -1925,13 +1937,15 @@
       ];
       return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
     }
-    async function startVoiceRecording() {
+    async function startVoiceRecording(isPushToTalk = false) {
       if (!currentAgentSlotKey || currentAgentSlotBusy) return;
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
         setTextComposerError("このブラウザは音声録音に対応していないよ");
         return;
       }
       setTextComposerError("");
+      // 物理PTTと同じく、マイク許可待ちの間も押下を認識したことを表示する。
+      setVoiceState("recording");
       try {
         voiceAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
         await voiceAudioContext.resume();
@@ -1947,8 +1961,12 @@
           if (event.data.size) voiceChunks.push(event.data);
         });
         voiceRecorder.start();
-        setVoiceState("recording");
+        if (isPushToTalk && pttReleasePending) {
+          pttReleasePending = false;
+          await stopVoiceRecording(true);
+        }
       } catch (error) {
+        pttReleasePending = false;
         stopVoiceStream();
         setVoiceState("idle");
         setTextComposerError(error?.name === "NotAllowedError"
@@ -1960,8 +1978,12 @@
       voiceStream?.getTracks().forEach(track => track.stop());
       voiceStream = null;
     }
-    async function stopVoiceRecording() {
-      if (!voiceRecorder || voiceRecorder.state === "inactive") return;
+    async function stopVoiceRecording(isPushToTalk = false) {
+      if (!voiceRecorder || voiceRecorder.state === "inactive") {
+        if (isPushToTalk && voiceState === "recording") pttReleasePending = true;
+        return;
+      }
+      pttReleasePending = false;
       const recorder = voiceRecorder;
       const stopped = new Promise(resolve => recorder.addEventListener("stop", resolve, {once: true}));
       recorder.stop();
@@ -2073,7 +2095,8 @@
         if (event.code === "Space") event.preventDefault();
         if (voiceState === "idle" && !currentAgentSlotBusy && currentAgentSlotKey) {
           pttActiveKey = event.code || event.key;
-          startVoiceRecording();
+          pttReleasePending = false;
+          startVoiceRecording(true);
         }
       }
     });
@@ -2084,7 +2107,7 @@
         if (event.code === "Space") event.preventDefault();
         pttActiveKey = null;
         if (voiceState === "recording") {
-          stopVoiceRecording();
+          stopVoiceRecording(true);
         }
       }
     });

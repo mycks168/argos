@@ -94,6 +94,7 @@
     let recordingSlotKey = "";
     let audioChunks = [];
     let pttActiveKey = "";
+    let pttReleasePending = false;
     let isMuted = localStorage.getItem("argos-grid-muted") === "true";
     let audioContext = null;
     let playbackChain = Promise.resolve();
@@ -339,6 +340,11 @@
         recorder.stop();
         return;
       }
+      if (isPushToTalk) {
+        pttReleasePending = false;
+        const status = slotElements.get(key)?.querySelector(".tile-status");
+        if (status) status.textContent = "録音中";
+      }
       try {
         recorderStream = await navigator.mediaDevices.getUserMedia({
           audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
@@ -364,8 +370,12 @@
         const button = slotElements.get(key).querySelector(".voice");
         button.textContent = "録音停止";
         button.classList.add("recording");
-        if (isPushToTalk && !pttActiveKey) recorder.stop();
+        if (isPushToTalk && pttReleasePending) {
+          pttReleasePending = false;
+          recorder.stop();
+        }
       } catch (error) {
+        pttReleasePending = false;
         slotElements.get(key).querySelector(".tile-status").textContent = "マイクを利用できません";
       }
     }
@@ -462,13 +472,21 @@
       if (!key || key !== pttActiveKey) return;
       if (key === "Space") event.preventDefault();
       pttActiveKey = "";
-      if (recorder?.state === "recording") recorder.stop();
+      if (recorder?.state === "recording") {
+        recorder.stop();
+      } else {
+        pttReleasePending = true;
+      }
     });
 
     window.addEventListener("blur", () => {
       if (!pttActiveKey) return;
       pttActiveKey = "";
-      if (recorder?.state === "recording") recorder.stop();
+      if (recorder?.state === "recording") {
+        recorder.stop();
+      } else {
+        pttReleasePending = true;
+      }
     });
 
     document.addEventListener("keydown", event => {

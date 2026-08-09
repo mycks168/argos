@@ -337,6 +337,12 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "await describeTurnResponseError(response)" in html
         assert "let pttActiveKey = null;" in html
         assert 'const isPttKey = event.code === "Space"' in html
+        assert 'setVoiceState("recording");' in html
+        assert 'voiceState === "recording"' in html
+        assert 'statusLabel.textContent = "録音中";' in html
+        assert 'async function startVoiceRecording(isPushToTalk = false)' in html
+        assert 'async function stopVoiceRecording(isPushToTalk = false)' in html
+        assert 'let pttReleasePending = false;' in html
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:
@@ -406,6 +412,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'event.key !== "Escape"' in grid_html
         assert 'id="mute-button"' in grid_html
         assert 'event.code === "Space"' in grid_html
+        assert 'const status = slotElements.get(key)?.querySelector(".tile-status");' in grid_html
+        assert 'if (status) status.textContent = "録音中";' in grid_html
+        assert 'if (isPushToTalk && pttReleasePending)' in grid_html
         assert '/^F(1[3-9]|2[0-4])$/' in grid_html
         assert "playPendingAudio(key)" in grid_html
         assert 'event.event === "audio" && event.data' in grid_html
