@@ -19,7 +19,6 @@ from argos.core.status_controller import StatusController
 from argos.services.dashboard.state import DashboardState
 from argos.services.tts.chunker import TextChunker
 
-
 log = logging.getLogger(__name__)
 
 
@@ -205,6 +204,10 @@ class SpeechController:
             wav_data = self._synthesize_chunk(rest, slot_key)
             if wav_data is not None:
                 yield ("audio", wav_data)
+
+    def synthesize_status_audio(self, text: str, slot_key: str = "") -> bytes | None:
+        """ブラウザ配信用の短い状態案内を応答音声と同じ設定で合成する。"""
+        return self._synthesize_chunk(text, slot_key)
 
     def _synthesize_chunk(self, chunk: str, slot_key: str = "") -> bytes | None:
         """1チャンクを正規化して合成し、失敗時はNoneを返す（ターンは継続する）。"""

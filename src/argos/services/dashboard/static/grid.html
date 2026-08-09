@@ -327,6 +327,7 @@
         if (!dataLine) return;
         const event = JSON.parse(dataLine.slice(6));
         if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
+        if (event.event === "progress" && event.url) queueAudioUrl(key, event.url, playbackGeneration);
         if (event.event === "audio" && event.data) queueAudio(key, event.data, playbackGeneration);
         if (event.event === "done") didComplete = true;
       };
@@ -403,15 +404,41 @@
       pendingAudio.set(key, chunks);
     }
 
+    function queueAudioUrl(key, audioUrl, playbackGeneration) {
+      if (isMuted) return;
+      const tile = slotElements.get(key);
+      if (tile?.matches(":focus-within")) {
+        queueAudioUrlPlayback(audioUrl, playbackGeneration);
+        return;
+      }
+      const chunks = pendingAudio.get(key) || [];
+      chunks.push({audioUrl, playbackGeneration});
+      pendingAudio.set(key, chunks);
+    }
+
     function playPendingAudio(key) {
       if (isMuted) return;
       const chunks = pendingAudio.get(key) || [];
       pendingAudio.delete(key);
-      chunks.forEach(chunk => queueAudioPlayback(chunk.base64Data, chunk.playbackGeneration));
+      chunks.forEach(chunk => {
+        if (chunk.audioUrl) {
+          queueAudioUrlPlayback(chunk.audioUrl, chunk.playbackGeneration);
+        } else {
+          queueAudioPlayback(chunk.base64Data, chunk.playbackGeneration);
+        }
+      });
     }
 
     function queueAudioPlayback(base64Data, playbackGeneration) {
       audioPlayer.enqueueBase64(base64Data, playbackGeneration);
+    }
+
+    function queueAudioUrlPlayback(audioUrl, playbackGeneration) {
+      audioPlayer.enqueueUrl(
+        audioUrl,
+        {headers: authHeaders({}), cache: "force-cache"},
+        playbackGeneration,
+      );
     }
 
     function applyMuteState() {

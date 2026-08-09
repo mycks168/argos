@@ -345,12 +345,14 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 - `POST /api/terminal/turn`：入力を母艦のエージェントへ渡し、そのターンの結果を **Server-Sent Events** でストリーム返却する。`Content-Type: audio/wav` はSTT→エージェント→TTS、`audio/ogg`（または `audio/opus`）はWAVへデコード後に同じ処理を行う。`Content-Type: text/plain; charset=utf-8` はSTTを省略して本文を直接エージェントへ渡す。`Accept: text/event-stream` を指定するとTTSを省略して文字イベントだけを返す。Accept未指定または `*/*` は後方互換のため音声イベントも返す。受信サイズ上限は `ARGOS_DASHBOARD_UPLOAD_MAX_BYTES` を流用する。未対応の入力形式は415、Opusのデコード失敗は400を返す。イベント種別は次のとおり。
   - `transcript`：STTの文字起こし結果。`{"text": "..."}`。空文字（認識失敗）の場合は `error` を返してターンを終える。
+  - `progress`：処理開始時と最初の回答差分が遅い場合の短い声かけ。`{"text": "ちょっと待ってて。", "format": "wav", "url": "/api/terminal/progress-audio/<SHA-256>.wav"}`。音声本体をSSEへ重複送信せず、ブラウザはURLから取得する。
   - `text`：エージェント応答の差分。`{"delta": "..."}`。端末はLCDへ逐次追記する。
   - `audio`：応答を句読点で分割し文単位でTTS合成したWAV。`{"seq": 0, "format": "wav", "data": "<base64>"}`。端末は `seq` 順にキュー再生する。テキスト差分が先行し音声が遅れて届くため、LCD表示が音声より先行する。リクエストヘッダー `X-Argos-Audio: opus` を付けると、各チャンクをOgg Opusへ変換して `{"format": "opus", ...}` で返す（変換失敗時はWAVのまま返すフォールバック付き）。
   - `done`：ターン完了。`{"text": "<応答全文>"}`。
   - `error`：処理失敗。`{"message": "..."}`。スロットが処理中（`RunnerSlotBusyError`）の場合もこの種別で通知する。
 - `GET /api/terminal/slots`：エージェントスロット一覧と現在スロットを返す。`{"slots": [{"name": ..., "provider": ..., "active": bool}], "current": {"name": ..., "provider": ...}}`。
 - `GET /api/terminal/history?name=<name>&provider=<provider>`：指定スロットの会話履歴を返す。ARGOS間のリモートスロット切替時に使用する。
+- `GET /api/terminal/progress-audio/<SHA-256>.wav`：`progress`イベントが参照する短いWAVを返す。Bearer認証を必須とし、`Cache-Control: private, max-age=31536000, immutable`と内容ハッシュのETagを付ける。同じ文言と話者から同じ音声が生成された場合は同じURLになり、ブラウザごとの初回取得後は再送しない。サーバーは直近64音声だけをメモリ参照用に保持し、TTS合成結果自体は既存のディスクキャッシュを使う。
 - `POST /api/terminal/slots/next`：`ptt_cycle`がtrueの次のエージェントスロットへ巡回切替し、切替後の現在スロットを返す。全スロットがfalseの場合だけ全件を対象とする。端末のPTTダブルクリックに対応する。
 - `POST /api/terminal/slots/select`：`{"name": "...", "provider": "..."}` で指定したスロットへ切り替え、切替後の現在スロットを返す。ダッシュボード左側の `CURRENT SLOT` 一覧から利用する。母艦のスロット状態を共有するため、切替はダッシュボードや目の前の端末にも一貫して反映される。
 
@@ -369,7 +371,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
-エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
+エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。Web音声ターンではエージェント差分の読取だけを別スレッドで行い、最初の差分を待つ間もSSE接続へ`progress`イベントを返す。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 
 ### 発話時の挨拶
 

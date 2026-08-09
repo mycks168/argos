@@ -10,21 +10,32 @@ import queue
 import subprocess
 import threading
 import uuid
+from collections.abc import Callable
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from argos.services.dashboard.audio_devices import list_audio_devices, measure_microphone, play_speaker_test
+from argos.services.dashboard.audio_devices import (
+    list_audio_devices,
+    measure_microphone,
+    play_speaker_test,
+)
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
-from argos.services.dashboard.settings_config import load_settings_form, save_settings_form
+from argos.services.dashboard.settings_config import (
+    load_settings_form,
+    save_settings_form,
+)
 from argos.services.dashboard.state import DashboardState
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
-from argos.services.opus_codec import OpusCodecError, decode_audio_to_wav, encode_wav_to_opus
-
+from argos.services.opus_codec import (
+    OpusCodecError,
+    decode_audio_to_wav,
+    encode_wav_to_opus,
+)
 
 log = logging.getLogger(__name__)
 MAX_BODY_BYTES = 256 * 1024
@@ -52,6 +63,8 @@ UPLOAD_EXTENSION_MIMES = {
     ".webp": "image/webp",
     ".gif": "image/gif",
 }
+TERMINAL_PROGRESS_AUDIO_PREFIX = "/api/terminal/progress-audio/"
+TERMINAL_PROGRESS_CACHE_CONTROL = "private, max-age=31536000, immutable"
 
 
 def _normalize_font_size(value: str) -> str:
@@ -274,6 +287,13 @@ def _create_handler(
                     self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
                     return
                 self._send_json(response)
+            elif path.startswith(TERMINAL_PROGRESS_AUDIO_PREFIX):
+                if not self._require_token():
+                    return
+                if terminal_handler is None:
+                    self._send_json({"error": "端末APIは無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                    return
+                self._send_terminal_progress_audio(path, terminal_handler)
             elif path == "/camera/latest.jpg":
                 self._send_camera_snapshot()
             elif path.startswith("/uploads/"):
@@ -585,6 +605,32 @@ def _create_handler(
             self.send_header("Content-Length", str(len(content)))
             self.end_headers()
             self.wfile.write(content)
+
+        def _send_terminal_progress_audio(self, path: str, handler: Any) -> None:
+            """内容ハッシュで登録された短い進捗音声を長期キャッシュ可能に配信する。"""
+            filename = path.removeprefix(TERMINAL_PROGRESS_AUDIO_PREFIX)
+            asset_id = filename.removesuffix(".wav")
+            if not filename.endswith(".wav") or len(asset_id) != 64 or any(
+                character not in "0123456789abcdef" for character in asset_id
+            ):
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            wav_data = handler.progress_audio(asset_id)
+            if wav_data is None:
+                self.send_error(HTTPStatus.NOT_FOUND)
+                return
+            etag = f'"{asset_id}"'
+            status = HTTPStatus.NOT_MODIFIED if self.headers.get("If-None-Match") == etag else HTTPStatus.OK
+            self.send_response(status)
+            self.send_header("Cache-Control", TERMINAL_PROGRESS_CACHE_CONTROL)
+            self.send_header("ETag", etag)
+            self.send_header("Vary", "Authorization, Cookie")
+            if status == HTTPStatus.OK:
+                self.send_header("Content-Type", "audio/wav")
+                self.send_header("Content-Length", str(len(wav_data)))
+            self.end_headers()
+            if status == HTTPStatus.OK:
+                self.wfile.write(wav_data)
 
         def _send_sse(self) -> None:
             """状態更新をServer-Sent Eventsで配信する。"""
