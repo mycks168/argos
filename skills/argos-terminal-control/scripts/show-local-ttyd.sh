@@ -8,7 +8,7 @@ for fd in $(ls /proc/self/fd 2>/dev/null || true); do
   fi
 done
 
-ARGOS_DIR="${ARGOS_DIR:-/home/yuki/argos}"
+ARGOS_DIR="${ARGOS_DIR:-$HOME/argos}"
 SESSION="${ARGOS_TERMINAL_TMUX_SESSION:-argos-terminal}"
 TTYD_BIN="${TTYD_BIN:-/usr/local/bin/ttyd}"
 TTYD_HOST="${TTYD_HOST:-127.0.0.1}"

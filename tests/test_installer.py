@@ -215,16 +215,16 @@ def test_plan_to_dict_is_json_serializable(tmp_path):
         project_dir=tmp_path / "argos",
         system_unit_dir=tmp_path / "system",
         user_unit_dir=tmp_path / "user",
-        service_user="yuki",
+        service_user="deploy",
         service_group="staff",
     )
     payload = plan_to_dict(plan)
 
     encoded = json.dumps(payload, ensure_ascii=False)
     assert "argos-reminder" in encoded
-    assert payload["service_user"] == "yuki"
+    assert payload["service_user"] == "deploy"
     assert payload["service_group"] == "staff"
-    assert payload["service_home"] == "/home/yuki"
+    assert payload["service_home"] == "/home/deploy"
 
 
 def test_main_prints_human_readable_plan(capsys, tmp_path):
@@ -238,7 +238,7 @@ def test_main_prints_human_readable_plan(capsys, tmp_path):
             "--user-unit-dir",
             str(tmp_path / "user"),
             "--user",
-            "yuki",
+            "deploy",
         ]
     )
 
@@ -246,7 +246,7 @@ def test_main_prints_human_readable_plan(capsys, tmp_path):
     output = capsys.readouterr().out
     assert "ARGOSインストール計画" in output
     assert "tts-filter" in output
-    assert "service_user: yuki" in output
+    assert "service_user: deploy" in output
 
 
 def test_build_install_plan_bootstrap_includes_dedicated_user_steps(tmp_path):

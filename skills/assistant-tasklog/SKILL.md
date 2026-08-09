@@ -1,21 +1,21 @@
 ---
 name: assistant-tasklog
-description: Use when the user asks to record, queue, backlog, remember, or task-track work items from the conversation, especially ARGOS/Codex follow-up tasks, into the local /home/yuki/assistant-tasks repository instead of the active project.
+description: Use when the user asks to record, queue, backlog, remember, or task-track work items from the conversation, especially ARGOS/Codex follow-up tasks, into the local ~/assistant-tasks repository instead of the active project.
 metadata:
   short-description: 会話からタスクをassistant-tasksへ記録する
 ---
 
 # Assistant Tasklog
 
-会話で出た未着手タスク、後で戻りたい検討事項、ARGOS/Codexへの依頼を `/home/yuki/assistant-tasks` に記録する。
+会話で出た未着手タスク、後で戻りたい検討事項、ARGOS/Codexへの依頼を `~/assistant-tasks` に記録する。
 
 ## 保存先
 
-- ARGOS関連: `/home/yuki/assistant-tasks/tasks/argos.md`
-- 横断タスク: `/home/yuki/assistant-tasks/tasks/general.md`
-- 会話メモ: `/home/yuki/assistant-tasks/logs/YYYY-MM-DD.md`
+- ARGOS関連: `~/assistant-tasks/tasks/argos.md`
+- 横断タスク: `~/assistant-tasks/tasks/general.md`
+- 会話メモ: `~/assistant-tasks/logs/YYYY-MM-DD.md`
 
-`/home/yuki/assistant-tasks` がなければ、ユーザに確認してから作成する。
+`~/assistant-tasks` がなければ、ユーザに確認してから作成する。
 
 ## 手順
 

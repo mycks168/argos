@@ -1080,17 +1080,9 @@ class ArgosApp:
     def _handle_dashboard_control(self, payload: dict[str, object]) -> dict[str, object]:
         """ダッシュボードからの操作をARGOS本体へ反映する。"""
         action = str(payload.get("action", ""))
-        if action == "mute":
-            self._set_muted(True)
-        elif action == "unmute":
-            self._set_muted(False)
-        elif action == "toggle_mute":
-            self._set_muted(not self._speech.is_muted())
-        elif action == "set_volume":
-            volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
-            self._dashboard_state.set_audio_volume(volume)
-            self._save_audio_state()
-        elif action == "enable_microphone":
+        if self._handle_dashboard_audio_control(action, payload):
+            return self._dashboard_audio_control_state()
+        if action == "enable_microphone":
             self._set_microphone_enabled(True)
         elif action == "disable_microphone":
             self._set_microphone_enabled(False)
@@ -1122,7 +1114,33 @@ class ArgosApp:
             }
         else:
             raise ValueError(f"未対応の操作です: {action}")
-        return {"muted": self._speech.is_muted(), "volume": self._audio.volume, "microphone_enabled": self._is_microphone_enabled()}
+        return self._dashboard_audio_control_state()
+
+    def _handle_dashboard_audio_control(self, action: str, payload: dict[str, object]) -> bool:
+        """音声関連のダッシュボード操作を反映し、処理済みか返す。"""
+        if action == "mute":
+            self._set_muted(True)
+        elif action == "unmute":
+            self._set_muted(False)
+        elif action == "toggle_mute":
+            self._set_muted(not self._speech.is_muted())
+        elif action == "cancel_audio":
+            self._cancel_active_audio()
+        elif action == "set_volume":
+            volume = self._audio.set_volume(int(payload.get("volume", self._audio.volume)))
+            self._dashboard_state.set_audio_volume(volume)
+            self._save_audio_state()
+        else:
+            return False
+        return True
+
+    def _dashboard_audio_control_state(self) -> dict[str, object]:
+        """ダッシュボードの音声操作後に共通で返す状態を作る。"""
+        return {
+            "muted": self._speech.is_muted(),
+            "volume": self._audio.volume,
+            "microphone_enabled": self._is_microphone_enabled(),
+        }
 
     def _handle_dashboard_event(self, payload: dict[str, object], response: dict[str, object]) -> None:
         """外部表示イベントに応じて通知音や読み上げを行う。"""
