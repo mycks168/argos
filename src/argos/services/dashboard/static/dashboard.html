@@ -2078,6 +2078,7 @@
           const dataLine = block.split("\n").find(line => line.startsWith("data: "));
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
+          if (event.event === "progress" && event.url) queueVoiceAudioUrl(event.url, playbackGeneration);
           if (event.event === "audio" && event.data) queueVoiceAudio(event.data, playbackGeneration);
           if (event.event === "error") throw new Error(event.message || "音声処理に失敗したよ");
         }
@@ -2087,6 +2088,11 @@
     function queueVoiceAudio(base64Data, playbackGeneration) {
       if (muted) return;
       voicePlayer.enqueueBase64(base64Data, playbackGeneration);
+    }
+    function queueVoiceAudioUrl(audioUrl, playbackGeneration) {
+      if (muted) return;
+      const headers = dashboardToken ? {Authorization: `Bearer ${dashboardToken}`} : {};
+      voicePlayer.enqueueUrl(audioUrl, {headers, cache: "force-cache"}, playbackGeneration);
     }
     voiceInputButton.addEventListener("click", () => {
       if (voiceState === "recording") {

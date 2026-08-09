@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
+import queue
 import random
 import re
 import signal
 import tempfile
 import threading
 import time
-from collections.abc import Iterable, Iterator
+from collections import OrderedDict
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -25,7 +28,14 @@ from argos.core.auth_coordinator import AuthCoordinator
 from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
-from argos.hardware.audio import AudioInputStream, AudioPlayer, Recorder, StreamRecorder, check_audio_level, cleanup_stale_recordings
+from argos.hardware.audio import (
+    AudioInputStream,
+    AudioPlayer,
+    Recorder,
+    StreamRecorder,
+    check_audio_level,
+    cleanup_stale_recordings,
+)
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
@@ -38,7 +48,6 @@ from argos.services.auth import AuthGate
 from argos.services.conversation_store import ConversationStore
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
-from argos.yaml_config import default_config_path
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
 from argos.services.network import read_wifi_status
@@ -46,12 +55,12 @@ from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.stt.whisper import FasterWhisperClient
-from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.cache import TTSCacheManager
+from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
 from argos.services.wakeword import WakeWordListener, save_false_positive_candidate
-
+from argos.yaml_config import default_config_path
 
 log = logging.getLogger(__name__)
 
@@ -59,6 +68,24 @@ log = logging.getLogger(__name__)
 # 旧名の後方互換エイリアス。既定フレーズは config 側に集約した。
 CODEX_PROGRESS_START_PHRASES = DEFAULT_AGENT_PROGRESS_START_PHRASES
 CODEX_PROGRESS_WAIT_PHRASES = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
+TERMINAL_PROGRESS_AUDIO_ASSET_LIMIT = 64
+
+
+def _select_progress_start_phrase(
+    user_text: str,
+    acknowledgement_client: AcknowledgementClient | None,
+    phrases: tuple[str, ...],
+) -> str:
+    """発話内容を考慮して処理開始時の短い案内文を選ぶ。"""
+    candidates = phrases or DEFAULT_AGENT_PROGRESS_START_PHRASES
+    if acknowledgement_client is not None and user_text:
+        return acknowledgement_client.select_phrase(user_text, candidates)
+    return random.choice(candidates)
+
+
+def _select_progress_wait_phrase(phrases: tuple[str, ...]) -> str:
+    """長時間処理中に使う短い案内文を候補から選ぶ。"""
+    return random.choice(phrases or DEFAULT_AGENT_PROGRESS_WAIT_PHRASES)
 
 
 class AgentProgressAnnouncer:
@@ -87,11 +114,13 @@ class AgentProgressAnnouncer:
 
     def start(self) -> None:
         """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
-        if self._acknowledgement_client is not None and self._user_text:
-            phrase = self._acknowledgement_client.select_phrase(self._user_text, self._start_phrases)
-            self._speak_status(phrase)
-        else:
-            self._speak_random(self._start_phrases)
+        self._speak_status(
+            _select_progress_start_phrase(
+                self._user_text,
+                self._acknowledgement_client,
+                self._start_phrases,
+            )
+        )
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -112,7 +141,7 @@ class AgentProgressAnnouncer:
 
     def _speak_random(self, phrases: tuple[str, ...]) -> None:
         """候補からランダムに1つ読み上げる。"""
-        self._speak_status(random.choice(phrases))
+        self._speak_status(_select_progress_wait_phrase(phrases))
 
 
 # 旧名の後方互換エイリアス。
@@ -194,6 +223,8 @@ class ArgosApp:
             [(slot.name, slot.provider, resolve_agent_slot_model(settings, slot)) for slot in settings.agent_slots]
         )
         self._dashboard_state.restore_histories(self._conversation_store.load_histories())
+        self._terminal_progress_audio_assets: OrderedDict[str, bytes] = OrderedDict()
+        self._terminal_progress_audio_lock = threading.Lock()
         self._sync_agent_display()
         self._dashboard_server = self._create_dashboard_server(settings)
         self._greeting = GreetingManager(settings.greeting_state_path) if settings.greeting_enabled else None
@@ -918,6 +949,115 @@ class ArgosApp:
         self._set_ready_or_locked()
         self._start_pending_slot_response()
 
+    def _terminal_progress_event(self, text: str, slot_key: str) -> dict[str, object] | None:
+        """短い進捗音声を内容ハッシュURLで参照できるSSEイベントにする。"""
+        wav_data = self._speech.synthesize_status_audio(text, slot_key)
+        if wav_data is None:
+            return None
+        asset_id = hashlib.sha256(wav_data).hexdigest()
+        with self._terminal_progress_audio_lock:
+            self._terminal_progress_audio_assets[asset_id] = wav_data
+            self._terminal_progress_audio_assets.move_to_end(asset_id)
+            while len(self._terminal_progress_audio_assets) > TERMINAL_PROGRESS_AUDIO_ASSET_LIMIT:
+                self._terminal_progress_audio_assets.popitem(last=False)
+        return {
+            "event": "progress",
+            "text": text,
+            "format": "wav",
+            "url": f"/api/terminal/progress-audio/{asset_id}.wav",
+        }
+
+    def _terminal_progress_audio(self, asset_id: str) -> bytes | None:
+        """登録済み進捗音声を取得し、LRU上の最終利用位置も更新する。"""
+        with self._terminal_progress_audio_lock:
+            wav_data = self._terminal_progress_audio_assets.get(asset_id)
+            if wav_data is not None:
+                self._terminal_progress_audio_assets.move_to_end(asset_id)
+            return wav_data
+
+    def _start_terminal_agent_stream(
+        self,
+        prompt: str,
+        slot_name: str,
+        slot_provider: str,
+    ) -> queue.Queue[str | Exception | None]:
+        """最初の応答待ち中も進捗イベントを返せるようエージェント読取を別スレッドで始める。"""
+        stream_queue: queue.Queue[str | Exception | None] = queue.Queue()
+
+        def read_agent_stream() -> None:
+            """エージェント差分または例外を順番どおりキューへ渡す。"""
+            try:
+                for delta in self._terminal_agent_stream(prompt, slot_name, slot_provider):
+                    stream_queue.put(delta)
+            except Exception as exc:
+                stream_queue.put(exc)
+            finally:
+                stream_queue.put(None)
+
+        threading.Thread(target=read_agent_stream, name="terminal-agent-stream", daemon=True).start()
+        return stream_queue
+
+    def _wait_for_terminal_first_delta(
+        self,
+        stream_queue: queue.Queue[str | Exception | None],
+        slot_key: str,
+    ) -> Generator[dict[str, object], None, str | None]:
+        """最初の応答差分まで待ち、長引く間はキャッシュ可能な進捗音声を返す。"""
+        timeout_seconds = max(0.0, self._settings.agent_progress_first_delay_seconds)
+        while True:
+            try:
+                item = stream_queue.get(timeout=timeout_seconds)
+            except queue.Empty:
+                phrase = _select_progress_wait_phrase(self._settings.agent_progress_wait_phrases)
+                progress_event = self._terminal_progress_event(phrase, slot_key)
+                if progress_event is not None:
+                    yield progress_event
+                timeout_seconds = max(0.1, self._settings.agent_progress_interval_seconds)
+                continue
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    def _terminal_queued_deltas(
+        self,
+        stream_queue: queue.Queue[str | Exception | None],
+        first_delta: str | None,
+    ) -> Iterator[str]:
+        """先読み済みの最初の差分と後続キューを一つの応答ストリームに戻す。"""
+        if first_delta is None:
+            return
+        yield first_delta
+        while True:
+            item = stream_queue.get()
+            if isinstance(item, Exception):
+                raise item
+            if item is None:
+                return
+            yield item
+
+    def _terminal_agent_deltas_with_progress(
+        self,
+        prompt: str,
+        slot_key: str,
+        target_slot: tuple[str, str],
+        want_audio: bool,
+    ) -> Generator[dict[str, object], None, Iterator[str]]:
+        """Web音声ターンだけ進捗音声を先行させ、後続の回答差分列を返す。"""
+        target_name, target_provider = target_slot
+        if not want_audio or not self._settings.agent_progress_voice:
+            return self._terminal_agent_stream(prompt, target_name, target_provider)
+        start_phrase = _select_progress_start_phrase(
+            prompt,
+            self._acknowledgement,
+            self._settings.agent_progress_start_phrases,
+        )
+        progress_event = self._terminal_progress_event(start_phrase, slot_key)
+        if progress_event is not None:
+            yield progress_event
+        stream_queue = self._start_terminal_agent_stream(prompt, target_name, target_provider)
+        first_delta = yield from self._wait_for_terminal_first_delta(stream_queue, slot_key)
+        return self._terminal_queued_deltas(stream_queue, first_delta)
+
     def _terminal_process_turn(
         self,
         wav_bytes: bytes | None = None,
@@ -1009,10 +1149,13 @@ class ArgosApp:
             seq = 0
             full_response = ""
             try:
-                deltas = self._terminal_agent_stream(
+                target_name = slot_name if has_explicit_slot else ""
+                target_provider = slot_provider if has_explicit_slot else ""
+                deltas = yield from self._terminal_agent_deltas_with_progress(
                     transcript,
-                    slot_name if has_explicit_slot else "",
-                    slot_provider if has_explicit_slot else "",
+                    slot_key,
+                    (target_name, target_provider),
+                    want_audio,
                 )
                 if want_audio:
                     # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
@@ -1473,6 +1616,10 @@ class _TerminalGateway:
     def slot_history(self, name: str, provider: str) -> dict[str, object]:
         """指定スロットの会話履歴を返す。"""
         return self._app._terminal_slot_history(name, provider)
+
+    def progress_audio(self, asset_id: str) -> bytes | None:
+        """ブラウザがURL参照した進捗音声を返す。"""
+        return self._app._terminal_progress_audio(asset_id)
 
     def process_turn(
         self,

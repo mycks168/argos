@@ -125,6 +125,35 @@ test("異なる世代の音声チャンクを受け付けない", async () => {
   assert.equal(player._context, null);
 });
 
+test("URL音声を指定したHTTPキャッシュ設定で取得して再生する", async () => {
+  const wav = createPcmWav([0, 100]);
+  const requests = [];
+  const player = new AudioPlayer({
+    AudioContextClass: FakeAudioContext,
+    fetch: async (url, options) => {
+      requests.push({url, options});
+      return {
+        ok: true,
+        status: 200,
+        arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength),
+      };
+    },
+  });
+  const playback = player.enqueueUrl(
+    "/api/terminal/progress-audio/hash.wav",
+    {cache: "force-cache", headers: {Authorization: "Bearer test"}},
+  );
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].options.cache, "force-cache");
+  assert.equal(requests[0].options.headers.Authorization, "Bearer test");
+  assert.equal(player._context.sources[0].didStart, true);
+
+  player.cancel();
+  await playback;
+});
+
 test("Safariのinterrupted状態から音声出力を復帰する", async () => {
   class InterruptedAudioContext extends FakeAudioContext {
     /** Safariで割り込みを受けた状態を再現する。 */

@@ -88,6 +88,7 @@
         || globalScope.webkitAudioContext;
       this._onStateChange = options.onStateChange || (() => {});
       this._onError = options.onError || (() => {});
+      this._fetch = options.fetch || (globalScope.fetch ? globalScope.fetch.bind(globalScope) : null);
       this._context = null;
       this._generation = 0;
       this._pendingCount = 0;
@@ -111,12 +112,22 @@
 
     /** 指定世代のBase64音声を順番に再生する。 */
     enqueueBase64(base64Data, generation = this._generation) {
+      return this._enqueuePlayback(() => this._playBase64(base64Data, generation), generation);
+    }
+
+    /** キャッシュ可能なURLの音声を指定世代の再生キューへ追加する。 */
+    enqueueUrl(url, fetchOptions = {}, generation = this._generation) {
+      return this._enqueuePlayback(() => this._playUrl(url, fetchOptions, generation), generation);
+    }
+
+    /** 世代を検証し、音声取得方法に依存しない共通キューへ登録する。 */
+    _enqueuePlayback(playback, generation) {
       if (generation !== this._generation) return Promise.resolve(false);
       this._pendingCount += 1;
       this._setState("playing");
       const queued = this._chain
         .catch(() => false)
-        .then(() => this._playBase64(base64Data, generation));
+        .then(playback);
       const settled = queued.catch(error => {
         if (generation === this._generation) this._onError(error);
         return false;
@@ -156,8 +167,24 @@
     /** Base64を検証・デコードして一つの音声チャンクを再生する。 */
     async _playBase64(base64Data, generation) {
       if (generation !== this._generation) return false;
-      await this.activate();
       const bytes = decodeBase64(base64Data);
+      return this._playBytes(bytes, generation);
+    }
+
+    /** HTTPキャッシュを利用してURLから音声を取得する。 */
+    async _playUrl(url, fetchOptions, generation) {
+      if (generation !== this._generation) return false;
+      if (!this._fetch) throw new Error("このブラウザは音声取得に対応していません");
+      const response = await this._fetch(url, fetchOptions);
+      if (!response.ok) throw new Error(`待機音声を取得できません: ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      return this._playBytes(bytes, generation);
+    }
+
+    /** 音声バイト列を検証・デコードして再生する。 */
+    async _playBytes(bytes, generation) {
+      if (generation !== this._generation) return false;
+      await this.activate();
       let audioBuffer;
       try {
         audioBuffer = createAudioBuffer(this._context, parsePcm16Wav(bytes));

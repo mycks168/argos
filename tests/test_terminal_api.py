@@ -3,18 +3,18 @@
 import base64
 import json
 import threading
+import time
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pytest
+from test_app import _patch_app, _settings
 
 from argos.config import Settings
 from argos.core.app import ArgosApp, _TerminalGateway
 from argos.services.dashboard.server import DashboardServer
 from argos.services.dashboard.state import DashboardState
-
-from test_app import _patch_app, _settings
 
 
 def _read_sse_events(response):
@@ -37,6 +37,7 @@ class FakeTerminalHandler:
     def __init__(self, turn_events):
         """process_turnで返すイベント列を保持する。"""
         self._turn_events = turn_events
+        self.progress_audio_assets = {}
         self.received_wav = None
         self.received_text = None
         self.want_audio = None
@@ -59,6 +60,10 @@ class FakeTerminalHandler:
         if name == "なし":
             raise ValueError("エージェントスロットが見つかりません")
         return {"messages": [{"role": "assistant", "text": f"{name}:{provider}"}]}
+
+    def progress_audio(self, asset_id):
+        """登録済みの進捗音声を返す。"""
+        return self.progress_audio_assets.get(asset_id)
 
     def process_turn(
         self,
@@ -134,6 +139,51 @@ def test_terminal_history_returns_selected_slot_messages():
         with _request(base_url + f"/api/terminal/history?{query}") as response:
             payload = json.loads(response.read())
         assert payload["messages"] == [{"role": "assistant", "text": "作業:codex"}]
+    finally:
+        server.stop()
+
+
+def test_terminal_progress_audio_is_private_and_immutable():
+    """進捗音声はBearer認証し、内容ハッシュURLへ長期キャッシュ指定を返す。"""
+    asset_id = "a" * 64
+    handler = FakeTerminalHandler([])
+    handler.progress_audio_assets[asset_id] = b"RIFF-WAV"
+    server, base_url = _start_server(handler)
+    audio_url = f"{base_url}/api/terminal/progress-audio/{asset_id}.wav"
+    try:
+        with _request(audio_url) as response:
+            assert response.read() == b"RIFF-WAV"
+            assert response.headers["Content-Type"] == "audio/wav"
+            assert response.headers["Cache-Control"] == "private, max-age=31536000, immutable"
+            assert response.headers["ETag"] == f'"{asset_id}"'
+        with pytest.raises(HTTPError) as unauthorized:
+            _request(audio_url, token="")
+        assert unauthorized.value.code == 401
+        with pytest.raises(HTTPError) as invalid:
+            _request(base_url + "/api/terminal/progress-audio/invalid.wav")
+        assert invalid.value.code == 404
+        with pytest.raises(HTTPError) as missing:
+            _request(base_url + f"/api/terminal/progress-audio/{'f' * 64}.wav")
+        assert missing.value.code == 404
+    finally:
+        server.stop()
+
+
+def test_terminal_progress_audio_supports_etag_revalidation():
+    """同一進捗音声の再検証には本文なしの304を返す。"""
+    asset_id = "b" * 64
+    handler = FakeTerminalHandler([])
+    handler.progress_audio_assets[asset_id] = b"RIFF-WAV"
+    server, base_url = _start_server(handler)
+    request = Request(
+        f"{base_url}/api/terminal/progress-audio/{asset_id}.wav",
+        headers={"Authorization": "Bearer secret", "If-None-Match": f'"{asset_id}"'},
+    )
+    try:
+        with pytest.raises(HTTPError) as not_modified:
+            urlopen(request, timeout=3)
+        assert not_modified.value.code == 304
+        assert not_modified.value.headers["Cache-Control"] == "private, max-age=31536000, immutable"
     finally:
         server.stop()
 
@@ -291,11 +341,12 @@ def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     )
     events = list(app._terminal_process_turn(b"RIFFDATA"))
     names = [e["event"] for e in events]
-    assert names == ["transcript", "text", "audio", "done"]
+    assert names == ["transcript", "progress", "text", "audio", "done"]
     assert events[0]["text"] == "こんにちは"  # FakeStt
-    assert events[1]["delta"] == "応答"  # FakeCodex.ask_stream の応答差分
-    assert base64.b64decode(events[2]["data"]) == b"WAV"
-    assert events[2]["seq"] == 0
+    assert str(events[1]["url"]).startswith("/api/terminal/progress-audio/")
+    assert events[2]["delta"] == "応答"  # FakeCodex.ask_stream の応答差分
+    assert base64.b64decode(events[3]["data"]) == b"WAV"
+    assert events[3]["seq"] == 0
     # ダッシュボードにユーザ発話と応答が記録される。
     snapshot = app._dashboard_state.snapshot()
     roles = [(m["role"], m["text"]) for m in snapshot["messages"]]
@@ -303,6 +354,81 @@ def test_app_terminal_process_turn_streams_and_records(monkeypatch):
     assert ("assistant", "応答") in roles
     # 端末PTTでキオスク画面のスクリーンセーバーが解除される。
     assert snapshot["display_activity"]["sequence"] >= 1
+
+
+def test_app_terminal_process_turn_streams_wait_progress(monkeypatch):
+    """Web音声ターンは開始案内に加え、最初の回答が遅い間も待機案内URLを返す。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_progress_first_delay_seconds": 0.01,
+            "agent_progress_interval_seconds": 10.0,
+        }
+    )
+    app = ArgosApp(settings)
+    monkeypatch.setattr(app._acknowledgement, "select_phrase", lambda *_args: "開始案内")
+    monkeypatch.setattr("argos.core.app._select_progress_wait_phrase", lambda _phrases: "待機案内")
+    monkeypatch.setattr(app._speech, "synthesize_status_audio", lambda text, _slot_key: text.encode())
+
+    def delayed_response(_prompt):
+        """最初の待機案内が発火してから回答差分を返す。"""
+        time.sleep(0.03)
+        yield "応答"
+
+    monkeypatch.setattr(app._agent, "ask_stream", delayed_response)
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+    progress_texts = [event["text"] for event in events if event["event"] == "progress"]
+
+    assert progress_texts == ["開始案内", "待機案内"]
+    assert events[-1] == {"event": "done", "text": "応答"}
+
+
+def test_app_terminal_progress_audio_uses_content_hash_and_lru(monkeypatch):
+    """同じ音声は同じURLになり、進捗音声のメモリ保持数は上限内に収まる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr("argos.core.app.TERMINAL_PROGRESS_AUDIO_ASSET_LIMIT", 2)
+    monkeypatch.setattr(app._speech, "synthesize_status_audio", lambda text, _slot_key: text.encode())
+
+    first_event = app._terminal_progress_event("一つ目", "codex\0作業")
+    duplicate_event = app._terminal_progress_event("一つ目", "codex\0作業")
+    app._terminal_progress_event("二つ目", "codex\0作業")
+    app._terminal_progress_event("三つ目", "codex\0作業")
+
+    assert first_event is not None
+    assert duplicate_event is not None
+    assert first_event["url"] == duplicate_event["url"]
+    assert len(app._terminal_progress_audio_assets) == 2
+    first_asset_id = str(first_event["url"]).removeprefix("/api/terminal/progress-audio/").removesuffix(".wav")
+    assert app._terminal_progress_audio(first_asset_id) is None
+    latest_asset_id = next(reversed(app._terminal_progress_audio_assets))
+    assert app._terminal_progress_audio(latest_asset_id) == "三つ目".encode()
+
+
+def test_app_terminal_progress_skips_failed_synthesis(monkeypatch):
+    """進捗音声の合成に失敗しても回答ターン自体は継続する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr(app._speech, "synthesize_status_audio", lambda *_args: None)
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+
+    assert all(event["event"] != "progress" for event in events)
+    assert events[-1] == {"event": "done", "text": "応答"}
+
+
+def test_app_terminal_process_turn_handles_empty_agent_stream(monkeypatch):
+    """エージェント差分が空でも進捗案内後に空のdoneで終了する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    monkeypatch.setattr(app._agent, "ask_stream", lambda _prompt: iter(()))
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+
+    assert events[1]["event"] == "progress"
+    assert events[-1] == {"event": "done", "text": ""}
 
 
 def test_app_terminal_process_text_turn_skips_stt_and_tts(monkeypatch):
@@ -412,6 +538,42 @@ def test_app_terminal_process_turn_agent_error(monkeypatch):
     assert events[-1]["event"] == "error"
 
 
+def test_app_terminal_process_turn_agent_stream_error(monkeypatch):
+    """別スレッドで最初の差分を待つ間のエージェント例外もerrorイベントへ変換する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    def broken_stream(_prompt):
+        """最初の差分を返す前に失敗するエージェントを再現する。"""
+        raise RuntimeError("agent down")
+
+    monkeypatch.setattr(app._agent, "ask_stream", broken_stream)
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+
+    assert events[0]["event"] == "transcript"
+    assert events[1]["event"] == "progress"
+    assert events[-1] == {"event": "error", "message": "エージェント応答の取得に失敗しました"}
+
+
+def test_app_terminal_process_turn_agent_stream_error_after_delta(monkeypatch):
+    """最初の差分後に別スレッドで起きた例外もerrorイベントへ変換する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    def partially_broken_stream(_prompt):
+        """一つ差分を返した後に失敗するエージェントを再現する。"""
+        yield "途中"
+        raise RuntimeError("agent down")
+
+    monkeypatch.setattr(app._agent, "ask_stream", partially_broken_stream)
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+
+    assert any(event.get("delta") == "途中" for event in events)
+    assert events[-1] == {"event": "error", "message": "エージェント応答の取得に失敗しました"}
+
+
 def test_app_terminal_list_and_next_slots(monkeypatch):
     """スロット一覧と巡回切替が現在スロットを反映する。"""
     _patch_app(monkeypatch)
@@ -465,6 +627,8 @@ def test_terminal_gateway_delegates(monkeypatch):
     assert gateway.list_slots()["current"]["name"] == "作業"
     assert gateway.next_slot()["current"]["name"] == "次"
     assert gateway.select_slot("作業", "codex")["current"]["name"] == "作業"
+    app._terminal_progress_audio_assets["asset"] = b"WAV"
+    assert gateway.progress_audio("asset") == b"WAV"
 
 
 # --- SpeechController.synthesize_response_stream ---
