@@ -1403,6 +1403,17 @@ def test_ptt_and_status_methods(monkeypatch, capsys):
     assert "次に切り替えました" in capsys.readouterr().out
 
 
+def test_dashboard_cancel_audio_action_invalidates_tts(monkeypatch):
+    """ダッシュボードのキャンセル操作で再生と進行中世代を無効化する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+
+    result = app._handle_dashboard_control({"action": "cancel_audio"})
+
+    assert result["microphone_enabled"] is True
+    assert app._audio.cancelled
+
+
 def test_wakeword_listener_starts_when_enabled(monkeypatch):
     """ウェイクワード有効時だけ監視サービスを開始する。"""
     _patch_app(monkeypatch)

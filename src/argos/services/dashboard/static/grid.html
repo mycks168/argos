@@ -76,6 +76,7 @@
     <div class="usage-dialog-header"><h2 id="usage-dialog-title">スロット別 Usage</h2><button id="usage-close" type="button" aria-label="Usageを閉じる">閉じる</button></div>
     <div id="usage-list" class="usage-list"></div>
   </dialog>
+  <script src="/static/browser_audio.js"></script>
   <script>
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const grid = document.getElementById("grid");
@@ -96,9 +97,14 @@
     let pttActiveKey = "";
     let pttReleasePending = false;
     let isMuted = localStorage.getItem("argos-grid-muted") === "true";
-    let audioContext = null;
-    let playbackChain = Promise.resolve();
-    let activeAudioSource = null;
+    let recordingPlaybackGeneration = 0;
+    const audioPlayer = new ArgosBrowserAudio.AudioPlayer({
+      onError: error => {
+        console.error("回答音声の再生に失敗しました", error);
+        const focusedTile = document.activeElement?.closest?.(".tile");
+        if (focusedTile) focusedTile.querySelector(".tile-status").textContent = "音声再生エラー";
+      },
+    });
     let latestState = null;
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
@@ -248,9 +254,10 @@
           const statusLabel = state.status?.code && state.status.code !== "ready" ? state.status.label : "実行中";
           tile.querySelector(".tile-status").textContent = statusLabel || "実行中";
         }
+        else if (recordingSlotKey === key && recorder?.state === "recording") tile.querySelector(".tile-status").textContent = "録音中";
         else if (tile.dataset.attention !== "true") tile.querySelector(".tile-status").textContent = "待機中";
         tile.querySelectorAll("button, textarea").forEach(element => {
-          element.disabled = Boolean(slot.busy) && key !== recordingSlotKey;
+          element.disabled = Boolean(slot.busy) && key !== recordingSlotKey && !element.classList.contains("voice");
         });
       }
       refreshHistories().catch(error => console.error("履歴更新に失敗しました", error));
@@ -285,7 +292,7 @@
       else usageDialog.setAttribute("open", "");
     }
 
-    async function sendTurn(slot, body) {
+    async function sendTurn(slot, body, playbackGeneration = audioPlayer.generation) {
       const tile = slotElements.get(slotKey(slot));
       const key = slotKey(slot);
       clearAttention(tile);
@@ -300,7 +307,7 @@
           body,
         });
         if (!response.ok) throw new Error(`送信に失敗しました: ${response.status}`);
-        didComplete = await consumeTurnEvents(response, key);
+        didComplete = await consumeTurnEvents(response, key, playbackGeneration);
       } catch (error) {
         tile.querySelector(".tile-status").textContent = error.message;
       } finally {
@@ -309,7 +316,7 @@
       if (didComplete) showCompletion(tile);
     }
 
-    async function consumeTurnEvents(response, key) {
+    async function consumeTurnEvents(response, key, playbackGeneration) {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let pending = "";
@@ -319,7 +326,7 @@
         if (!dataLine) return;
         const event = JSON.parse(dataLine.slice(6));
         if (event.event === "error") throw new Error(event.message || "処理に失敗しました");
-        if (event.event === "audio" && event.data) queueAudio(key, event.data);
+        if (event.event === "audio" && event.data) queueAudio(key, event.data, playbackGeneration);
         if (event.event === "done") didComplete = true;
       };
       while (true) {
@@ -346,6 +353,9 @@
         if (status) status.textContent = "録音中";
       }
       try {
+        pendingAudio.clear();
+        recordingPlaybackGeneration = audioPlayer.cancel();
+        await audioPlayer.activate();
         recorderStream = await navigator.mediaDevices.getUserMedia({
           audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
         });
@@ -364,7 +374,7 @@
             button.classList.remove("recording");
           }
           recordingSlotKey = "";
-          sendTurn(slot, audio);
+          sendTurn(slot, audio, recordingPlaybackGeneration);
         }, {once: true});
         recorder.start();
         const button = slotElements.get(key).querySelector(".voice");
@@ -380,15 +390,15 @@
       }
     }
 
-    function queueAudio(key, base64Data) {
+    function queueAudio(key, base64Data, playbackGeneration) {
       if (isMuted) return;
       const tile = slotElements.get(key);
       if (tile?.matches(":focus-within")) {
-        queueAudioPlayback(base64Data);
+        queueAudioPlayback(base64Data, playbackGeneration);
         return;
       }
       const chunks = pendingAudio.get(key) || [];
-      chunks.push(base64Data);
+      chunks.push({base64Data, playbackGeneration});
       pendingAudio.set(key, chunks);
     }
 
@@ -396,34 +406,11 @@
       if (isMuted) return;
       const chunks = pendingAudio.get(key) || [];
       pendingAudio.delete(key);
-      chunks.forEach(queueAudioPlayback);
+      chunks.forEach(chunk => queueAudioPlayback(chunk.base64Data, chunk.playbackGeneration));
     }
 
-    function queueAudioPlayback(base64Data) {
-      playbackChain = playbackChain
-        .then(() => playAudio(base64Data))
-        .catch(error => console.error("回答音声の再生に失敗しました", error));
-    }
-
-    async function playAudio(base64Data) {
-      if (isMuted) return;
-      audioContext ||= new (window.AudioContext || window.webkitAudioContext)();
-      await audioContext.resume();
-      const binary = atob(base64Data);
-      const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
-      const audioBuffer = await audioContext.decodeAudioData(bytes.buffer);
-      if (isMuted) return;
-      await new Promise(resolve => {
-        const source = audioContext.createBufferSource();
-        activeAudioSource = source;
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.addEventListener("ended", () => {
-          if (activeAudioSource === source) activeAudioSource = null;
-          resolve();
-        }, {once: true});
-        source.start();
-      });
+    function queueAudioPlayback(base64Data, playbackGeneration) {
+      audioPlayer.enqueueBase64(base64Data, playbackGeneration);
     }
 
     function applyMuteState() {
@@ -436,10 +423,19 @@
       localStorage.setItem("argos-grid-muted", String(isMuted));
       if (isMuted) {
         pendingAudio.clear();
-        activeAudioSource?.stop();
-        activeAudioSource = null;
+        audioPlayer.cancel();
       }
       applyMuteState();
+    }
+
+    function cancelGridAudio() {
+      pendingAudio.clear();
+      audioPlayer.cancel();
+      fetch("/api/control", {
+        method: "POST",
+        headers: authHeaders({"Content-Type": "application/json"}),
+        body: JSON.stringify({action: "cancel_audio"}),
+      }).catch(error => console.error("読み上げ停止に失敗しました", error));
     }
 
     function isEditableTarget(target) {
@@ -461,9 +457,10 @@
       const key = pttKey(event);
       if (!key || event.repeat || pttActiveKey || isEditableTarget(event.target)) return;
       const slot = focusedSlot();
-      if (!slot || slotElements.get(slotKey(slot))?.dataset.busy === "true") return;
+      if (!slot) return;
       if (key === "Space") event.preventDefault();
       pttActiveKey = key;
+      cancelGridAudio();
       toggleRecording(slot, true);
     });
 

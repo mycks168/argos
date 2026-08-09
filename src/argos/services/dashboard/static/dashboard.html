@@ -1251,6 +1251,7 @@
     </section>
   </main>
 
+  <script src="/static/browser_audio.js"></script>
   <script>
     const messages = document.getElementById("messages");
     const textComposer = document.getElementById("text-composer");
@@ -1323,15 +1324,32 @@
     let followLatestMessage = true;
     let currentAgentSlotKey = "";
     let currentAgentSlotBusy = false;
-    const inFlightTextSlots = new Set();
+    const inFlightTextSlots = new Map();
     let voiceRecorder = null;
     let voiceStream = null;
     let voiceChunks = [];
     let voiceState = "idle";
     let voiceSlotKey = "";
+    let voiceOperationSequence = 0;
+    let voiceRecorderOperation = 0;
+    let voiceRecorderPlaybackGeneration = 0;
     let pttReleasePending = false;
-    let voiceAudioContext = null;
-    let voicePlaybackChain = Promise.resolve();
+    let voicePlaybackState = "idle";
+    const voicePlayer = new ArgosBrowserAudio.AudioPlayer({
+      onStateChange: playbackState => {
+        voicePlaybackState = playbackState;
+        if (voiceState === "recording") return;
+        if (playbackState === "playing") {
+          setVoiceState("playing");
+          return;
+        }
+        setVoiceState(isSlotTurnInFlight(currentAgentSlotKey) ? "processing" : "idle");
+      },
+      onError: error => {
+        console.error("回答音声の再生に失敗しました", error);
+        setTextComposerError(`回答音声を再生できません: ${error.message || error}`);
+      },
+    });
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
     let latestNotifications = [];
     
@@ -1570,10 +1588,16 @@
       currentAgentSlotKey = activeAgentSlot
         ? `${activeAgentSlot.provider || ""}\u0000${activeAgentSlot.name || ""}` : "";
       currentAgentSlotBusy = Boolean(activeAgentSlot?.busy);
-      const displayStatus = voiceState === "recording"
-        ? {code: "listening", label: "録音中"}
-        : currentAgentSlotBusy && state.status.code === "ready"
-        ? {code: "thinking", label: "考え中"} : state.status;
+      const browserStatus = {
+        recording: {code: "listening", label: "録音中"},
+        processing: {code: "thinking", label: "音声を処理中"},
+        playing: {code: "speaking", label: "回答を再生中"},
+      }[voiceState];
+      const displayStatus = browserStatus || (
+        currentAgentSlotBusy && state.status.code === "ready"
+          ? {code: "thinking", label: "考え中"}
+          : state.status
+      );
       status.dataset.code = displayStatus.code;
       document.body.dataset.statusCode = displayStatus.code || "ready";
       statusLabel.textContent = displayStatus.label;
@@ -1839,11 +1863,25 @@
     document.addEventListener("keydown", event => {
       if (event.key === "Escape") setSlotMenuOpen(false);
     });
+    function isSlotTurnInFlight(slotKey) {
+      return (inFlightTextSlots.get(slotKey) || 0) > 0;
+    }
+    function beginSlotTurn(slotKey) {
+      inFlightTextSlots.set(slotKey, (inFlightTextSlots.get(slotKey) || 0) + 1);
+    }
+    function finishSlotTurn(slotKey) {
+      const remaining = (inFlightTextSlots.get(slotKey) || 0) - 1;
+      if (remaining > 0) {
+        inFlightTextSlots.set(slotKey, remaining);
+      } else {
+        inFlightTextSlots.delete(slotKey);
+      }
+    }
     async function sendTextTurn(value) {
       const text = value.trim();
       const slotKey = currentAgentSlotKey;
-      if (!text || !slotKey || currentAgentSlotBusy || inFlightTextSlots.has(slotKey)) return;
-      inFlightTextSlots.add(slotKey);
+      if (!text || !slotKey || currentAgentSlotBusy || isSlotTurnInFlight(slotKey)) return;
+      beginSlotTurn(slotKey);
       textInput.value = "";
       textInput.style.height = "auto";
       setTextComposerError("");
@@ -1865,7 +1903,7 @@
           textInput.value = text;
         }
       } finally {
-        inFlightTextSlots.delete(slotKey);
+        finishSlotTurn(slotKey);
         updateTextComposerAvailability();
         if (currentAgentSlotKey === slotKey) textInput.focus();
       }
@@ -1897,12 +1935,10 @@
       return error && error.message ? error.message : "送信できなかったよ";
     }
     function updateTextComposerAvailability() {
-      const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || inFlightTextSlots.has(currentAgentSlotKey);
+      const unavailable = !currentAgentSlotKey || currentAgentSlotBusy || isSlotTurnInFlight(currentAgentSlotKey);
       textInput.disabled = false;
       textSendButton.disabled = unavailable;
-      voiceInputButton.disabled = (voiceState !== "recording" && unavailable)
-        || voiceState === "processing"
-        || voiceState === "playing";
+      voiceInputButton.disabled = !currentAgentSlotKey && voiceState !== "recording";
     }
     function setVoiceState(nextState) {
       voiceState = nextState;
@@ -1938,7 +1974,7 @@
       return candidates.find(type => MediaRecorder.isTypeSupported(type)) || "";
     }
     async function startVoiceRecording(isPushToTalk = false) {
-      if (!currentAgentSlotKey || currentAgentSlotBusy) return;
+      if (!currentAgentSlotKey) return;
       if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
         setTextComposerError("このブラウザは音声録音に対応していないよ");
         return;
@@ -1946,9 +1982,11 @@
       setTextComposerError("");
       // 物理PTTと同じく、マイク許可待ちの間も押下を認識したことを表示する。
       setVoiceState("recording");
+      const operation = ++voiceOperationSequence;
+      voiceRecorderOperation = operation;
+      voiceRecorderPlaybackGeneration = voicePlayer.cancel();
       try {
-        voiceAudioContext ||= new (window.AudioContext || window.webkitAudioContext)();
-        await voiceAudioContext.resume();
+        await voicePlayer.activate();
         voiceStream = await navigator.mediaDevices.getUserMedia({
           audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
         });
@@ -1956,7 +1994,6 @@
         voiceRecorder = new MediaRecorder(voiceStream, mimeType ? {mimeType} : undefined);
         voiceChunks = [];
         voiceSlotKey = currentAgentSlotKey;
-        voicePlaybackChain = Promise.resolve();
         voiceRecorder.addEventListener("dataavailable", event => {
           if (event.data.size) voiceChunks.push(event.data);
         });
@@ -1990,6 +2027,9 @@
       await stopped;
       stopVoiceStream();
       const audio = new Blob(voiceChunks, {type: recorder.mimeType || "audio/webm"});
+      const operation = voiceRecorderOperation;
+      const playbackGeneration = voiceRecorderPlaybackGeneration;
+      const slotKey = voiceSlotKey;
       voiceRecorder = null;
       voiceChunks = [];
       if (!audio.size) {
@@ -1997,10 +2037,10 @@
         setTextComposerError("音声を録音できなかったよ");
         return;
       }
-      await sendVoiceTurn(audio, voiceSlotKey);
+      await sendVoiceTurn(audio, slotKey, operation, playbackGeneration);
     }
-    async function sendVoiceTurn(audio, slotKey) {
-      inFlightTextSlots.add(slotKey);
+    async function sendVoiceTurn(audio, slotKey, operation, playbackGeneration) {
+      beginSlotTurn(slotKey);
       setVoiceState("processing");
       setTextComposerError("");
       try {
@@ -2009,18 +2049,19 @@
         const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: audio});
         if (!response.ok) throw new Error(await describeTurnResponseError(response));
         if (!response.body) throw new Error("応答ストリームを取得できませんでした");
-        await consumeVoiceTurnEvents(response.body);
-        await voicePlaybackChain;
+        await consumeVoiceTurnEvents(response.body, playbackGeneration);
       } catch (error) {
         console.error("Failed to send voice turn:", error);
         setTextComposerError(describeTurnSendError(error));
       } finally {
-        inFlightTextSlots.delete(slotKey);
-        voiceSlotKey = "";
-        setVoiceState("idle");
+        finishSlotTurn(slotKey);
+        if (voiceOperationSequence === operation) {
+          voiceSlotKey = "";
+          setVoiceState(voicePlaybackState === "playing" ? "playing" : "idle");
+        }
       }
     }
-    async function consumeVoiceTurnEvents(streamBody) {
+    async function consumeVoiceTurnEvents(streamBody, playbackGeneration) {
       const reader = streamBody.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
@@ -2033,34 +2074,22 @@
           const dataLine = block.split("\n").find(line => line.startsWith("data: "));
           if (!dataLine) continue;
           const event = JSON.parse(dataLine.slice(6));
-          if (event.event === "audio" && event.data) queueVoiceAudio(event.data);
+          if (event.event === "audio" && event.data) queueVoiceAudio(event.data, playbackGeneration);
           if (event.event === "error") throw new Error(event.message || "音声処理に失敗したよ");
         }
         if (done) break;
       }
     }
-    function queueVoiceAudio(base64Data) {
-      setVoiceState("playing");
-      voicePlaybackChain = voicePlaybackChain.then(() => playVoiceWav(base64Data));
-    }
-    async function playVoiceWav(base64Data) {
-      const binary = atob(base64Data);
-      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
-      const audioBuffer = await voiceAudioContext.decodeAudioData(bytes.buffer);
-      await new Promise(resolve => {
-        const source = voiceAudioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(voiceAudioContext.destination);
-        source.addEventListener("ended", resolve, {once: true});
-        source.start();
-      });
+    function queueVoiceAudio(base64Data, playbackGeneration) {
+      voicePlayer.enqueueBase64(base64Data, playbackGeneration);
     }
     voiceInputButton.addEventListener("click", () => {
-      if (voiceState === "idle") {
-        startVoiceRecording();
-      } else if (voiceState === "recording") {
+      if (voiceState === "recording") {
         stopVoiceRecording();
+        return;
       }
+      sendControl("cancel_audio").catch(error => console.error("Failed to cancel audio:", error));
+      startVoiceRecording();
     });
     textComposer.addEventListener("submit", event => {
       event.preventDefault();
@@ -2093,9 +2122,10 @@
       const isPttKey = event.code === "Space" || (event.key && /^F(1[3-9]|2[0-4])$/.test(event.key));
       if (isPttKey) {
         if (event.code === "Space") event.preventDefault();
-        if (voiceState === "idle" && !currentAgentSlotBusy && currentAgentSlotKey) {
+        if (voiceState !== "recording" && currentAgentSlotKey) {
           pttActiveKey = event.code || event.key;
           pttReleasePending = false;
+          sendControl("cancel_audio").catch(error => console.error("Failed to cancel audio:", error));
           startVoiceRecording(true);
         }
       }
