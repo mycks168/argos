@@ -326,9 +326,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"audio/mp4;codecs=mp4a.40.2"' in html
         assert "navigator.mediaDevices.getUserMedia" in html
         assert '\"Accept\": \"text/event-stream, audio/wav\"' in html
-        assert "consumeVoiceTurnEvents(response.body)" in html
-        assert "const inFlightTextSlots = new Set();" in html
-        assert "inFlightTextSlots.has(currentAgentSlotKey)" in html
+        assert "consumeVoiceTurnEvents(response.body, playbackGeneration)" in html
+        assert "const inFlightTextSlots = new Map();" in html
+        assert "isSlotTurnInFlight(currentAgentSlotKey)" in html
         assert "textInput.disabled = false;" in html
         # 送信が母艦へ届かなかったときに理由を画面へ出す（端末のエラー表示に合わせる）。
         assert 'id="text-composer-error"' in html
@@ -337,6 +337,22 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "await describeTurnResponseError(response)" in html
         assert "let pttActiveKey = null;" in html
         assert 'const isPttKey = event.code === "Space"' in html
+        assert 'setVoiceState("recording");' in html
+        assert 'voiceState === "recording"' in html
+        assert 'statusLabel.textContent = "録音中";' in html
+        assert 'if (!currentAgentSlotKey) return;' in html
+        assert 'voiceState !== "recording" && currentAgentSlotKey' in html
+        assert 'async function startVoiceRecording(isPushToTalk = false)' in html
+        assert 'async function stopVoiceRecording(isPushToTalk = false)' in html
+        assert 'let pttReleasePending = false;' in html
+        assert 'sendControl("cancel_audio")' in html
+        assert "new ArgosBrowserAudio.AudioPlayer" in html
+        assert "voicePlayer.cancel()" in html
+        assert "voicePlayer.enqueueBase64(base64Data, playbackGeneration)" in html
+        assert "await voicePlaybackChain" not in html
+        assert 'recording: {code: "listening", label: "録音中"}' in html
+        assert 'playing: {code: "speaking", label: "回答を再生中"}' in html
+        assert '<script src="/static/browser_audio.js"></script>' in html
         assert 'data-layout="standard"' in html
 
         with urlopen(base_url + "/sp", timeout=2) as response:
@@ -377,7 +393,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'tile.querySelector(".tile-status").textContent = "回答完了"' in grid_html
         assert 'tile.querySelector(".tile-status").textContent = "実行中"' in grid_html
         assert 'state.status.code !== "ready"' in grid_html
-        assert "consumeTurnEvents(response, key)" in grid_html
+        assert "consumeTurnEvents(response, key, playbackGeneration)" in grid_html
         assert "if (result.done && pending.trim()) processBlock(pending);" in grid_html
         assert "const processBlock = block =>" in grid_html
         assert "tile.tabIndex = 0" in grid_html
@@ -406,11 +422,26 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'event.key !== "Escape"' in grid_html
         assert 'id="mute-button"' in grid_html
         assert 'event.code === "Space"' in grid_html
+        assert 'const status = slotElements.get(key)?.querySelector(".tile-status");' in grid_html
+        assert 'if (status) status.textContent = "録音中";' in grid_html
+        assert 'if (isPushToTalk && pttReleasePending)' in grid_html
         assert '/^F(1[3-9]|2[0-4])$/' in grid_html
         assert "playPendingAudio(key)" in grid_html
         assert 'event.event === "audio" && event.data' in grid_html
-        assert 'localStorage.setItem("argos-grid-muted"' in grid_html
+        assert 'action: "cancel_audio"' in grid_html
+        assert "function cancelGridAudio()" in grid_html
+        assert "new ArgosBrowserAudio.AudioPlayer" in grid_html
+        assert "audioPlayer.enqueueBase64(base64Data, playbackGeneration)" in grid_html
+        assert '<script src="/static/browser_audio.js"></script>' in grid_html
+        assert 'recordingSlotKey === key && recorder?.state === "recording"' in grid_html
+        assert '!element.classList.contains("voice")' in grid_html
         assert 'audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}' in grid_html
+
+        with urlopen(base_url + "/static/browser_audio.js", timeout=2) as response:
+            assert response.headers["Content-Type"] == "application/javascript; charset=utf-8"
+            browser_audio = response.read().decode("utf-8")
+        assert "class AudioPlayer" in browser_audio
+        assert "function parsePcm16Wav" in browser_audio
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

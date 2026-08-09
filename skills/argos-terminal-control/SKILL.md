@@ -20,33 +20,33 @@ Good replies:
 Send a command to the visible local tmux:
 
 ```bash
-/home/yuki/.codex/skills/argos-terminal-control/scripts/send-local-tmux.sh "ls"
+~/.codex/skills/argos-terminal-control/scripts/send-local-tmux.sh "ls"
 ```
 
 Restore the dashboard center pane to local ttyd + tmux:
 
 ```bash
-/home/yuki/.codex/skills/argos-terminal-control/scripts/show-local-ttyd.sh
+~/.codex/skills/argos-terminal-control/scripts/show-local-ttyd.sh
 ```
 
 ## Workflow
 
 1. If the user asks to run a shell command, send it to `argos-terminal` with `scripts/send-local-tmux.sh`.
 2. If the terminal pane is broken, blank, or connected to the wrong host, run `scripts/show-local-ttyd.sh`.
-3. If the user asks to leave an inner remote tmux session, send `C-b d` to `argos-terminal`, then confirm the pane returns to a local `yuki@thyme` prompt.
-4. If the user asks to log out from clove, prefer detaching the inner tmux first, then allow the SSH command to close. Do not start a new direct `ttyd -> ssh -> clove` connection unless explicitly requested.
+3. If the user asks to leave an inner remote tmux session, send `C-b d` to `argos-terminal`, then confirm the pane returns to the local shell prompt.
+4. If the user asks to log out from a remote host, prefer detaching the inner tmux first, then allow the SSH command to close. Do not start a new direct `ttyd -> ssh -> <remote host>` connection unless explicitly requested.
 5. After visible terminal operations, do not summarize output unless the user asks. One short completion sentence is enough.
 
 ## Local Details
 
-- ARGOS repo: `/home/yuki/argos`
+- ARGOS repo: `~/argos`
 - tmux session: `argos-terminal`
 - ttyd bind: `127.0.0.1:7681`
 - dashboard URL: `http://127.0.0.1:8765`
 - dashboard event API: `POST /api/events` with `type: "overlay"`
-- dashboard token source: `/home/yuki/argos/.env`, key `ARGOS_DASHBOARD_TOKEN`
+- dashboard token source: `~/argos/.env`, key `ARGOS_DASHBOARD_TOKEN`
 
-Never `source` `/home/yuki/argos/.env`. Parse only the needed key because the file can contain shell-sensitive values.
+Never `source` `~/argos/.env`. Parse only the needed key because the file can contain shell-sensitive values.
 
 ## Verification
 
