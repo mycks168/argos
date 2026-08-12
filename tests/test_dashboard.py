@@ -383,7 +383,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert ".messages { min-height: 0; overflow: auto; padding: 6px 8px; }" in grid_html
         assert ".message { width: fit-content; max-width: 92%; margin: 3px 0; padding: 4px 8px;" in grid_html
         assert 'const text = String(message.text ?? "").trim();' in grid_html
-        assert '>${escapeHtml(text)}</div>`' in grid_html
+        assert '>${renderMessageText(text)}</div>`' in grid_html
         assert '#69b7e4' in grid_html
         assert '#f4d35e0d' in grid_html
         assert 'background: #070b0f' in grid_html
@@ -433,6 +433,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "new ArgosBrowserAudio.AudioPlayer" in grid_html
         assert "audioPlayer.enqueueBase64(base64Data, playbackGeneration)" in grid_html
         assert '<script src="/static/browser_audio.js"></script>' in grid_html
+        assert '<script src="/static/message_text.js"></script>' in grid_html
         assert 'recordingSlotKey === key && recorder?.state === "recording"' in grid_html
         assert '!element.classList.contains("voice")' in grid_html
         assert 'audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}' in grid_html
@@ -442,6 +443,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
             browser_audio = response.read().decode("utf-8")
         assert "class AudioPlayer" in browser_audio
         assert "function parsePcm16Wav" in browser_audio
+
+        with urlopen(base_url + "/static/message_text.js", timeout=2) as response:
+            assert response.headers["Content-Type"] == "application/javascript; charset=utf-8"
+            message_text = response.read().decode("utf-8")
+        assert "ArgosMessageText" in message_text
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

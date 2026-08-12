@@ -10,6 +10,8 @@ from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
+from argos.services.response_text import strip_citations
+
 
 def _now_iso() -> str:
     """現在時刻をISO 8601形式で返す。"""
@@ -265,7 +267,7 @@ class DashboardState:
             self._ensure_slot_locked(name, provider)
             for item in messages[-self._max_messages :]:
                 role = str(item.get("role", "")).strip()
-                text = str(item.get("text", ""))
+                text, _ = strip_citations(str(item.get("text", "")))
                 if role not in {"user", "assistant"} or not text:
                     continue
                 message_id = str(item.get("id", "")).strip() or uuid.uuid4().hex
