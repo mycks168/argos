@@ -255,7 +255,7 @@ class Settings:
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
-    remote_argos_timeout_seconds: float = 600.0
+    remote_argos_timeout_seconds: float = 1800.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
     voicevox_accept_opus: bool = False
@@ -279,7 +279,7 @@ class Settings:
     wakeword_interval_seconds: float = 0.25
     wakeword_chunk_ms: int = 80
     wakeword_record_min_seconds: float = 1.0
-    wakeword_record_max_seconds: float = 12.0
+    wakeword_record_max_seconds: float = 60.0
     wakeword_record_silence_seconds: float = 1.0
     wakeword_pre_roll_seconds: float = 3.0
     wakeword_min_actual_seconds: float = 0.2
@@ -519,7 +519,7 @@ def load_settings() -> Settings:
         wakeword_interval_seconds=float(os.environ.get("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.25")),
         wakeword_chunk_ms=int(os.environ.get("ARGOS_WAKEWORD_CHUNK_MS", "80")),
         wakeword_record_min_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.0")),
-        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "12.0")),
+        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "60.0")),
         wakeword_record_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "1.0")),
         wakeword_pre_roll_seconds=float(os.environ.get("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "3.0")),
         wakeword_min_actual_seconds=float(os.environ.get("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.2")),
@@ -563,7 +563,7 @@ def load_settings() -> Settings:
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
-        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "600")),
+        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "1800")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),

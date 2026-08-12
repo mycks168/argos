@@ -79,6 +79,13 @@ def test_load_agent_runner_settings(monkeypatch):
     assert settings.agent_runner_state_dir == "/tmp/runner"
 
 
+def test_load_remote_argos_timeout(monkeypatch):
+    """リモートARGOSの長時間応答待ち設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "0")
+
+    assert load_settings().remote_argos_timeout_seconds == 0.0
+
+
 def test_load_agent_usage_commands(monkeypatch):
     """エージェント別の利用枠取得コマンドを読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_USAGE_COMMAND_CODEX", "/tmp/codex-usage")

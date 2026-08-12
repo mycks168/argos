@@ -2,20 +2,24 @@
 
 from __future__ import annotations
 
-import os
-import json
 import hashlib
+import json
 import logging
+import os
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
 from collections.abc import Generator
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.session_store import SlotSessionStore, slot_key
-
+from argos.services.codex.citations import (
+    format_citation_sources,
+    load_citation_sources,
+)
+from argos.services.response_text import CitationStreamFilter, strip_citations
 
 log = logging.getLogger(__name__)
 
@@ -27,6 +31,16 @@ class CodexConversation:
     slot: AgentSlot
     started: bool = False
     session_id: str = ""
+
+
+@dataclass
+class CodexOutputState:
+    """一回のCodex実行で受け取った本文と引用状態を保持する。"""
+
+    stream_mode: bool
+    emitted: str = ""
+    citation_filter: CitationStreamFilter = field(default_factory=CitationStreamFilter)
+    citation_ids: tuple[str, ...] = ()
 
 
 class CodexSessionStore(SlotSessionStore):
@@ -126,82 +140,137 @@ class CodexCliClient:
         # "stream"(既定)は途中経過を逐次読み上げる。"final"は途中経過を読み上げず、
         # 完了後のまとめだけを1回読み上げる。Codexの完了後の出力は途中経過の続きではなく
         # 全体を再構成したまとめのことがあり、両方読み上げると同じ内容を2回話してしまうため。
-        stream_mode = self._settings.codex_stream_mode != "final"
+        output_state = CodexOutputState(stream_mode=self._settings.codex_stream_mode != "final")
         try:
-            command = self._build_command(conversation, output_path.name)
-            env = self._build_env(conversation.slot)
-            store_path = _session_store_path(self._settings)
-            log.info(
-                "Codex CLI 実行: slot=%s cwd=%s codex_home=%s store=%s command=%s",
-                conversation.slot.name,
-                conversation.slot.cwd,
-                env.get("CODEX_HOME", ""),
-                store_path,
-                command,
-            )
-            proc = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                cwd=conversation.slot.cwd,
-                env=env,
-            )
-            assert proc.stdin is not None
-            assert proc.stdout is not None
-            proc.stdin.write(prompt)
-            proc.stdin.close()
-
-            emitted = ""
-            for line in proc.stdout:
-                event = _load_event(line)
-                session_id = _extract_session_id(event)
-                if session_id and session_id != conversation.session_id:
-                    conversation.session_id = session_id
-                    log.info(
-                        "Codex セッションIDを保存: slot=%s session_id=%s store=%s",
-                        conversation.slot.name,
-                        session_id,
-                        store_path,
-                    )
-                    self._store.save(_slot_key(conversation.slot), session_id)
-                delta = _extract_text_delta(event, emitted)
-                if not delta:
-                    continue
-                emitted += delta
-                if stream_mode:
-                    yield delta
-
-            stderr = proc.stderr.read() if proc.stderr else ""
-            return_code = proc.wait(timeout=10)
-            if return_code != 0:
-                raise RuntimeError(f"codex-cli エラー {return_code}: {stderr[-1000:]}")
-            if not conversation.session_id:
-                session_id = _load_recent_session_id(conversation.slot, self._settings, started_at)
-                if session_id:
-                    conversation.session_id = session_id
-                    log.info(
-                        "Codex セッションIDを保存: slot=%s session_id=%s store=%s source=session-file",
-                        conversation.slot.name,
-                        session_id,
-                        store_path,
-                    )
-                    self._store.save(_slot_key(conversation.slot), session_id)
+            process, store_path = self._start_process(conversation, output_path.name, prompt)
+            yield from self._read_process_events(process, conversation, store_path, output_state)
+            self._wait_for_process(process)
+            self._ensure_session_id(conversation, started_at, store_path)
             conversation.started = True
             text = Path(output_path.name).read_text(encoding="utf-8").strip()
-            if not stream_mode:
-                # finalモード: 途中経過は読み上げず、完了後のまとめだけを1回返す。
-                if text:
-                    yield text
-            elif not emitted and text:
-                # streamモードで途中経過が一切取れなかった場合のフォールバック。
-                yield text
+            yield from self._finish_response(output_state, text)
+            source_text = self._citation_source_text(conversation.session_id, output_state.citation_ids)
+            if source_text:
+                yield source_text
         finally:
             try:
                 os.remove(output_path.name)
             except OSError:
                 pass
+
+    def _start_process(
+        self,
+        conversation: CodexConversation,
+        output_path: str,
+        prompt: str,
+    ) -> tuple[subprocess.Popen[str], Path]:
+        """Codex CLIプロセスを開始し、標準入力へ依頼本文を渡す。"""
+        command = self._build_command(conversation, output_path)
+        environment = self._build_env(conversation.slot)
+        store_path = _session_store_path(self._settings)
+        log.info(
+            "Codex CLI 実行: slot=%s cwd=%s codex_home=%s store=%s command=%s",
+            conversation.slot.name,
+            conversation.slot.cwd,
+            environment.get("CODEX_HOME", ""),
+            store_path,
+            command,
+        )
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=conversation.slot.cwd,
+            env=environment,
+        )
+        assert process.stdin is not None
+        process.stdin.write(prompt)
+        process.stdin.close()
+        return process, store_path
+
+    def _read_process_events(
+        self,
+        process: subprocess.Popen[str],
+        conversation: CodexConversation,
+        store_path: Path,
+        output_state: CodexOutputState,
+    ) -> Generator[str, None, None]:
+        """Codex JSONLからセッションIDと未出力の表示本文を取り出す。"""
+        assert process.stdout is not None
+        for line in process.stdout:
+            event = _load_event(line)
+            self._save_event_session_id(event, conversation, store_path)
+            delta = _extract_text_delta(event, output_state.emitted)
+            if not delta:
+                continue
+            output_state.emitted += delta
+            if output_state.stream_mode:
+                visible_delta = output_state.citation_filter.push(delta)
+                if visible_delta:
+                    yield visible_delta
+
+    def _save_event_session_id(
+        self,
+        event: dict,
+        conversation: CodexConversation,
+        store_path: Path,
+    ) -> None:
+        """イベントで新しいセッションIDを受け取った場合だけ永続化する。"""
+        session_id = _extract_session_id(event)
+        if not session_id or session_id == conversation.session_id:
+            return
+        conversation.session_id = session_id
+        log.info(
+            "Codex セッションIDを保存: slot=%s session_id=%s store=%s",
+            conversation.slot.name,
+            session_id,
+            store_path,
+        )
+        self._store.save(_slot_key(conversation.slot), session_id)
+
+    @staticmethod
+    def _wait_for_process(process: subprocess.Popen[str]) -> None:
+        """Codex CLIの終了を確認し、失敗時は標準エラーを含めて通知する。"""
+        stderr = process.stderr.read() if process.stderr else ""
+        return_code = process.wait(timeout=10)
+        if return_code != 0:
+            raise RuntimeError(f"codex-cli エラー {return_code}: {stderr[-1000:]}")
+
+    def _ensure_session_id(
+        self,
+        conversation: CodexConversation,
+        started_at: float,
+        store_path: Path,
+    ) -> None:
+        """標準出力にIDがない場合だけ最新セッションファイルから補完する。"""
+        if conversation.session_id:
+            return
+        session_id = _load_recent_session_id(conversation.slot, self._settings, started_at)
+        if not session_id:
+            return
+        conversation.session_id = session_id
+        log.info(
+            "Codex セッションIDを保存: slot=%s session_id=%s store=%s source=session-file",
+            conversation.slot.name,
+            session_id,
+            store_path,
+        )
+        self._store.save(_slot_key(conversation.slot), session_id)
+
+    @staticmethod
+    def _finish_response(output_state: CodexOutputState, text: str) -> Generator[str, None, None]:
+        """出力方式に応じて最終本文を補完し、引用参照IDを確定する。"""
+        if not output_state.stream_mode or not output_state.emitted:
+            visible_text, output_state.citation_ids = strip_citations(text)
+            if visible_text:
+                yield visible_text
+            return
+        output_state.citation_ids = output_state.citation_filter.citation_ids
+        pending_text = output_state.citation_filter.finish()
+        if pending_text:
+            yield pending_text
 
     def reset_current(self) -> None:
         """現在のスロットを新規会話として扱う。"""
@@ -251,6 +320,16 @@ class CodexCliClient:
         if self._settings.codex_home:
             env["CODEX_HOME"] = self._settings.codex_home
         return env
+
+    def _citation_source_text(self, session_id: str, citation_ids: tuple[str, ...]) -> str:
+        """Codexセッションの参照IDを画面表示用の出典一覧へ変換する。"""
+        codex_home = Path(
+            self._settings.codex_home
+            or os.environ.get("CODEX_HOME", "")
+            or Path.home() / ".codex"
+        ).expanduser()
+        sources = load_citation_sources(codex_home, session_id, citation_ids)
+        return format_citation_sources(sources)
 
 
 def _load_event(line: str) -> dict:

@@ -24,3 +24,14 @@ def test_grid_queues_progress_audio_for_target_tile() -> None:
     assert 'event.event === "progress" && event.url' in grid_html
     assert "queueAudioUrl(key, event.url, playbackGeneration)" in grid_html
     assert '{headers: authHeaders({}), cache: "force-cache"}' in grid_html
+
+
+def test_dashboards_render_source_urls_as_safe_links() -> None:
+    """通常画面とGridは共通処理で回答中の出典URLをリンク化する。"""
+    dashboard_html = _static_html("dashboard.html")
+    grid_html = _static_html("grid.html")
+
+    assert '<script src="/static/message_text.js"></script>' in dashboard_html
+    assert '<script src="/static/message_text.js"></script>' in grid_html
+    assert "renderMessageText(item.text)" in dashboard_html
+    assert "renderMessageText(text)" in grid_html

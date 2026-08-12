@@ -17,6 +17,7 @@ from collections.abc import Callable, Iterable
 from argos.config import Settings
 from argos.core.status_controller import StatusController
 from argos.services.dashboard.state import DashboardState
+from argos.services.response_text import text_for_speech
 from argos.services.tts.chunker import TextChunker
 
 log = logging.getLogger(__name__)
@@ -155,7 +156,7 @@ class SpeechController:
             if dashboard_message_id:
                 self._dashboard_state.append_message(dashboard_message_id, delta)
             log.info("エージェント応答差分: %s", delta[:120])
-            for chunk in chunker.push(delta):
+            for chunk in chunker.push(text_for_speech(delta)):
                 if self._current_generation() != stream_generation:
                     log.info("キャンセル済みのため TTS チャンクを読み上げません: %s", chunk[:80])
                     continue
@@ -193,7 +194,7 @@ class SpeechController:
                 yield ("text", delta)
             if self._settings.dry_run:
                 continue
-            for chunk in chunker.push(delta):
+            for chunk in chunker.push(text_for_speech(delta)):
                 wav_data = self._synthesize_chunk(chunk, slot_key)
                 if wav_data is not None:
                     yield ("audio", wav_data)
@@ -211,8 +212,11 @@ class SpeechController:
 
     def _synthesize_chunk(self, chunk: str, slot_key: str = "") -> bytes | None:
         """1チャンクを正規化して合成し、失敗時はNoneを返す（ターンは継続する）。"""
+        speech_text = text_for_speech(chunk)
+        if not speech_text.strip():
+            return None
         try:
-            normalized = self._tts_filter.normalize(chunk)
+            normalized = self._tts_filter.normalize(speech_text)
         except Exception as exc:
             log.exception("端末ターンのTTSフィルターに失敗しました")
             self._report_error("TTSフィルター", exc)

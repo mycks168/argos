@@ -27,7 +27,7 @@ agent:
       remote_name: 作業
       remote_provider: codex
 remote_argos:
-  timeout_seconds: 600
+  timeout_seconds: 1800
 audio:
   input_devices:
     - default
@@ -147,6 +147,8 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
+ローカルAgent Runnerの完了待ちは時間上限を設けず、ジョブ状態が完了・失敗になるまで継続する。別ARGOSへTerminal APIで接続する場合だけ、`remote_argos.timeout_seconds`をSSEの無通信読取タイムアウトとして使う。既定は1800秒とし、0以下なら読取タイムアウトを設けない。接続確立は設定値にかかわらず5秒で打ち切る。
+
 初期版のRunnerクライアントは、ジョブ完了までポーリングして最終結果をARGOS本体へ返す。ARGOS本体は起動中、Runnerの未配信完了ジョブを定期的に確認し、見つけた結果を該当スロットの会話履歴へ追加し、通知を出してから配信済みにする。通常の応答処理と未配信回収が同じ完了ジョブを同時に反映しないよう、Runnerはジョブ作成元を `delivery_owner` として保存し、期限付きの配信権を管理する。通常処理のポーリングで期限を更新し、未配信回収は `POST /api/jobs/claim` により期限切れジョブをRunner上で原子的に取得した場合だけ反映する。ARGOSが異常終了した場合も期限後には別インスタンスが回収できる。回収した結果が現在スロットなら自動で読み上げ、別スロットなら未読表示にしてスロット切替時に読み上げる。ただし `response_target=terminal` のジョブは、端末接続が途中で切れても完成回答を確認できるよう母艦の会話履歴と通知へ反映する一方、母艦TTSへは流さない。共通システムプロンプトを付与するラッパーは、Runnerの未配信回収APIを実クライアントへ透過的に委譲し、本体再起動後の結果回収を妨げない。通常のTTSキャンセルやスロット切替ではRunnerジョブを停止しない。明示的なジョブキャンセルAPIは今後の拡張点とする。セッションリセットは `POST /api/slots/reset` で現在スロットの保存済みセッションIDをRunner側から削除する。
 
 ### スロットタイル画面
@@ -171,7 +173,7 @@ Gridのターン応答はSSEの`text`差分、音声、`done`イベントを受�
 
 ### リモートARGOSスロット
 
-`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、UTF-8のSSE応答差分を通常のエージェント応答として扱う。受信側も文字コードをUTF-8へ固定し、接続先がcharsetを返さない旧バージョンでも日本語を正しく復元する。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は600秒とする。
+`config.yaml`の`agent.slots`配列へローカルとリモートを任意の順番で記載できる。リモートスロットは接続先の`POST /api/terminal/slots/select`で対象スロットを選び、`POST /api/terminal/turn`へテキストを送り、UTF-8のSSE応答差分を通常のエージェント応答として扱う。受信側も文字コードをUTF-8へ固定し、接続先がcharsetを返さない旧バージョンでも日本語を正しく復元する。`token`は接続先の`ARGOS_DASHBOARD_TOKEN`と一致させる。待機時間は`remote_argos.timeout_seconds`で指定し、既定は1800秒、0以下は無制限とする。
 
 切替時には`GET /api/terminal/history`から接続先の会話履歴を取得し、接続元のリモートスロット表示へ反映する。接続先の現在スロットも共有するため、リモート選択は接続先ダッシュボードのアクティブスロットにも反映される。
 
@@ -202,6 +204,8 @@ Codex が質問を返した場合は、その応答を読み上げる。次回�
 GPIO や SPI などのホストデバイス操作が必要な場合は、`ARGOS_CODEX_BYPASS_SANDBOX=true` で Codex CLI に `--dangerously-bypass-approvals-and-sandbox` を渡す。この設定では `-s` を渡さず、Codex CLI 側のサンドボックスと承認確認を使わない。
 
 ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`item.completed`（`item.type == "agent_message"`）から応答テキストを抽出する（旧バージョンの `event_msg`/`response_item` 形式にも互換対応する）。
+
+CodexのWeb検索回答に含まれる私用領域文字の引用マーカーは、応答ストリームから除去する。引用された参照IDはCodexセッションJSONLの`web_search_end.results`へ照合し、取得できたタイトルとHTTP(S) URLを回答末尾の出典一覧として追加する。ダッシュボードはURLだけを安全なリンクとして描画する。回答本文と出典一覧は履歴へ残すが、TTSには本文だけを渡し、内部引用タグ、出典一覧、URLは読み上げない。
 
 `ARGOS_CODEX_STREAM_MODE` で読み上げ方式を切り替えられる。
 
@@ -472,6 +476,8 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
 ウェイクワードは `ARGOS_WAKEWORD_ENABLED=true` の場合だけ有効になる。既定では無効で、PTT操作には影響しない。
 
 `ARGOS_LISTEN_MODE` は音声受付の開始方式を指定する。既定の `wakeword` はLiveKitモデルで呼びかけを検知する。`vad` は物理ミュート付きマイク向けで、ミュート解除後にSilero VADが `ARGOS_WAKEWORD_VAD_THRESHOLD` 以上の発話を `ARGOS_WAKEWORD_VAD_START_SECONDS` 継続して検出すると録音を開始する。録音後は呼びかけ必須判定と先頭呼びかけ除去を行わず、通常のSTT、本人確認、エージェント処理へ渡す。どちらも既存の共有マイク入力と発話終了判定を使う。
+
+検知後の録音は無音またはVADの発話終了で止める。終了を検出できない場合の安全上限は`wakeword.record_max_seconds`で指定し、既定は60秒とする。
 
 - `ARGOS_WAKEWORD_MODEL_DIR` にLiveKit形式の `argos.onnx`、`melspectrogram.onnx`、`embedding_model.onnx` を置く
 - `ARGOS_WAKEWORD_EMBEDDING_HEF`が指定されている場合は、音声埋め込みモデルをHailoRT経由でHailo-8へオフロードする。メル特徴量生成と最終分類はONNX Runtimeを継続し、HEF設定が空なら全段をCPUで実行する

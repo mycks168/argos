@@ -641,6 +641,7 @@
     .message[data-role="assistant"] { border-color: #69b7e4; }
     .meta { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .text { margin-top: 3px; font-size: var(--message-font-size); line-height: 1.38; overflow-wrap: anywhere; }
+    .text a { color: #78c8f5; text-decoration: underline; }
     .notifications {
       height: calc(100vh - 43px);
       overflow-y: auto;
@@ -1252,6 +1253,7 @@
   </main>
 
   <script src="/static/browser_audio.js"></script>
+  <script src="/static/message_text.js"></script>
   <script>
     const messages = document.getElementById("messages");
     const textComposer = document.getElementById("text-composer");
@@ -1493,6 +1495,7 @@
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
+    const renderMessageText = value => ArgosMessageText.renderMessageText(value);
     function updateDashboardMuteState(nextMuted) {
       if (nextMuted && !muted) voicePlayer.cancel();
       muted = nextMuted;
@@ -1661,7 +1664,7 @@
         messages.innerHTML = visibleMessages.length ? visibleMessages.map(item => `
         <article class="message" data-role="${escapeHtml(item.role)}">
           <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"} ${item.streaming ? "..." : ""}</div>
-          <div class="text">${escapeHtml(item.text)}</div>
+          <div class="text">${renderMessageText(item.text)}</div>
         </article>`).join("") : `<div class="empty">会話待機中</div>`;
         previousMessages = nextMessages;
         if (shouldFollow) {

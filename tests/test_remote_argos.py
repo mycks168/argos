@@ -2,10 +2,10 @@
 
 import json
 
+from test_agent_client import _settings
+
 from argos.config import AgentSlot, Settings
 from argos.services.agent.remote_argos import RemoteArgosClient
-
-from test_agent_client import _settings
 
 
 class FakeResponse:
@@ -85,8 +85,24 @@ def test_remote_argos_stream_selects_slot_and_returns_text(monkeypatch):
     assert calls[0][1]["json"] == {"name": "作業", "provider": "codex"}
     assert calls[1][1]["data"] == "確認".encode()
     assert calls[1][1]["headers"]["Authorization"] == "Bearer secret"
+    assert calls[1][1]["timeout"] == (5.0, 1800.0)
     assert turn_response.encoding == "utf-8"
     assert turn_response.closed is True
+
+
+def test_remote_argos_zero_timeout_waits_without_limit(monkeypatch):
+    """0秒設定では接続後のSSE読取を時間制限なしにする。"""
+    calls = []
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr("argos.services.agent.remote_argos.requests.post", fake_post)
+    settings = Settings(**{**_remote_settings().__dict__, "remote_argos_timeout_seconds": 0.0})
+
+    assert RemoteArgosClient(settings, settings.agent_slots[0]).ask("確認") == ""
+    assert calls[1][1]["timeout"] == (5.0, None)
 
 
 def test_remote_argos_reset_selects_then_resets(monkeypatch):

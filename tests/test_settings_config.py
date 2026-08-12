@@ -3,7 +3,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-from argos.services.dashboard.settings_config import load_settings_form, save_settings_form
+from argos.services.dashboard.settings_config import (
+    load_settings_form,
+    save_settings_form,
+)
 
 
 def _write_config(path: Path) -> None:
@@ -20,6 +23,8 @@ location:
   provider: local
 wakeword:
   enabled: false
+remote_argos:
+  timeout_seconds: 1800
 custom:
   keep_me: value
 """.lstrip(),
@@ -40,6 +45,9 @@ def test_load_settings_form_returns_descriptions_and_current_values(tmp_path):
     assert fields["location.provider"]["value"] == "local"
     assert fields["custom.keep_me"]["value"] == "value"
     assert fields["custom.keep_me"]["description"]
+    assert fields["remote_argos.timeout_seconds"]["value"] == 1800
+    assert fields["remote_argos.timeout_seconds"]["section_label"] == "リモートARGOS"
+    assert "0なら" in fields["remote_argos.timeout_seconds"]["description"]
     assert result["restart_required"] is True
 
 
