@@ -101,6 +101,7 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
 
     # 2. 実行コマンドと引数確認
     command, cwd = calls[0]
+    assert cwd == settings.agent_slots[0].cwd
     assert "--session-id" in command
     assert command[command.index("--model") + 1] == "opus"
     # 生成されたUUIDを取り出す
@@ -110,6 +111,44 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
     # 3. セッションIDがファイルに保存されているか確認
     state_data = json.loads(Path(settings.agent_state_path).read_text(encoding="utf-8"))
     assert state_data[_slot_key(settings.agent_slots[0])] == session_id
+
+
+def test_claude_uses_slot_command_and_extra_args(monkeypatch, tmp_path):
+    """ClaudeはOllama等のスロット専用ラッパーと引数で起動する。"""
+    base = _settings(tmp_path)
+    slot = AgentSlot(
+        "Claude Ollama",
+        "claude",
+        base.agent_slots[0].cwd,
+        command="claude-ollama",
+        extra_args=("--mcp-config", "/tmp/searxng.json"),
+    )
+    settings = Settings(**{**base.__dict__, "agent_slots": (slot,)})
+    calls: list[list[str]] = []
+
+    class FakeProc:
+        """正常終了するClaudeプロセスを再現する。"""
+
+        def __init__(self) -> None:
+            """固定の標準出力と標準エラーを初期化する。"""
+            self.stdout = ['{"type":"result","result":"完了"}']
+            self.stderr = None
+
+        def wait(self) -> int:
+            """正常終了コードを返す。"""
+            return 0
+
+    def fake_popen(command, **_kwargs):
+        """起動引数を保存して固定プロセスを返す。"""
+        calls.append(command)
+        return FakeProc()
+
+    monkeypatch.setattr("argos.services.claude.cli.shutil.which", lambda _command: None)
+    monkeypatch.setattr("argos.services.claude.cli.subprocess.Popen", fake_popen)
+
+    assert ClaudeCliClient(settings).ask("確認") == "完了"
+    assert calls[0][0] == "claude-ollama"
+    assert calls[0][calls[0].index("--mcp-config") + 1] == "/tmp/searxng.json"
 
 
 def test_claude_uses_result_when_stream_has_no_text(monkeypatch, tmp_path):

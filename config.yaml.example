@@ -66,6 +66,8 @@ agent:
       cwd: /opt/argos
       voicevox_speaker: 2
       model: ''
+      command: ''  # 空ならprovider既定。ラッパーコマンドでスロット単位に差し替え可能
+      extra_args: []
     - type: remote
       name: 自宅Codex
       ptt_cycle: false

@@ -135,6 +135,8 @@ HDMIダッシュボードは、現在の状態、現在のエージェントス�
 
 ARGOS 本体は `AgentClient` インターフェース越しにLLMエージェントへ発話を送る。`codex`、`antigravity`、`hermes`、`claude`をローカルproviderとして利用できる。別のARGOSへ接続するスロットは内部的に`remote` providerとして扱う。未対応のプロバイダーが指定された場合は起動時にエラーにする。
 
+ローカルスロットは共通項目として`command`と`extra_args`を任意指定できる。指定時はprovider全体の実行コマンド・追加引数より優先し、未指定時は従来のprovider設定へフォールバックする。これにより同じprovider内で通常CLIと互換ゲートウェイ用ラッパーを併用する。ラッパー固有の環境変数やクレデンシャルはARGOS設定へ展開せず、ラッパーが`~/.config/`配下から読み込む。
+
 Codex、Antigravity、Hermes、将来の別エージェントはこの層の実装として追加する。常駐プロセスが必要なエージェントは、今後 `AgentClient` の実装内でプロセス維持や別通信方式を扱い、ARGOS 本体のSTT、TTS、認証、ダッシュボード処理からは隠蔽する。
 
 `ARGOS_AGENT_RUNNER_URL` が設定されている場合、ARGOS 本体は Codex、Antigravity、Hermes を直接起動せず、Agent Runner HTTP APIへジョブを作成する。Runnerは `argos-agent-runner` コマンドで別プロセスとして起動し、`ARGOS_AGENT_RUNNER_HOST`、`ARGOS_AGENT_RUNNER_PORT` で待ち受ける。更新系APIは `ARGOS_AGENT_RUNNER_TOKEN` によるBearer認証に対応する。

@@ -319,6 +319,8 @@ agent:
       cwd: /opt/argos      # エージェントの作業ディレクトリ
       voicevox_speaker: 2  # このスロットの声
       model: ''            # 空ならCLIの既定
+      command: ''          # 空ならprovider既定。ラッパーのパスも指定可能
+      extra_args: []       # このスロットだけに渡す追加引数
       ptt_cycle: true      # PTT短押し2回の巡回対象にするか
     - type: local
       name: 調査
@@ -328,6 +330,34 @@ agent:
 ```
 
 書いた順が、画面の並び順と PTT 短押し 2 回の巡回順になります。`ptt_cycle: false` にしたスロットは画面から選べますが、短押し 2 回では回ってきません。
+
+`command`と`extra_args`を省略した場合は、従来どおりprovider全体の設定を使います。指定した場合はそのスロットだけ上書きします。たとえばOllama用の環境変数やSearXNG MCPを設定するラッパーを`command`へ指定すれば、通常のClaudeスロットへ影響させずに併用できます。APIキーなどの秘密情報はYAMLや引数へ書かず、ラッパーが`~/.config/`配下の権限を制限した設定から読み込むようにしてください。
+
+同梱の`scripts/claude-ollama`は、`~/.config/argos/claude-ollama.env`からOllama互換APIの環境変数を読み、`~/.config/argos/searxng-mcp.json`をClaude Codeへ渡します。組み込み`WebSearch`は無効化し、検索が必要な場合はSearXNG MCPを自動選択するよう指示します。
+
+```bash
+install -m 700 scripts/claude-ollama ~/.local/bin/claude-ollama
+mkdir -p ~/.config/argos
+chmod 700 ~/.config/argos
+```
+
+`~/.config/argos/claude-ollama.env`には、利用するAnthropic互換ゲートウェイに必要な値を記載し、権限を600にします。
+
+```bash
+ANTHROPIC_BASE_URL=http://ollama-gateway.example:4000
+ANTHROPIC_AUTH_TOKEN=設定したトークン
+```
+
+```yaml
+    - type: local
+      name: Claude Ollama
+      provider: claude
+      cwd: /home/argos
+      command: /home/argos/.local/bin/claude-ollama
+      extra_args:
+        - --mcp-config
+        - /home/argos/.config/claude/searxng-mcp.json
+```
 
 ### 別ホストの ARGOS をスロットにする
 

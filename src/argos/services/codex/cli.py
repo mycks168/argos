@@ -13,7 +13,13 @@ from collections.abc import Generator
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings, resolve_agent_slot_model
+from argos.config import (
+    AgentSlot,
+    Settings,
+    resolve_agent_slot_command,
+    resolve_agent_slot_extra_args,
+    resolve_agent_slot_model,
+)
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 from argos.services.codex.citations import (
     format_citation_sources,
@@ -283,15 +289,15 @@ class CodexCliClient:
         """Codex CLI のコマンドラインを構築する。"""
         slot = conversation.slot
         if conversation.session_id:
-            base = self._exec_base()
+            base = self._exec_base(slot)
             base.extend(["resume", "--all", "--skip-git-repo-check"])
             prompt_args = [conversation.session_id, "-"]
         elif conversation.started:
-            base = self._exec_base()
+            base = self._exec_base(slot)
             base.extend(["resume", "--last", "--all", "--skip-git-repo-check"])
             prompt_args = ["-"]
         else:
-            base = self._exec_base()
+            base = self._exec_base(slot)
             base.extend(["--skip-git-repo-check", "-C", slot.cwd])
             if not self._settings.codex_bypass_sandbox:
                 base.extend(["-s", self._settings.codex_sandbox])
@@ -299,7 +305,7 @@ class CodexCliClient:
         model = resolve_agent_slot_model(self._settings, slot)
         if model:
             base.extend(["-m", model])
-        extra_args = list(self._settings.codex_extra_args)
+        extra_args = list(resolve_agent_slot_extra_args(self._settings, slot))
         if "--json" not in extra_args:
             extra_args.append("--json")
         base.extend(extra_args)
@@ -307,9 +313,9 @@ class CodexCliClient:
         base.extend(prompt_args)
         return base
 
-    def _exec_base(self) -> list[str]:
+    def _exec_base(self, slot: AgentSlot) -> list[str]:
         """Codex exec の共通起動オプションを返す。"""
-        base = ["codex", "exec"]
+        base = [resolve_agent_slot_command(self._settings, slot), "exec"]
         if self._settings.codex_bypass_sandbox:
             base.append("--dangerously-bypass-approvals-and-sandbox")
         return base

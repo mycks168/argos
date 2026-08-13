@@ -6,17 +6,22 @@
 
 from __future__ import annotations
 
-import os
 import json
 import logging
 import shutil
 import subprocess
 import uuid
-from dataclasses import dataclass
 from collections.abc import Generator
+from dataclasses import dataclass
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings, resolve_agent_slot_model
+from argos.config import (
+    AgentSlot,
+    Settings,
+    resolve_agent_slot_command,
+    resolve_agent_slot_extra_args,
+    resolve_agent_slot_model,
+)
 from argos.services.agent.session_store import SlotSessionStore, slot_key
 
 log = logging.getLogger(__name__)
@@ -145,7 +150,10 @@ class ClaudeCliClient:
             self._store.save(slot_key, conversation.session_id)
 
         # コマンドの構築
-        claude_command = shutil.which("claude") or str(Path.home() / ".local/bin/claude")
+        configured_command = resolve_agent_slot_command(self._settings, conversation.slot)
+        discovered_command = shutil.which(configured_command)
+        default_user_command = str(Path.home() / ".local/bin/claude")
+        claude_command = discovered_command or (default_user_command if configured_command == "claude" else configured_command)
         command = [
             claude_command,
             "-p",
@@ -160,6 +168,8 @@ class ClaudeCliClient:
         model = resolve_agent_slot_model(self._settings, conversation.slot)
         if model:
             command.extend(["--model", model])
+
+        command.extend(resolve_agent_slot_extra_args(self._settings, conversation.slot))
 
         if is_new_session:
             command.extend(["--session-id", conversation.session_id])
