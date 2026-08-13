@@ -13,9 +13,11 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import nullcontext
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol, cast
 
 from argos.config import (
     DEFAULT_AGENT_PROGRESS_START_PHRASES,
@@ -69,6 +71,25 @@ log = logging.getLogger(__name__)
 CODEX_PROGRESS_START_PHRASES = DEFAULT_AGENT_PROGRESS_START_PHRASES
 CODEX_PROGRESS_WAIT_PHRASES = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
 TERMINAL_PROGRESS_AUDIO_ASSET_LIMIT = 64
+
+
+@dataclass
+class TerminalAgentStreamState:
+    """別スレッドで読む端末応答と、配信確認待ちのRunnerジョブを保持する。"""
+
+    events: queue.Queue[str | Exception | None]
+    completed_job_id: str = ""
+
+    def record_completion(self, job_id: str) -> None:
+        """SSE送信後に配信確認するRunnerジョブIDを記録する。"""
+        self.completed_job_id = job_id
+
+
+class RunnerDeliveryAcknowledger(Protocol):
+    """Runnerジョブの配信完了を通知できるクライアント。"""
+
+    def mark_delivered(self, job_id: str) -> None:
+        """指定したRunnerジョブを配信済みにする。"""
 
 
 def _select_progress_start_phrase(
@@ -446,7 +467,13 @@ class ArgosApp:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
         if response_target == "terminal":
             slot_key = _app_slot_key(slot_name, provider)
-            self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
+            was_reconciled = self._dashboard_state.reconcile_runner_result(
+                slot_name,
+                provider,
+                result,
+            )
+            if not was_reconciled:
+                self._dashboard_state.add_message_to_slot(slot_name, provider, "assistant", result)
             if not self._is_current_slot_key(slot_key):
                 self._dashboard_state.set_slot_unread(slot_name, provider, True)
             self._dashboard_state.add_notification(
@@ -980,33 +1007,38 @@ class ArgosApp:
         prompt: str,
         slot_name: str,
         slot_provider: str,
-    ) -> queue.Queue[str | Exception | None]:
+    ) -> TerminalAgentStreamState:
         """最初の応答待ち中も進捗イベントを返せるようエージェント読取を別スレッドで始める。"""
-        stream_queue: queue.Queue[str | Exception | None] = queue.Queue()
+        state = TerminalAgentStreamState(events=queue.Queue())
 
         def read_agent_stream() -> None:
             """エージェント差分または例外を順番どおりキューへ渡す。"""
             try:
-                for delta in self._terminal_agent_stream(prompt, slot_name, slot_provider):
-                    stream_queue.put(delta)
+                for delta in self._terminal_agent_stream(
+                    prompt,
+                    slot_name,
+                    slot_provider,
+                    state.record_completion,
+                ):
+                    state.events.put(delta)
             except Exception as exc:
-                stream_queue.put(exc)
+                state.events.put(exc)
             finally:
-                stream_queue.put(None)
+                state.events.put(None)
 
         threading.Thread(target=read_agent_stream, name="terminal-agent-stream", daemon=True).start()
-        return stream_queue
+        return state
 
     def _wait_for_terminal_first_delta(
         self,
-        stream_queue: queue.Queue[str | Exception | None],
+        stream_state: TerminalAgentStreamState,
         slot_key: str,
     ) -> Generator[dict[str, object], None, str | None]:
         """最初の応答差分まで待ち、長引く間はキャッシュ可能な進捗音声を返す。"""
         timeout_seconds = max(0.0, self._settings.agent_progress_first_delay_seconds)
         while True:
             try:
-                item = stream_queue.get(timeout=timeout_seconds)
+                item = stream_state.events.get(timeout=timeout_seconds)
             except queue.Empty:
                 phrase = _select_progress_wait_phrase(self._settings.agent_progress_wait_phrases)
                 progress_event = self._terminal_progress_event(phrase, slot_key)
@@ -1020,7 +1052,7 @@ class ArgosApp:
 
     def _terminal_queued_deltas(
         self,
-        stream_queue: queue.Queue[str | Exception | None],
+        stream_state: TerminalAgentStreamState,
         first_delta: str | None,
     ) -> Iterator[str]:
         """先読み済みの最初の差分と後続キューを一つの応答ストリームに戻す。"""
@@ -1028,7 +1060,7 @@ class ArgosApp:
             return
         yield first_delta
         while True:
-            item = stream_queue.get()
+            item = stream_state.events.get()
             if isinstance(item, Exception):
                 raise item
             if item is None:
@@ -1041,11 +1073,11 @@ class ArgosApp:
         slot_key: str,
         target_slot: tuple[str, str],
         want_audio: bool,
-    ) -> Generator[dict[str, object], None, Iterator[str]]:
+    ) -> Generator[dict[str, object], None, tuple[Iterator[str], TerminalAgentStreamState | None]]:
         """Web音声ターンだけ進捗音声を先行させ、後続の回答差分列を返す。"""
         target_name, target_provider = target_slot
         if not want_audio or not self._settings.agent_progress_voice:
-            return self._terminal_agent_stream(prompt, target_name, target_provider)
+            return self._terminal_agent_stream(prompt, target_name, target_provider), None
         start_phrase = _select_progress_start_phrase(
             prompt,
             self._acknowledgement,
@@ -1054,9 +1086,9 @@ class ArgosApp:
         progress_event = self._terminal_progress_event(start_phrase, slot_key)
         if progress_event is not None:
             yield progress_event
-        stream_queue = self._start_terminal_agent_stream(prompt, target_name, target_provider)
-        first_delta = yield from self._wait_for_terminal_first_delta(stream_queue, slot_key)
-        return self._terminal_queued_deltas(stream_queue, first_delta)
+        stream_state = self._start_terminal_agent_stream(prompt, target_name, target_provider)
+        first_delta = yield from self._wait_for_terminal_first_delta(stream_state, slot_key)
+        return self._terminal_queued_deltas(stream_state, first_delta), stream_state
 
     def _terminal_process_turn(
         self,
@@ -1151,7 +1183,7 @@ class ArgosApp:
             try:
                 target_name = slot_name if has_explicit_slot else ""
                 target_provider = slot_provider if has_explicit_slot else ""
-                deltas = yield from self._terminal_agent_deltas_with_progress(
+                deltas, stream_state = yield from self._terminal_agent_deltas_with_progress(
                     transcript,
                     slot_key,
                     (target_name, target_provider),
@@ -1188,6 +1220,7 @@ class ArgosApp:
                         source="ARGOS",
                     )
                 yield {"event": "done", "text": full_response}
+                self._acknowledge_terminal_stream(stream_state)
             except RunnerSlotBusyError as exc:
                 log.info("端末ターンでエージェントスロットが処理中です: %s", exc)
                 yield {"event": "error", "message": "前の応答がまだ処理中です"}
@@ -1205,15 +1238,30 @@ class ArgosApp:
             if tmp_path:
                 self._remove_recording_file(tmp_path)
 
+    def _acknowledge_terminal_stream(self, stream_state: TerminalAgentStreamState | None) -> None:
+        """done送信後に再開されたRunnerジョブだけを配信済みにする。"""
+        if stream_state is None or not stream_state.completed_job_id:
+            return
+        # 切断時はここへ到達せず、Runnerの未配信回収が完成回答を補完する。
+        self._save_conversation_history()
+        acknowledger = cast(RunnerDeliveryAcknowledger, self._agent)
+        acknowledger.mark_delivered(stream_state.completed_job_id)
+
     def _terminal_agent_stream(
         self,
         prompt: str,
         slot_name: str = "",
         slot_provider: str = "",
+        terminal_completion: Callable[[str], None] | None = None,
     ) -> Iterator[str]:
         """Terminal起点のRunnerジョブへ応答先を付けて差分を返す。"""
         response_target = getattr(self._agent, "response_target", None)
-        context = response_target("terminal") if callable(response_target) else nullcontext()
+        if not callable(response_target):
+            context = nullcontext()
+        elif terminal_completion is None:
+            context = response_target("terminal")
+        else:
+            context = response_target("terminal", terminal_completion)
         with context:
             if slot_name and slot_provider:
                 yield from self._agent.ask_slot_stream(slot_name, slot_provider, prompt)
