@@ -5,7 +5,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 
 import requests
@@ -94,6 +94,7 @@ class RunnerAgentClient:
     def _ask_slot_stream(self, slot: AgentSlot, prompt: str) -> Iterable[str]:
         """指定スロットのRunner出力を差分として返す。"""
         response_target = str(getattr(self._request_context, "response_target", "local"))
+        terminal_completion = getattr(self._request_context, "terminal_completion", None)
         job = self._request(
             "POST",
             "/api/jobs",
@@ -133,7 +134,10 @@ class RunnerAgentClient:
                     result = str(state.get("result", ""))
                     if len(result) > len(emitted):
                         yield result[len(emitted):]
-                    self._request("POST", f"/api/jobs/{job_id}/deliver", json={})
+                    if response_target == "terminal" and callable(terminal_completion):
+                        terminal_completion(job_id)
+                    else:
+                        self.mark_delivered(job_id)
                     return
                 if status in {"failed", "failed_delivered"}:
                     error = str(state.get("error", "")).strip() or "Agent Runnerジョブに失敗しました"
@@ -144,14 +148,21 @@ class RunnerAgentClient:
             self._active_job_ids.discard(job_id)
 
     @contextmanager
-    def response_target(self, target: str):
-        """現在スレッドで作成するRunnerジョブの応答先を一時的に指定する。"""
+    def response_target(
+        self,
+        target: str,
+        terminal_completion: Callable[[str], None] | None = None,
+    ) -> Iterator[None]:
+        """現在スレッドでRunnerジョブの応答先と端末完了通知先を指定する。"""
         previous = getattr(self._request_context, "response_target", "local")
+        previous_completion = getattr(self._request_context, "terminal_completion", None)
         self._request_context.response_target = target
+        self._request_context.terminal_completion = terminal_completion
         try:
             yield
         finally:
             self._request_context.response_target = previous
+            self._request_context.terminal_completion = previous_completion
 
     def list_undelivered(self) -> list[dict[str, object]]:
         """現在のARGOS処理外で完了した未配信ジョブを返す。"""

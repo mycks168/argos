@@ -8,7 +8,11 @@ import yaml
 
 from argos.services.dashboard import location as dashboard_location
 from argos.services.dashboard import server as dashboard_server
-from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location, parse_remote_location
+from argos.services.dashboard.location import (
+    parse_gpsd_tpv,
+    parse_nmea_location,
+    parse_remote_location,
+)
 from argos.services.dashboard.server import DashboardServer, _apply_event
 from argos.services.dashboard.state import DashboardState
 
@@ -151,6 +155,25 @@ def test_dashboard_state_streams_message_to_inactive_slot():
     state.append_message(message_id, "回答")
     assert state.slot_messages("調査", "claude")[0]["text"] == "回答"
     assert state.slot_messages("調査", "claude")[0]["streaming"] is True
+
+
+def test_dashboard_state_reconciles_partial_runner_result() -> None:
+    """切断前の部分回答はRunnerの完成結果で置き換え、重複を作らない。"""
+    state = DashboardState()
+    state.add_message_to_slot("クロード", "claude", "assistant", "回答の途中")
+
+    assert state.reconcile_runner_result("クロード", "claude", "回答の途中から最後まで") is True
+    messages = state.slot_messages("クロード", "claude")
+    assert [message["text"] for message in messages] == ["回答の途中から最後まで"]
+
+
+def test_dashboard_state_does_not_reconcile_unrelated_runner_result() -> None:
+    """別ターンと思われる最新回答は上書きしない。"""
+    state = DashboardState()
+    state.add_message_to_slot("クロード", "claude", "assistant", "新しい回答")
+
+    assert state.reconcile_runner_result("クロード", "claude", "古い完成回答") is False
+    assert state.slot_messages("クロード", "claude")[0]["text"] == "新しい回答"
 
 
 def test_dashboard_state_tracks_slot_unread_and_busy():

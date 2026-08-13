@@ -348,6 +348,23 @@ class DashboardState:
             message["streaming"] = False
             self._publish_locked()
 
+    def reconcile_runner_result(self, name: str, provider: str, result: str) -> bool:
+        """切断前まで表示した端末応答をRunnerの完成結果で補完する。"""
+        key = _slot_key(name, provider)
+        with self._lock:
+            messages = self._messages_by_slot.get(key, ())
+            for message in reversed(messages):
+                current_text = str(message.get("text", ""))
+                if message.get("role") != "assistant" or not current_text:
+                    continue
+                if not result.startswith(current_text):
+                    return False
+                message["text"] = result
+                message["streaming"] = False
+                self._publish_locked()
+                return True
+        return False
+
     def add_notification(
         self,
         title: str,

@@ -2,14 +2,20 @@ from __future__ import annotations
 
 import json
 import time
-from pathlib import Path
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 from threading import Event, Thread
 
+import pytest
 import requests
 
 from argos.config import AgentSlot, Settings
-from argos.services.agent.runner import AgentJobStore, AgentRunner, AgentRunnerServer, AgentSlotBusyError
+from argos.services.agent.runner import (
+    AgentJobStore,
+    AgentRunner,
+    AgentRunnerServer,
+    AgentSlotBusyError,
+)
 from argos.services.agent.runner_client import RunnerAgentClient, RunnerSlotBusyError
 
 
@@ -292,6 +298,51 @@ def test_runner_agent_client_marks_terminal_response_target(monkeypatch, tmp_pat
         assert list(client.ask_stream("やって")) == ["完了"]
 
     assert calls[0][2]["json"]["response_target"] == "terminal"
+
+
+def test_runner_agent_client_defers_terminal_delivery_until_acknowledged(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Web端末ターンは完了通知だけを返し、SSE送信側の確認後に配信済みにする。"""
+    calls: list[tuple[str, str]] = []
+    completed_jobs: list[str] = []
+
+    class Response:
+        """Runner APIの固定レスポンス。"""
+
+        status_code = 200
+        text = ""
+
+        def __init__(self, payload: dict[str, object]) -> None:
+            """返却するJSONを保持する。"""
+            self._payload = payload
+
+        def json(self) -> dict[str, object]:
+            """固定JSONを返す。"""
+            return self._payload
+
+    def fake_request(method: str, url: str, **_kwargs: object) -> Response:
+        """ジョブ完了と配信確認APIを再現する。"""
+        calls.append((method, url))
+        if method == "POST" and url.endswith("/api/jobs"):
+            return Response({"job_id": "job-terminal", "status": "queued"})
+        if method == "GET" and url.endswith("/api/jobs/job-terminal"):
+            return Response({"status": "completed", "result": "完成回答"})
+        if method == "POST" and url.endswith("/api/jobs/job-terminal/deliver"):
+            return Response({"status": "delivered"})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("argos.services.agent.runner_client.requests.request", fake_request)
+    client = RunnerAgentClient(_settings(tmp_path))
+
+    with client.response_target("terminal", completed_jobs.append):
+        assert list(client.ask_stream("確認")) == ["完成回答"]
+
+    assert completed_jobs == ["job-terminal"]
+    assert not any(url.endswith("/deliver") for _method, url in calls)
+    client.mark_delivered(completed_jobs[0])
+    assert calls[-1][1].endswith("/api/jobs/job-terminal/deliver")
 
 
 def test_runner_agent_client_streams_partial_output(monkeypatch, tmp_path):

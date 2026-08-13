@@ -4,6 +4,8 @@ import base64
 import json
 import threading
 import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -100,6 +102,38 @@ def _request(url, method="GET", body=None, token="secret", content_type="applica
     if accept:
         headers["Accept"] = accept
     return urlopen(Request(url, data=body, headers=headers, method=method), timeout=3)
+
+
+def _configure_deferred_runner_delivery(
+    app: ArgosApp,
+    monkeypatch: pytest.MonkeyPatch,
+    job_id: str,
+) -> list[str]:
+    """別スレッドのRunner完了通知と配信確認をテスト用に接続する。"""
+    delivered_jobs: list[str] = []
+    completion_callback: Callable[[str], None] | None = None
+
+    @contextmanager
+    def response_target(
+        target: str,
+        terminal_completion: Callable[[str], None] | None = None,
+    ) -> Iterator[None]:
+        """端末完了通知をRunnerクライアント同様に保持する。"""
+        nonlocal completion_callback
+        assert target == "terminal"
+        completion_callback = terminal_completion
+        yield
+
+    def agent_response(_prompt: str) -> Iterator[str]:
+        """回答後にRunnerジョブの完了を通知する。"""
+        yield "完成回答"
+        assert completion_callback is not None
+        completion_callback(job_id)
+
+    monkeypatch.setattr(app._agent, "response_target", response_target, raising=False)
+    monkeypatch.setattr(app._agent, "ask_stream", agent_response)
+    monkeypatch.setattr(app._agent, "mark_delivered", delivered_jobs.append, raising=False)
+    return delivered_jobs
 
 
 # --- DashboardServer 端末エンドポイント ---
@@ -383,6 +417,35 @@ def test_app_terminal_process_turn_streams_wait_progress(monkeypatch):
 
     assert progress_texts == ["開始案内", "待機案内"]
     assert events[-1] == {"event": "done", "text": "応答"}
+
+
+def test_app_terminal_process_turn_acknowledges_runner_after_done(monkeypatch: pytest.MonkeyPatch) -> None:
+    """別スレッドのRunnerジョブはdone送信後にだけ配信済みにする。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    delivered_jobs = _configure_deferred_runner_delivery(app, monkeypatch, "job-long")
+
+    events = list(app._terminal_process_turn(b"RIFFDATA"))
+
+    assert events[-1] == {"event": "done", "text": "完成回答"}
+    assert delivered_jobs == ["job-long"]
+
+
+def test_app_terminal_process_turn_leaves_job_undelivered_when_stream_closes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """done送信前にSSEが閉じた場合はRunnerジョブを未配信回収へ残す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    delivered_jobs = _configure_deferred_runner_delivery(app, monkeypatch, "job-disconnected")
+
+    turn = app._terminal_process_turn(b"RIFFDATA")
+    while next(turn)["event"] != "text":
+        pass
+    turn.close()
+    time.sleep(0.02)
+
+    assert delivered_jobs == []
 
 
 def test_app_terminal_progress_audio_uses_content_hash_and_lru(monkeypatch):
