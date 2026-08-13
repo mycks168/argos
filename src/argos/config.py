@@ -9,8 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
-from argos.yaml_config import apply_yaml_environment
 
+from argos.yaml_config import apply_yaml_environment
 
 _PROCESS_ENVIRONMENT = set(os.environ)
 load_dotenv()
@@ -117,6 +117,8 @@ class AgentSlot:
     remote_name: str = ""
     remote_provider: str = ""
     ptt_cycle: bool = True
+    command: str = ""
+    extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -325,6 +327,34 @@ def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
     return ""
 
 
+def resolve_agent_slot_command(settings: Settings, slot: AgentSlot) -> str:
+    """スロット固有コマンドを優先し、providerの既定コマンドを返す。"""
+    if slot.command.strip():
+        return slot.command.strip()
+    provider = slot.provider.strip().lower()
+    commands = {
+        "codex": "codex",
+        "claude": "claude",
+        "claudecode": "claude",
+        "antigravity": settings.antigravity_command,
+        "hermes": settings.hermes_command,
+    }
+    return commands.get(provider, "")
+
+
+def resolve_agent_slot_extra_args(settings: Settings, slot: AgentSlot) -> tuple[str, ...]:
+    """スロット固有引数を優先し、provider全体の追加引数を返す。"""
+    if slot.extra_args:
+        return slot.extra_args
+    provider = slot.provider.strip().lower()
+    extra_args = {
+        "codex": settings.codex_extra_args,
+        "antigravity": settings.antigravity_extra_args,
+        "hermes": settings.hermes_extra_args,
+    }
+    return extra_args.get(provider, ())
+
+
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
     """環境変数からLLMエージェント会話スロットを読み込む。"""
     unified = os.environ.get("ARGOS_AGENT_SLOTS_JSON", "").strip()
@@ -413,9 +443,20 @@ def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSl
                 voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
                 model=str(item.get("model", "")).strip(),
                 ptt_cycle=bool(item.get("ptt_cycle", True)),
+                command=str(item.get("command", "")).strip(),
+                extra_args=_slot_extra_args(item.get("extra_args", []), name),
             )
         )
     return tuple(slots)
+
+
+def _slot_extra_args(value: object, slot_name: str) -> tuple[str, ...]:
+    """YAMLスロットの追加引数を文字列配列として検証する。"""
+    if value in (None, []):
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"agent.slots[{slot_name}].extra_argsは文字列の配列で指定してください")
+    return tuple(item for item in value if item)
 
 
 def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[AgentSlot, ...]:

@@ -166,6 +166,25 @@ def test_antigravity_ask_stream_saves_conversation(monkeypatch, tmp_path):
     assert "conv-1" in Path(settings.agent_state_path).read_text(encoding="utf-8")
 
 
+def test_antigravity_slot_command_and_args_override_global(tmp_path):
+    """Antigravityもスロット固有ラッパーと引数を優先する。"""
+    settings = _settings(tmp_path)
+    slot = AgentSlot(
+        "AG互換",
+        "antigravity",
+        settings.agent_slots[0].cwd,
+        command="agy-wrapper",
+        extra_args=("--slot-option",),
+    )
+    client = AntigravityCliClient(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    command = client._build_command(client._conversations[0], "確認")
+
+    assert command[0] == "agy-wrapper"
+    assert "--slot-option" in command
+    assert "--x" not in command
+
+
 def test_antigravity_uses_cached_conversation(monkeypatch, tmp_path):
     """保存済み会話IDの復元が有効なら継続会話として起動する。"""
     settings = _settings(tmp_path)
@@ -276,7 +295,7 @@ def test_transcript_reader_tolerates_invalid_utf8_bytes(tmp_path):
     path.write_bytes(
         b'{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"old"}\n'
         + b'{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"bad \\x95 row"}\n'
-        + '{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"今回の応答"}\n'.encode("utf-8")
+        + '{"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"今回の応答"}\n'.encode()
     )
 
     assert _count_lines(path) == 3

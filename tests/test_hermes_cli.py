@@ -2,7 +2,12 @@ import json
 from pathlib import Path
 
 from argos.config import AgentSlot, Settings
-from argos.services.hermes.cli import HermesCliClient, _extract_resume_session_id, _extract_session_id, _strip_session_info
+from argos.services.hermes.cli import (
+    HermesCliClient,
+    _extract_resume_session_id,
+    _extract_session_id,
+    _strip_session_info,
+)
 
 
 def _settings(tmp_path: Path) -> Settings:
@@ -127,6 +132,25 @@ def test_hermes_slot_model_overrides_global(tmp_path):
     command = client._build_command(client._conversations[0], "依頼")
 
     assert command[command.index("--model") + 1] == "slot-model"
+
+
+def test_hermes_slot_command_and_args_override_global(tmp_path):
+    """Hermesもスロット固有ラッパーと引数を優先する。"""
+    settings = _settings(tmp_path)
+    slot = AgentSlot(
+        "Hermes互換",
+        "hermes",
+        settings.agent_slots[0].cwd,
+        command="hermes-wrapper",
+        extra_args=("--slot-option",),
+    )
+    client = HermesCliClient(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    command = client._build_command(client._conversations[0], "確認")
+
+    assert command[0] == "hermes-wrapper"
+    assert "--slot-option" in command
+    assert "--yolo" not in command
 
 
 def test_hermes_uses_saved_session(monkeypatch, tmp_path):
