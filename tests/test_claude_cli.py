@@ -97,13 +97,15 @@ def test_claude_ask_stream_generates_and_saves_session_id(monkeypatch, tmp_path)
     client = ClaudeCliClient(settings)
 
     # 1. 応答確認
-    assert client.ask("こんにちは") == "こんにちは"
+    prompt = "--meeting の使い方を確認して"
+    assert client.ask(prompt) == "こんにちは"
 
     # 2. 実行コマンドと引数確認
     command, cwd = calls[0]
     assert cwd == settings.agent_slots[0].cwd
     assert "--session-id" in command
     assert command[command.index("--model") + 1] == "opus"
+    assert command[-2:] == ["--", prompt]
     # 生成されたUUIDを取り出す
     session_id_idx = command.index("--session-id") + 1
     session_id = command[session_id_idx]
