@@ -176,7 +176,8 @@ class ClaudeCliClient:
         else:
             command.extend(["--resume", conversation.session_id])
 
-        command.append(prompt)
+        # 発話がハイフンで始まってもClaude CLIのオプションとして解釈させない。
+        command.extend(["--", prompt])
 
         log.info(
             "Claude CLI 実行: slot=%s cwd=%s session_id=%s command=%s",

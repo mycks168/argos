@@ -223,16 +223,17 @@ Codex の最終出力は途中経過の単純な続きではなく、応答全�
 初回発話:
 
 ```bash
-claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --session-id <session_id> -- "プロンプト"
 ```
 
 同一スロットの継続発話:
 
 ```bash
-claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> "プロンプト"
+claude -p --output-format stream-json --verbose --permission-mode dontAsk --resume <session_id> -- "プロンプト"
 ```
 
 ARGOS は、最初の開始時またはリセット時に新規の UUID を生成して `--session-id` で起動し、セッションIDをスロットごとに保存する。2回目以降の会話継続時は `--resume <session_id>` を指定して以前の履歴を再開する。
+発話本文の直前にはClaude CLIが対応するオプション終端の`--`を置き、`--meeting`などハイフンで始まる本文を未知のオプションとして誤認しないようにする。Codexは本文を標準入力、Antigravityは`--print`の値、Hermesは`-q`の値として渡すため、この位置引数用の終端はClaudeだけに付ける。
 `claude` の実行時は、 `stdin=subprocess.DEVNULL` を指定して完全に非対話（non-interactive）として認識させることで、信頼確認ダイアログなどでブロッキングするのを防ぐ。
 ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの `stream_event` から `text_delta` を抽出してアプリへ渡す。`text_delta` が一件もなかった場合は、完了を示す `type == "result"` イベントの `result` 本文を最終応答として渡す。
 
