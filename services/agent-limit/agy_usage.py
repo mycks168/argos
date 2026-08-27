@@ -11,16 +11,18 @@ import sys
 import time
 from datetime import datetime, timedelta
 
+from typing import Any
+
 from tmux_util import cleanup, send_keys, tmux, wait_for
 
 _LIMIT_RE = (
-    r"{label}\s*\n\s*\[[^\]]*\]\s*([\d.]+)%\s*\n\s*"
+    r"{label}(?:\s+Remaining)?\s*\n\s*\[[^\]]*\]\s*([\d.]+)%\s*\n\s*"
     r"(?:(\d+)% remaining(?:\s*·\s*Refreshes in\s*(?:(\d+)h)?\s*(?:(\d+)m)?)?"
     r"|Quota available)"
 )
 
 
-def _parse_limit(block, label, now):
+def _parse_limit(block: str, label: str, now: datetime) -> dict[str, Any]:
     """1つのグループ内の1つの上限(Weekly/Five Hour)を解析する。"""
     pattern = re.compile(_LIMIT_RE.format(label=re.escape(label)))
     m = pattern.search(block)
@@ -40,7 +42,7 @@ def _parse_limit(block, label, now):
     return {"usage_pct": usage_pct, "reset": reset}
 
 
-def parse_usage(screen, now=None):
+def parse_usage(screen: str, now: datetime | None = None) -> dict[str, Any]:
     """`/usage`の画面テキストからグループ別の使用率・リセット時刻を抽出する。"""
     now = now or datetime.now()
 
@@ -61,7 +63,7 @@ def parse_usage(screen, now=None):
     }
 
 
-def _needs_trust_confirmation(screen):
+def _needs_trust_confirmation(screen: str) -> bool:
     """初回起動時の信頼確認や権限確認らしい画面かを判定する。"""
     lowered = screen.lower()
     return any(
@@ -78,7 +80,7 @@ def _needs_trust_confirmation(screen):
     )
 
 
-def _wait_until_ready(session):
+def _wait_until_ready(session: str) -> str:
     """agy起動後、必要なら信頼確認を通して入力可能になるまで待つ。"""
     screen = wait_for(session, lambda t: "for shortcuts" in t or _needs_trust_confirmation(t), timeout=60)
     if _needs_trust_confirmation(screen):
@@ -88,7 +90,7 @@ def _wait_until_ready(session):
     return screen
 
 
-def main():
+def main() -> None:
     session = f"agy_usage_{os.getpid()}"
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "agy")
     try:
