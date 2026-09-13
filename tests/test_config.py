@@ -2,7 +2,13 @@ import json
 
 import pytest
 
-from argos.config import AgentSlot, load_settings, resolve_agent_slot_model
+from argos.config import (
+    AgentSlot,
+    load_settings,
+    resolve_agent_slot_command,
+    resolve_agent_slot_extra_args,
+    resolve_agent_slot_model,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -77,6 +83,13 @@ def test_load_agent_runner_settings(monkeypatch):
     assert settings.agent_runner_host == "127.0.0.2"
     assert settings.agent_runner_port == 28766
     assert settings.agent_runner_state_dir == "/tmp/runner"
+
+
+def test_load_remote_argos_timeout(monkeypatch):
+    """リモートARGOSの長時間応答待ち設定を読み込む。"""
+    monkeypatch.setenv("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "0")
+
+    assert load_settings().remote_argos_timeout_seconds == 0.0
 
 
 def test_load_agent_usage_commands(monkeypatch):
@@ -198,7 +211,14 @@ def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
                     "remote_provider": "codex",
                     "ptt_cycle": False,
                 },
-                {"type": "local", "name": "車載", "provider": "claude", "cwd": "/opt/argos"},
+                {
+                    "type": "local",
+                    "name": "車載",
+                    "provider": "claude",
+                    "cwd": "/opt/argos",
+                    "command": "/home/argos/.local/bin/claude-ollama",
+                    "extra_args": ["--mcp-config", "/tmp/searxng.json"],
+                },
             ]
         ),
     )
@@ -211,6 +231,8 @@ def test_load_unified_local_and_remote_slots_in_order(monkeypatch):
     assert settings.agent_slots[0].remote_token == "secret"
     assert settings.agent_slots[0].ptt_cycle is False
     assert settings.agent_slots[1].provider == "claude"
+    assert settings.agent_slots[1].command == "/home/argos/.local/bin/claude-ollama"
+    assert settings.agent_slots[1].extra_args == ("--mcp-config", "/tmp/searxng.json")
 
 
 def test_load_numbered_slots_with_voicevox_speaker(monkeypatch):
@@ -253,6 +275,36 @@ def test_resolve_agent_slot_model_prefers_slot_and_falls_back_to_global(monkeypa
     assert resolve_agent_slot_model(settings, AgentSlot("B", "codex", "/tmp")) == "global-codex"
     assert resolve_agent_slot_model(settings, AgentSlot("C", "claude", "/tmp")) == "global-claude"
     assert resolve_agent_slot_model(settings, AgentSlot("D", "antigravity", "/tmp")) == "global-agy"
+
+
+def test_resolve_slot_command_and_extra_args_prefers_slot(monkeypatch):
+    """実行コマンドと追加引数もスロット固有値を優先する。"""
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_COMMAND", "global-agy")
+    monkeypatch.setenv("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "--global")
+    settings = load_settings()
+    slot = AgentSlot(
+        "ローカル",
+        "antigravity",
+        "/tmp",
+        command="custom-agy",
+        extra_args=("--slot",),
+    )
+
+    assert resolve_agent_slot_command(settings, slot) == "custom-agy"
+    assert resolve_agent_slot_extra_args(settings, slot) == ("--slot",)
+    assert resolve_agent_slot_command(settings, AgentSlot("既定", "antigravity", "/tmp")) == "global-agy"
+    assert resolve_agent_slot_extra_args(settings, AgentSlot("既定", "antigravity", "/tmp")) == ("--global",)
+
+
+def test_load_slot_rejects_non_list_extra_args(monkeypatch):
+    """追加引数を文字列で指定した設定は起動前に拒否する。"""
+    monkeypatch.setenv(
+        "ARGOS_AGENT_SLOTS_JSON",
+        json.dumps([{"name": "不正", "provider": "codex", "extra_args": "--json"}]),
+    )
+
+    with pytest.raises(ValueError, match="extra_argsは文字列の配列"):
+        load_settings()
 
 
 def test_load_default_slot_voicevox_speaker(monkeypatch):
@@ -623,6 +675,9 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
     monkeypatch.setenv("ARGOS_DASHBOARD_VIEW_KEY", "viewkey")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL", "true")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL_CERT_PATH", "/tmp/dashboard.crt")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL_KEY_PATH", "/tmp/dashboard.key")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "sp")
@@ -637,6 +692,9 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
     assert settings.dashboard_view_key == "viewkey"
+    assert settings.dashboard_ssl is True
+    assert settings.dashboard_ssl_cert_path == "/tmp/dashboard.crt"
+    assert settings.dashboard_ssl_key_path == "/tmp/dashboard.key"
     assert settings.dashboard_screensaver_seconds == 12.5
     assert settings.dashboard_default_font_size == "small"
     assert settings.dashboard_default_layout == "sp"

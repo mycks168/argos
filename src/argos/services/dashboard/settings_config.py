@@ -10,7 +10,6 @@ from typing import Any
 
 import yaml
 
-
 SETTING_FIELDS: tuple[dict[str, Any], ...] = (
     {
         "key": "audio.output_volume",
@@ -145,6 +144,7 @@ SECTION_LABELS = {
     "wakeword": "ウェイクワード",
     "acknowledgement": "相づち",
     "runner": "Agent Runner",
+    "remote_argos": "リモートARGOS",
     "greeting": "あいさつ",
     "startup": "起動演出",
     "whisper": "ローカル音声認識",
@@ -223,6 +223,7 @@ DESCRIPTION_BY_KEY = {
     "runner.host": "Agent Runnerが待ち受けるアドレスです。",
     "runner.port": "Agent Runnerが待ち受けるポートです。",
     "runner.state_dir": "Runnerのジョブ状態を保存する場所です。",
+    "remote_argos.timeout_seconds": "別のARGOSからの応答を待つ最大秒数です。0なら時間制限なく待機します。",
     "greeting.enabled": "時間帯などに応じた起動時のあいさつを有効にします。",
     "greeting.state_path": "最後にあいさつした状態の保存先です。",
     "startup.splash_enabled": "起動時にダッシュボードへARGOSロゴを表示します。",

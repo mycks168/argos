@@ -422,3 +422,22 @@ def test_slot_model_overrides_global_without_changing_session_key(tmp_path):
 
     assert command[command.index("-m") + 1] == "slot-model-a"
     assert _slot_key(first_slot) == _slot_key(second_slot)
+
+
+def test_slot_command_and_extra_args_override_codex_defaults(tmp_path):
+    """Codexはスロット固有ラッパーと引数で起動できる。"""
+    settings = _settings(tmp_path)
+    slot = AgentSlot(
+        "Codex互換",
+        "codex",
+        str(tmp_path),
+        command="codex-wrapper",
+        extra_args=("--custom",),
+    )
+    client = CodexCliClient(Settings(**{**settings.__dict__, "agent_slots": (slot,)}))
+
+    command = client._build_command(client._conversations[0], "/tmp/out.txt")
+
+    assert command[0] == "codex-wrapper"
+    assert "--custom" in command
+    assert "--json" in command

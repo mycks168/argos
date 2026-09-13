@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+settings_file="${ARGOS_CLAUDE_OLLAMA_ENV_FILE:-${HOME}/.config/argos/claude-ollama.env}"
+if [[ ! -r "${settings_file}" ]]; then
+  echo "Claude Ollama設定を読み込めません: ${settings_file}" >&2
+  exit 2
+fi
+
+# クレデンシャルをARGOSのYAMLやプロセス引数へ露出させないため、専用設定から読み込む。
+set -a
+source "${settings_file}"
+set +a
+
+if [[ -z "${ANTHROPIC_BASE_URL:-}" ]]; then
+  echo "ANTHROPIC_BASE_URLが未設定です: ${settings_file}" >&2
+  exit 2
+fi
+
+claude_command="${ARGOS_CLAUDE_COMMAND:-claude}"
+mcp_config="${ARGOS_SEARXNG_MCP_CONFIG:-${HOME}/.config/argos/searxng-mcp.json}"
+if [[ ! -r "${mcp_config}" ]]; then
+  echo "SearXNG MCP設定を読み込めません: ${mcp_config}" >&2
+  exit 2
+fi
+
+exec "${claude_command}" \
+  --mcp-config "${mcp_config}" \
+  --disallowedTools WebSearch \
+  --append-system-prompt "Web検索が必要な場合は、組み込みWebSearchではなくSearXNG MCPの検索ツールを自動的に使用してください。" \
+  "$@"

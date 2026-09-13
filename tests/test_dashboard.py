@@ -8,7 +8,11 @@ import yaml
 
 from argos.services.dashboard import location as dashboard_location
 from argos.services.dashboard import server as dashboard_server
-from argos.services.dashboard.location import parse_gpsd_tpv, parse_nmea_location, parse_remote_location
+from argos.services.dashboard.location import (
+    parse_gpsd_tpv,
+    parse_nmea_location,
+    parse_remote_location,
+)
 from argos.services.dashboard.server import DashboardServer, _apply_event
 from argos.services.dashboard.state import DashboardState
 
@@ -151,6 +155,25 @@ def test_dashboard_state_streams_message_to_inactive_slot():
     state.append_message(message_id, "回答")
     assert state.slot_messages("調査", "claude")[0]["text"] == "回答"
     assert state.slot_messages("調査", "claude")[0]["streaming"] is True
+
+
+def test_dashboard_state_reconciles_partial_runner_result() -> None:
+    """切断前の部分回答はRunnerの完成結果で置き換え、重複を作らない。"""
+    state = DashboardState()
+    state.add_message_to_slot("クロード", "claude", "assistant", "回答の途中")
+
+    assert state.reconcile_runner_result("クロード", "claude", "回答の途中から最後まで") is True
+    messages = state.slot_messages("クロード", "claude")
+    assert [message["text"] for message in messages] == ["回答の途中から最後まで"]
+
+
+def test_dashboard_state_does_not_reconcile_unrelated_runner_result() -> None:
+    """別ターンと思われる最新回答は上書きしない。"""
+    state = DashboardState()
+    state.add_message_to_slot("クロード", "claude", "assistant", "新しい回答")
+
+    assert state.reconcile_runner_result("クロード", "claude", "古い完成回答") is False
+    assert state.slot_messages("クロード", "claude")[0]["text"] == "新しい回答"
 
 
 def test_dashboard_state_tracks_slot_unread_and_busy():
@@ -383,7 +406,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert ".messages { min-height: 0; overflow: auto; padding: 6px 8px; }" in grid_html
         assert ".message { width: fit-content; max-width: 92%; margin: 3px 0; padding: 4px 8px;" in grid_html
         assert 'const text = String(message.text ?? "").trim();' in grid_html
-        assert '>${escapeHtml(text)}</div>`' in grid_html
+        assert '>${renderMessageText(text)}</div>`' in grid_html
         assert '#69b7e4' in grid_html
         assert '#f4d35e0d' in grid_html
         assert 'background: #070b0f' in grid_html
@@ -433,6 +456,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "new ArgosBrowserAudio.AudioPlayer" in grid_html
         assert "audioPlayer.enqueueBase64(base64Data, playbackGeneration)" in grid_html
         assert '<script src="/static/browser_audio.js"></script>' in grid_html
+        assert '<script src="/static/message_text.js"></script>' in grid_html
         assert 'recordingSlotKey === key && recorder?.state === "recording"' in grid_html
         assert '!element.classList.contains("voice")' in grid_html
         assert 'audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true}' in grid_html
@@ -442,6 +466,11 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
             browser_audio = response.read().decode("utf-8")
         assert "class AudioPlayer" in browser_audio
         assert "function parsePcm16Wav" in browser_audio
+
+        with urlopen(base_url + "/static/message_text.js", timeout=2) as response:
+            assert response.headers["Content-Type"] == "application/javascript; charset=utf-8"
+            message_text = response.read().decode("utf-8")
+        assert "ArgosMessageText" in message_text
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"

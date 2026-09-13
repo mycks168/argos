@@ -11,9 +11,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from argos.config import AgentSlot, Settings, resolve_agent_slot_model
+from argos.config import (
+    AgentSlot,
+    Settings,
+    resolve_agent_slot_command,
+    resolve_agent_slot_extra_args,
+    resolve_agent_slot_model,
+)
 from argos.services.agent.session_store import SlotSessionStore, slot_key
-
 
 log = logging.getLogger(__name__)
 
@@ -148,7 +153,7 @@ class AntigravityCliClient:
 
     def _build_command(self, conversation: AntigravityConversation, prompt: str) -> list[str]:
         """Antigravity CLI のコマンドラインを構築する。"""
-        command = [self._settings.antigravity_command]
+        command = [resolve_agent_slot_command(self._settings, conversation.slot)]
         if self._settings.antigravity_skip_permissions:
             command.append("--dangerously-skip-permissions")
         if self._settings.antigravity_sandbox:
@@ -160,7 +165,7 @@ class AntigravityCliClient:
             command.extend(["--model", model])
         if self._settings.antigravity_continue_session and conversation.conversation_id:
             command.extend(["--conversation", conversation.conversation_id])
-        command.extend(self._settings.antigravity_extra_args)
+        command.extend(resolve_agent_slot_extra_args(self._settings, conversation.slot))
         command.extend(["--print", f"{self._settings.antigravity_prompt_prefix}{prompt}"])
         return command
 

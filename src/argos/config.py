@@ -8,12 +8,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
 from argos.yaml_config import apply_yaml_environment
 
-
 _PROCESS_ENVIRONMENT = set(os.environ)
-load_dotenv()
 apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
 
 
@@ -117,6 +114,8 @@ class AgentSlot:
     remote_name: str = ""
     remote_provider: str = ""
     ptt_cycle: bool = True
+    command: str = ""
+    extra_args: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,6 +178,9 @@ class Settings:
     claude_model: str = ""
     # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
     dashboard_view_key: str = ""
+    dashboard_ssl: bool = False
+    dashboard_ssl_cert_path: str = "~/.config/argos/tls/dashboard.crt"
+    dashboard_ssl_key_path: str = "~/.config/argos/tls/dashboard.key"
     antigravity_model: str = ""
     antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
@@ -255,7 +257,7 @@ class Settings:
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
-    remote_argos_timeout_seconds: float = 600.0
+    remote_argos_timeout_seconds: float = 1800.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
     voicevox_accept_opus: bool = False
@@ -279,7 +281,7 @@ class Settings:
     wakeword_interval_seconds: float = 0.25
     wakeword_chunk_ms: int = 80
     wakeword_record_min_seconds: float = 1.0
-    wakeword_record_max_seconds: float = 12.0
+    wakeword_record_max_seconds: float = 60.0
     wakeword_record_silence_seconds: float = 1.0
     wakeword_pre_roll_seconds: float = 3.0
     wakeword_min_actual_seconds: float = 0.2
@@ -323,6 +325,34 @@ def resolve_agent_slot_model(settings: Settings, slot: AgentSlot) -> str:
     if provider == "hermes":
         return settings.hermes_model.strip()
     return ""
+
+
+def resolve_agent_slot_command(settings: Settings, slot: AgentSlot) -> str:
+    """スロット固有コマンドを優先し、providerの既定コマンドを返す。"""
+    if slot.command.strip():
+        return slot.command.strip()
+    provider = slot.provider.strip().lower()
+    commands = {
+        "codex": "codex",
+        "claude": "claude",
+        "claudecode": "claude",
+        "antigravity": settings.antigravity_command,
+        "hermes": settings.hermes_command,
+    }
+    return commands.get(provider, "")
+
+
+def resolve_agent_slot_extra_args(settings: Settings, slot: AgentSlot) -> tuple[str, ...]:
+    """スロット固有引数を優先し、provider全体の追加引数を返す。"""
+    if slot.extra_args:
+        return slot.extra_args
+    provider = slot.provider.strip().lower()
+    extra_args = {
+        "codex": settings.codex_extra_args,
+        "antigravity": settings.antigravity_extra_args,
+        "hermes": settings.hermes_extra_args,
+    }
+    return extra_args.get(provider, ())
 
 
 def _load_agent_slots(default_provider: str) -> tuple[AgentSlot, ...]:
@@ -413,9 +443,20 @@ def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSl
                 voicevox_speaker=_optional_int(str(item.get("voicevox_speaker", ""))),
                 model=str(item.get("model", "")).strip(),
                 ptt_cycle=bool(item.get("ptt_cycle", True)),
+                command=str(item.get("command", "")).strip(),
+                extra_args=_slot_extra_args(item.get("extra_args", []), name),
             )
         )
     return tuple(slots)
+
+
+def _slot_extra_args(value: object, slot_name: str) -> tuple[str, ...]:
+    """YAMLスロットの追加引数を文字列配列として検証する。"""
+    if value in (None, []):
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"agent.slots[{slot_name}].extra_argsは文字列の配列で指定してください")
+    return tuple(item for item in value if item)
 
 
 def _load_legacy_codex_slots(default_provider: str, default_cwd: str) -> tuple[AgentSlot, ...]:
@@ -484,7 +525,7 @@ def _load_audio_input_devices() -> tuple[str, ...]:
 
 
 def load_settings() -> Settings:
-    """環境変数と .env から設定を構築する。"""
+    """環境変数とconfig.yamlから設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
     antigravity_extra_args = tuple(arg for arg in os.environ.get("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "").split() if arg)
     hermes_extra_args = tuple(arg for arg in os.environ.get("ARGOS_HERMES_EXTRA_ARGS", "").split() if arg)
@@ -519,7 +560,7 @@ def load_settings() -> Settings:
         wakeword_interval_seconds=float(os.environ.get("ARGOS_WAKEWORD_INTERVAL_SECONDS", "0.25")),
         wakeword_chunk_ms=int(os.environ.get("ARGOS_WAKEWORD_CHUNK_MS", "80")),
         wakeword_record_min_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MIN_SECONDS", "1.0")),
-        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "12.0")),
+        wakeword_record_max_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_MAX_SECONDS", "60.0")),
         wakeword_record_silence_seconds=float(os.environ.get("ARGOS_WAKEWORD_RECORD_SILENCE_SECONDS", "1.0")),
         wakeword_pre_roll_seconds=float(os.environ.get("ARGOS_WAKEWORD_PRE_ROLL_SECONDS", "3.0")),
         wakeword_min_actual_seconds=float(os.environ.get("ARGOS_WAKEWORD_MIN_ACTUAL_SECONDS", "0.2")),
@@ -563,7 +604,7 @@ def load_settings() -> Settings:
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
-        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "600")),
+        remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "1800")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
         lcd_width=int(os.environ.get("ARGOS_LCD_WIDTH", "76")),
@@ -581,6 +622,15 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_view_key=os.environ.get("ARGOS_DASHBOARD_VIEW_KEY", ""),
+        dashboard_ssl=_bool_env("ARGOS_DASHBOARD_SSL", False),
+        dashboard_ssl_cert_path=os.environ.get(
+            "ARGOS_DASHBOARD_SSL_CERT_PATH",
+            "~/.config/argos/tls/dashboard.crt",
+        ),
+        dashboard_ssl_key_path=os.environ.get(
+            "ARGOS_DASHBOARD_SSL_KEY_PATH",
+            "~/.config/argos/tls/dashboard.key",
+        ),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),

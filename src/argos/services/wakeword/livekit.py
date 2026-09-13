@@ -223,7 +223,7 @@ class WakeWordListener:
         interval_seconds: float = 0.25,
         chunk_ms: int = 80,
         record_min_seconds: float = 1.0,
-        record_max_seconds: float = 12.0,
+        record_max_seconds: float = 60.0,
         record_silence_seconds: float = 1.0,
         pre_roll_seconds: float = 3.0,
         min_actual_seconds: float = 0.4,

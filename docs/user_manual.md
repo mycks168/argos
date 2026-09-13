@@ -39,7 +39,25 @@ wakeword:
   enabled: true
 ```
 
-環境変数でも一時的に上書きできます。旧形式の `.env` も移行互換として読み込みます。
+環境変数でも一時的に上書きできます。ルートの旧 `.env` は通常起動では読み込みません。旧設定だけが残る環境では、先に `uv run argos-install --migrate-config` で `config.yaml` へ移行してください。
+
+### ダッシュボードをHTTPSにする
+
+```yaml
+dashboard:
+  ssl: true
+  ssl_cert_path: ~/.config/argos/tls/dashboard.crt
+  ssl_key_path: ~/.config/argos/tls/dashboard.key
+```
+
+初回起動時に自己署名証明書を自動生成し、以後は同じ証明書を使います。リモートのブラウザでは初回に証明書警告を承認してください。
+
+STT Gatewayの認証トークンは次の項目です。`argos-install --configure --apply`でも非表示入力できます。
+
+```yaml
+stt:
+  bearer_token: トークン
+```
 
 ### 設定を間違えたとき
 
@@ -147,6 +165,28 @@ audio:
 ### マイクを止める
 
 画面のマイク OFF ボタンで、呼びかけと PTT の受け付けを一時停止できます。もう一度押すと再開します。
+
+### 長い発話を受け付ける
+
+ウェイクワード方式では、無音またはVADで発話終了を検出します。終了を検出できない場合の最長録音時間は次の設定です。既定は60秒です。
+
+```yaml
+wakeword:
+  record_max_seconds: 60
+```
+
+### 長時間の応答を待つ
+
+同じホストのAgent Runnerは時間制限なく完了を待ちます。別のARGOSへ接続するスロットは、次の秒数まで無通信状態を待ちます。既定は30分で、0なら無制限です。
+
+ブラウザとの接続が長時間処理中に切れても、Runnerが完了した回答は約30秒後から未配信結果として回収され、対象スロットの途中回答を最後まで補完します。
+
+```yaml
+remote_argos:
+  timeout_seconds: 1800
+```
+
+Web検索の回答は、内部引用文字を表示せず、取得できた出典を回答末尾のリンクとして表示します。出典一覧とURLは読み上げません。
 
 ### 誤検知が多いとき
 
@@ -299,6 +339,8 @@ agent:
       cwd: /opt/argos      # エージェントの作業ディレクトリ
       voicevox_speaker: 2  # このスロットの声
       model: ''            # 空ならCLIの既定
+      command: ''          # 空ならprovider既定。ラッパーのパスも指定可能
+      extra_args: []       # このスロットだけに渡す追加引数
       ptt_cycle: true      # PTT短押し2回の巡回対象にするか
     - type: local
       name: 調査
@@ -308,6 +350,34 @@ agent:
 ```
 
 書いた順が、画面の並び順と PTT 短押し 2 回の巡回順になります。`ptt_cycle: false` にしたスロットは画面から選べますが、短押し 2 回では回ってきません。
+
+`command`と`extra_args`を省略した場合は、従来どおりprovider全体の設定を使います。指定した場合はそのスロットだけ上書きします。たとえばOllama用の環境変数やSearXNG MCPを設定するラッパーを`command`へ指定すれば、通常のClaudeスロットへ影響させずに併用できます。APIキーなどの秘密情報はYAMLや引数へ書かず、ラッパーが`~/.config/`配下の権限を制限した設定から読み込むようにしてください。
+
+同梱の`scripts/claude-ollama`は、`~/.config/argos/claude-ollama.env`からOllama互換APIの環境変数を読み、`~/.config/argos/searxng-mcp.json`をClaude Codeへ渡します。組み込み`WebSearch`は無効化し、検索が必要な場合はSearXNG MCPを自動選択するよう指示します。
+
+```bash
+install -m 700 scripts/claude-ollama ~/.local/bin/claude-ollama
+mkdir -p ~/.config/argos
+chmod 700 ~/.config/argos
+```
+
+`~/.config/argos/claude-ollama.env`には、利用するAnthropic互換ゲートウェイに必要な値を記載し、権限を600にします。
+
+```bash
+ANTHROPIC_BASE_URL=http://ollama-gateway.example:4000
+ANTHROPIC_AUTH_TOKEN=設定したトークン
+```
+
+```yaml
+    - type: local
+      name: Claude Ollama
+      provider: claude
+      cwd: /home/argos
+      command: /home/argos/.local/bin/claude-ollama
+      extra_args:
+        - --mcp-config
+        - /home/argos/.config/claude/searxng-mcp.json
+```
 
 ### 別ホストの ARGOS をスロットにする
 

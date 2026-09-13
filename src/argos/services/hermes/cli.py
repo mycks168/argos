@@ -10,9 +10,14 @@ from collections.abc import Generator
 from dataclasses import dataclass
 from pathlib import Path
 
-from argos.config import AgentSlot, Settings, resolve_agent_slot_model
+from argos.config import (
+    AgentSlot,
+    Settings,
+    resolve_agent_slot_command,
+    resolve_agent_slot_extra_args,
+    resolve_agent_slot_model,
+)
 from argos.services.agent.session_store import SlotSessionStore, slot_key
-
 
 log = logging.getLogger(__name__)
 SESSION_ID_PATTERN = re.compile(r"session[ _-]?id\s*[:=]\s*([A-Za-z0-9_.:-]+)", re.IGNORECASE)
@@ -102,7 +107,10 @@ class HermesCliClient:
             _write_debug_log(HERMES_ERROR_LOG_PATH, stderr)
         if proc.returncode != 0:
             raise RuntimeError(f"hermes エラー {proc.returncode}: {stderr[-1000:]}")
-        session_id = _extract_resume_session_id(stdout) or _load_latest_session_id(self._settings)
+        session_id = _extract_resume_session_id(stdout) or _load_latest_session_id(
+            self._settings,
+            conversation.slot,
+        )
         if session_id:
             conversation.session_id = session_id
             self._store.save(_slot_key(conversation.slot), session_id)
@@ -119,7 +127,15 @@ class HermesCliClient:
 
     def _build_command(self, conversation: HermesConversation, prompt: str) -> list[str]:
         """Hermes CLI のコマンドラインを構築する。"""
-        command = [self._settings.hermes_command, "chat", "-q", prompt, "-Q", "--source", self._settings.hermes_source]
+        command = [
+            resolve_agent_slot_command(self._settings, conversation.slot),
+            "chat",
+            "-q",
+            prompt,
+            "-Q",
+            "--source",
+            self._settings.hermes_source,
+        ]
         model = resolve_agent_slot_model(self._settings, conversation.slot)
         if model:
             command.extend(["--model", model])
@@ -133,7 +149,7 @@ class HermesCliClient:
             command.append("--pass-session-id")
         if conversation.session_id:
             command.extend(["--resume", conversation.session_id])
-        command.extend(self._settings.hermes_extra_args)
+        command.extend(resolve_agent_slot_extra_args(self._settings, conversation.slot))
         return command
 
 
@@ -157,11 +173,12 @@ def _is_resume_session_id(value: str) -> bool:
     return bool(HERMES_RESUME_ID_PATTERN.fullmatch(value.strip()))
 
 
-def _load_latest_session_id(settings: Settings) -> str:
+def _load_latest_session_id(settings: Settings, slot: AgentSlot) -> str:
     """Hermes session一覧から直近のresume用IDを取得する。"""
+    hermes_command = resolve_agent_slot_command(settings, slot)
     for command in (
-        [settings.hermes_command, "sessions", "list", "--source", settings.hermes_source, "--limit", "1"],
-        [settings.hermes_command, "sessions", "list", "--limit", "1"],
+        [hermes_command, "sessions", "list", "--source", settings.hermes_source, "--limit", "1"],
+        [hermes_command, "sessions", "list", "--limit", "1"],
     ):
         try:
             result = subprocess.run(command, text=True, capture_output=True, timeout=10, check=False)

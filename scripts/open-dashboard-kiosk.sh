@@ -30,19 +30,29 @@ if pgrep -f "[c]hromium.*argos-dashboard-chromium-kiosk" >/dev/null; then
   exit 0
 fi
 
-# .envからconfig.yamlへ移行済みの環境でも、キオスクに必要な値を取得する。
+# ARGOS本体と同じconfig.yamlから、キオスクに必要な値を取得する。
 if [ -x "${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}/../.venv/bin/python" ]; then
   SCRIPT_DIR="${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}"
   mapfile -t DASHBOARD_CONFIG < <(
     "${SCRIPT_DIR}/../.venv/bin/python" -c \
-      'from pathlib import Path; from argos.yaml_config import load_yaml_environment; v=load_yaml_environment(Path("'"${SCRIPT_DIR}"'").parent / "config.yaml"); print(v.get("ARGOS_DASHBOARD_PORT", "")); print(v.get("ARGOS_DASHBOARD_VIEW_KEY", ""))'
+      'from pathlib import Path; from argos.yaml_config import load_yaml_environment; v=load_yaml_environment(Path("'"${SCRIPT_DIR}"'").parent / "config.yaml"); print(v.get("ARGOS_DASHBOARD_PORT", "")); print(v.get("ARGOS_DASHBOARD_VIEW_KEY", "")); print(v.get("ARGOS_DASHBOARD_SSL", "false"))'
   )
   ARGOS_DASHBOARD_PORT="${ARGOS_DASHBOARD_PORT:-${DASHBOARD_CONFIG[0]:-}}"
   ARGOS_DASHBOARD_VIEW_KEY="${ARGOS_DASHBOARD_VIEW_KEY:-${DASHBOARD_CONFIG[1]:-}}"
+  ARGOS_DASHBOARD_SSL="${ARGOS_DASHBOARD_SSL:-${DASHBOARD_CONFIG[2]:-false}}"
 fi
 
 # 閲覧キーが設定されていれば、初回アクセスでCookieを受け取るためURLへ付与する。
-DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
+DASHBOARD_SCHEME="http"
+CHROMIUM_TLS_ARGS=()
+case "${ARGOS_DASHBOARD_SSL:-false}" in
+  1|true|TRUE|yes|YES|on|ON)
+    DASHBOARD_SCHEME="https"
+    # 自己署名証明書を使うローカルキオスクだけ、localhostの警告を自動で通過する。
+    CHROMIUM_TLS_ARGS+=(--allow-insecure-localhost)
+    ;;
+esac
+DASHBOARD_URL="${DASHBOARD_SCHEME}://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
   DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
 fi
@@ -83,4 +93,5 @@ exec chromium \
   --disable-session-crashed-bubble \
   --touch-events=enabled \
   --autoplay-policy=no-user-gesture-required \
+  "${CHROMIUM_TLS_ARGS[@]}" \
   "${SPLASH_URL}"

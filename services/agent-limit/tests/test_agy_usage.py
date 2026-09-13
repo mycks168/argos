@@ -24,6 +24,42 @@ def test_parse_usage_basic():
     }
 
 
+def test_parse_usage_with_remaining_label():
+    screen = """
+GEMINI MODELS
+  Models within this group: Gemini Flash, Gemini Pro
+
+  Weekly Limit Remaining
+    [█████████████████████████████████████████████████░] 98.95%
+    99% remaining · Refreshes in 80h 56m
+
+  Five Hour Limit Remaining
+    [█████████████████████████████████████████████████░] 98.20%
+    98% remaining · Refreshes in 4h 59m
+
+CLAUDE AND GPT MODELS
+  Models within this group: Claude 3.5 Sonnet, Claude 3.7 Sonnet
+
+  Weekly Limit Remaining
+    [██████████████████████████████████████████████████] 100.00%
+    100% remaining · Refreshes in 163h 3m
+
+  Five Hour Limit Remaining
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+"""
+    now = datetime(2026, 8, 27, 10, 0)
+    result = parse_usage(screen, now=now)
+    assert result["gemini"]["weekly"]["usage_pct"] == 1.05
+    assert result["gemini"]["weekly"]["reset"] == "08/30 18:56"
+    assert result["gemini"]["five_hour"]["usage_pct"] == 1.8
+    assert result["gemini"]["five_hour"]["reset"] == "08/27 14:59"
+    assert result["claude_gpt"]["weekly"]["usage_pct"] == 0.0
+    assert result["claude_gpt"]["weekly"]["reset"] == "09/03 05:03"
+    assert result["claude_gpt"]["five_hour"]["usage_pct"] == 0.0
+    assert result["claude_gpt"]["five_hour"]["reset"] is None
+
+
 def test_parse_usage_raises_on_unexpected_screen():
     with pytest.raises(ValueError):
         parse_usage("no usage information here")

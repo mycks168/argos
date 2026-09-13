@@ -26,7 +26,7 @@ wakeword:
   interval_seconds: 0.25
   chunk_ms: 80
   record_min_seconds: 1.0
-  record_max_seconds: 12.0
+  record_max_seconds: 60.0
   record_silence_seconds: 1.0
   pre_roll_seconds: 3.0
   min_actual_seconds: 0.2
@@ -66,6 +66,8 @@ agent:
       cwd: /opt/argos
       voicevox_speaker: 2
       model: ''
+      command: ''  # 空ならprovider既定。ラッパーコマンドでスロット単位に差し替え可能
+      extra_args: []
     - type: remote
       name: 自宅Codex
       ptt_cycle: false
@@ -81,7 +83,7 @@ agent:
     claude: cat /opt/argos/services/agent-limit/claude.json
     hermes: cat /opt/argos/services/agent-limit/hermes.json
 remote_argos:
-  timeout_seconds: 600
+  timeout_seconds: 1800  # 応答待ち。0なら無制限
 conversation_history:
   enabled: false
   path: ~/.local/state/argos/conversation-history.json
@@ -140,6 +142,9 @@ dashboard:
   enabled: true
   host: 127.0.0.1
   port: 8765
+  ssl: false
+  ssl_cert_path: ~/.config/argos/tls/dashboard.crt
+  ssl_key_path: ~/.config/argos/tls/dashboard.key
   token: ''
   view_key: ''
   screensaver_seconds: 1800

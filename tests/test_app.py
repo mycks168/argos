@@ -2,6 +2,8 @@ import json
 import logging
 from contextlib import contextmanager
 
+import pytest
+
 from argos.config import AgentSlot, Settings
 from argos.core.app import (
     ArgosApp,
@@ -383,6 +385,30 @@ def test_deliver_terminal_runner_result_only_updates_dashboard(monkeypatch):
     assert snapshot["messages"][-1]["text"] == "Terminal応答"
     assert snapshot["notifications"][-1]["title"] == "作業 端末応答完了"
     assert app._pending_slot_speech == {}
+
+
+def test_deliver_terminal_runner_result_completes_partial_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """切断後に回収した完成回答は途中メッセージを補完し、重複追加しない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    app._dashboard_state.add_message_to_slot("作業", "codex", "assistant", "回答の途中")
+
+    app._deliver_runner_result(
+        "job-1",
+        "作業",
+        "codex",
+        "回答の途中から最後まで",
+        "terminal",
+    )
+
+    assistant_messages = [
+        message
+        for message in app._dashboard_state.snapshot()["messages"]
+        if message["role"] == "assistant"
+    ]
+    assert [message["text"] for message in assistant_messages] == ["回答の途中から最後まで"]
 
 
 def test_terminal_agent_stream_sets_terminal_response_target(monkeypatch):

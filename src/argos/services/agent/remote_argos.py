@@ -69,7 +69,7 @@ class RemoteArgosClient:
             headers=self._headers(text_content=True),
             data=prompt.encode("utf-8"),
             stream=True,
-            timeout=(5, self._settings.remote_argos_timeout_seconds),
+            timeout=_stream_timeout(self._settings.remote_argos_timeout_seconds),
         )
         response.raise_for_status()
         # requestsはcharset未指定のtext/*をISO-8859-1とみなすため、SSEはUTF-8へ固定する。
@@ -126,3 +126,9 @@ class RemoteArgosClient:
         if text_content:
             headers["Content-Type"] = "text/plain; charset=utf-8"
         return headers
+
+
+def _stream_timeout(timeout_seconds: float) -> tuple[float, float | None]:
+    """接続は5秒で打ち切り、0以下の応答待ちは無制限として返す。"""
+    read_timeout = timeout_seconds if timeout_seconds > 0 else None
+    return (5.0, read_timeout)
