@@ -7,10 +7,12 @@ import hmac
 import json
 import logging
 import queue
+import ssl
 import subprocess
 import threading
 import uuid
 from collections.abc import Callable
+from dataclasses import dataclass
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,6 +32,7 @@ from argos.services.dashboard.settings_config import (
     save_settings_form,
 )
 from argos.services.dashboard.state import DashboardState
+from argos.services.dashboard.tls import ensure_self_signed_certificate
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
 from argos.services.opus_codec import (
     OpusCodecError,
@@ -65,6 +68,18 @@ UPLOAD_EXTENSION_MIMES = {
 }
 TERMINAL_PROGRESS_AUDIO_PREFIX = "/api/terminal/progress-audio/"
 TERMINAL_PROGRESS_CACHE_CONTROL = "private, max-age=31536000, immutable"
+
+
+@dataclass(frozen=True)
+class DashboardTlsConfig:
+    """ダッシュボードのHTTPS設定。"""
+
+    is_enabled: bool = False
+    certificate_path: Path = Path("~/.config/argos/tls/dashboard.crt")
+    key_path: Path = Path("~/.config/argos/tls/dashboard.key")
+
+
+DEFAULT_DASHBOARD_TLS_CONFIG = DashboardTlsConfig()
 
 
 def _normalize_font_size(value: str) -> str:
@@ -108,6 +123,7 @@ class DashboardServer:
         event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
         terminal_handler: Any | None = None,
         config_path: Path = Path("config.yaml"),
+        tls: DashboardTlsConfig = DEFAULT_DASHBOARD_TLS_CONFIG,
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -131,6 +147,11 @@ class DashboardServer:
         self._event_handler = event_handler
         self._terminal_handler = terminal_handler
         self._config_path = config_path
+        self._tls = DashboardTlsConfig(
+            is_enabled=tls.is_enabled,
+            certificate_path=tls.certificate_path.expanduser(),
+            key_path=tls.key_path.expanduser(),
+        )
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
 
@@ -164,10 +185,22 @@ class DashboardServer:
             self._terminal_handler,
             self._config_path,
         )
+        context: ssl.SSLContext | None = None
+        if self._tls.is_enabled:
+            ensure_self_signed_certificate(
+                self._tls.certificate_path,
+                self._tls.key_path,
+                self._host,
+            )
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(self._tls.certificate_path, self._tls.key_path)
         self._server = ThreadingHTTPServer((self._host, self._port), handler)
+        if context is not None:
+            self._server.socket = context.wrap_socket(self._server.socket, server_side=True)
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         self._thread.start()
-        log.info("HDMIダッシュボード起動: http://%s:%d", *self.address)
+        scheme = "https" if self._tls.is_enabled else "http"
+        log.info("HDMIダッシュボード起動: %s://%s:%d", scheme, *self.address)
 
     def stop(self) -> None:
         """HTTPサーバーを停止する。"""

@@ -42,9 +42,7 @@ def test_argos_service_uses_project_runtime():
     wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
     assert wd == project_dir
 
-    assert unit["Service"]["EnvironmentFile"].startswith("-")
-    env_file = Path(unit["Service"]["EnvironmentFile"].removeprefix("-")).resolve()
-    assert env_file == project_dir / ".env"
+    assert "EnvironmentFile" not in unit["Service"]
 
     exec_start = unit["Service"]["ExecStart"]
     expected_exec = str(wd / ".venv" / "bin" / "argos")
@@ -75,9 +73,7 @@ def test_agent_runner_service_uses_project_runtime():
     wd = Path(unit["Service"]["WorkingDirectory"]).resolve()
     assert wd == project_dir
 
-    assert unit["Service"]["EnvironmentFile"].startswith("-")
-    env_file = Path(unit["Service"]["EnvironmentFile"].removeprefix("-")).resolve()
-    assert env_file == project_dir / ".env"
+    assert "EnvironmentFile" not in unit["Service"]
 
     exec_start = unit["Service"]["ExecStart"]
     expected_exec = str(wd / ".venv" / "bin" / "argos-agent-runner")
@@ -93,7 +89,7 @@ def test_systemd_templates_support_development_project_dir():
     runner_unit = _load_runner_unit(project_dir)
 
     assert unit["Service"]["WorkingDirectory"] == str(project_dir)
-    assert unit["Service"]["EnvironmentFile"] == f"-{project_dir / '.env'}"
+    assert "EnvironmentFile" not in unit["Service"]
     assert unit["Service"]["ExecStart"] == str(project_dir / ".venv" / "bin" / "argos")
     assert runner_unit["Service"]["ExecStart"] == str(project_dir / ".venv" / "bin" / "argos-agent-runner")
 
@@ -116,7 +112,7 @@ def test_dashboard_kiosk_disables_translation_ui():
     unit.read_string(_render_unit("argos-dashboard-kiosk.service"))
     script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
 
-    assert unit["Service"]["EnvironmentFile"] == "-/opt/argos/.env"
+    assert "EnvironmentFile" not in unit["Service"]
 
     assert "--lang=ja" in script
     assert 'CHROMIUM_SNAP_FONT_DIR="${HOME}/snap/chromium/current/.local/share/fonts/argos"' in script
