@@ -1,12 +1,30 @@
 import json
+from pathlib import Path
 
+import pytest
 import update_limits
 
 
-def test_main_writes_claude_json_from_claude_usage(monkeypatch, tmp_path):
+def test_codex_usage_json_without_credits() -> None:
+    """クレジットがなくても空の補足情報として変換を完了する。"""
+    usage_data = {
+        "five_hour": {"usage_pct": 10, "reset": "07/02 12:00"},
+        "weekly": {"usage_pct": 20, "reset": "07/08 05:00"},
+    }
+
+    result = update_limits._codex_usage_json(usage_data)
+
+    assert result["other"] == {}
+    assert result["weekly"]["use_percentage"] == 20
+
+
+def test_main_writes_claude_json_from_claude_usage(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """claude_usage.pyの取得結果をclaude.jsonへ書き出す。"""
 
-    def fake_run_cmd(args):
+    def fake_run_cmd(args: list[str]) -> object:
+        """対象スクリプトごとの固定レスポンスを返す。"""
         script = str(args[-1])
         if script.endswith("codex_status.py"):
             return {

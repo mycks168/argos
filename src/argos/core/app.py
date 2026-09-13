@@ -48,7 +48,7 @@ from argos.services.agent_usage import AgentUsageProvider
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
 from argos.services.conversation_store import ConversationStore
-from argos.services.dashboard.server import DashboardServer
+from argos.services.dashboard.server import DashboardServer, DashboardTlsConfig
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
@@ -356,6 +356,11 @@ class ArgosApp:
             port=settings.dashboard_port,
             token=settings.dashboard_token,
             view_key=settings.dashboard_view_key,
+            tls=DashboardTlsConfig(
+                is_enabled=settings.dashboard_ssl,
+                certificate_path=Path(settings.dashboard_ssl_cert_path),
+                key_path=Path(settings.dashboard_ssl_key_path),
+            ),
             camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
             default_font_size=settings.dashboard_default_font_size,

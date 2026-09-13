@@ -2,7 +2,7 @@
 # /// script
 # requires-python = ">=3.11"
 # ///
-"""codexの`/status`を実行し、使用率・リセット時刻・クレジットをJSONで出力する。"""
+"""codexの`/status`を実行し、使用率・リセット時刻をJSONで出力する。"""
 
 import json
 import os
@@ -10,11 +10,34 @@ import re
 import sys
 import time
 from datetime import datetime, timedelta
+from typing import TypedDict
 
 from tmux_util import cleanup, send_keys, tmux, wait_for
 
 
-def parse_limit_row(pattern_label, screen, now):
+class LimitData(TypedDict):
+    """利用枠の使用率とリセット時刻。"""
+
+    usage_pct: int
+    reset: str
+
+
+class StatusData(TypedDict):
+    """Codexの必須利用枠。"""
+
+    five_hour: LimitData
+    weekly: LimitData
+
+
+class StatusDataWithCredits(StatusData, total=False):
+    """任意のクレジット残高を含むCodex利用枠。"""
+
+    credits: int
+
+
+def parse_limit_row(
+    pattern_label: str, screen: str, now: datetime
+) -> LimitData | None:
     """5h limit または Weekly limit の行を解析する。"""
     pattern = re.compile(
         re.escape(pattern_label) +
@@ -46,14 +69,14 @@ def parse_limit_row(pattern_label, screen, now):
     }
 
 
-def parse_status(screen, now=None):
-    """`/status`の画面テキストから使用率・リセット時刻・クレジットを抽出する。"""
+def parse_status(screen: str, now: datetime | None = None) -> StatusDataWithCredits:
+    """`/status`の画面から使用率と、表示されていればクレジットを抽出する。"""
     now = now or datetime.now()
 
     five_hour = parse_limit_row("5h limit", screen, now)
     weekly = parse_limit_row("Weekly limit", screen, now)
     mc = re.search(r"Credits:\s*([\d,]+) credits", screen)
-    if not (weekly and mc):
+    if not weekly:
         raise ValueError(f"/statusの出力を解析できませんでした:\n{screen}")
 
     if not five_hour:
@@ -62,14 +85,23 @@ def parse_status(screen, now=None):
             "reset": "N/A",
         }
 
-    return {
+    result: StatusDataWithCredits = {
         "five_hour": five_hour,
         "weekly": weekly,
-        "credits": int(mc.group(1).replace(",", "")),
     }
+    if mc:
+        result["credits"] = int(mc.group(1).replace(",", ""))
+    return result
 
 
-def run_once():
+def _is_status_ready(screen: str) -> bool:
+    """クレジット表示に依存せず、週次枠の行が完成した時点で取得完了と判定する。"""
+    if "refresh requested" in screen:
+        return True
+    return parse_limit_row("Weekly limit", screen, datetime.now()) is not None
+
+
+def run_once() -> StatusDataWithCredits:
     """1回 tmux セッションを立ち上げて /status を取得する。"""
     session = f"codex_status_{os.getpid()}_{int(time.time())}"
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "codex")
@@ -103,7 +135,7 @@ def run_once():
         send_keys(session, "Enter")
         screen = wait_for(
             session,
-            lambda t: "Credits:" in t or "refresh requested" in t,
+            _is_status_ready,
             timeout=60
         )
         if "refresh requested" in screen:
@@ -114,17 +146,18 @@ def run_once():
         cleanup(session)
 
 
-def main():
+def main() -> None:
+    """Codex利用枠を再試行付きで取得し、JSONとして出力する。"""
     last_error = None
-    for attempt in range(5):
+    for _attempt in range(5):
         try:
             result = run_once()
             print(json.dumps(result, ensure_ascii=False, indent=2))
             return
-        except Exception as e:
-            last_error = e
+        except Exception as error:
+            last_error = error
             time.sleep(2)
-    
+
     print(f"エラー: 複数回試行しましたが失敗しました。最後のエラー: {last_error}", file=sys.stderr)
     sys.exit(1)
 
