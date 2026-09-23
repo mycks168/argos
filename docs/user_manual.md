@@ -101,6 +101,8 @@ audio:
 
 ### ボタンで話す（PTT）
 
+Androidの音声検索などを併用する場合のマイク競合と音声共有については、[Waydroidを使う場合](waydroid.md#音声の併用)を参照してください。
+
 押している間だけ録音する方式です。3 通りあります。
 
 | 方法 | 使い方 | 必要な設定 |
@@ -678,7 +680,11 @@ location:
 
 自動表示の状態は `systemctl --user status argos-dashboard-kiosk.service` で確認できます。専用の Chromium プロフィールを使い、翻訳 UI や同期 UI、マウスカーソルは表示しません。
 
-Waydroidなどと左右に並べる場合は、キオスクサービスに次の環境変数を設定します。
+### Waydroidを使う場合
+
+GoogleマップなどのAndroidアプリと併用する場合は、[Waydroidを使う場合](waydroid.md)を参照してください。一般のLinuxでの前提条件、ラズパイ実機の画面配置、起動・GPS・マイク・スピーカーの注意点をまとめています。
+
+以下は1920×440の画面でWaydroidなどと左右に並べる場合の設定例です。キオスクサービスに次の環境変数を設定します。
 
 ```ini
 Environment=ARGOS_DASHBOARD_KIOSK_MODE=split-right
