@@ -197,6 +197,9 @@ wakeword:
 | `/sp` | スマートフォン・タブレット向け |
 | `/settings` | ARGOS 本体の設定 |
 
+キオスクを常にSP表示で起動する場合は、ユーザーsystemdサービスへ
+`ARGOS_DASHBOARD_KIOSK_LAYOUT=sp` を設定します。
+
 `/` を開いたときにどのレイアウトを出すかは、前回の選択（ブラウザに保存）と既定値で決まります。
 
 **設定**
@@ -677,6 +680,18 @@ location:
 ```
 
 自動表示の状態は `systemctl --user status argos-dashboard-kiosk.service` で確認できます。専用の Chromium プロフィールを使い、翻訳 UI や同期 UI、マウスカーソルは表示しません。
+
+Waydroidなどと左右に並べる場合は、キオスクサービスに次の環境変数を設定します。
+
+```ini
+Environment=ARGOS_DASHBOARD_KIOSK_MODE=split-right
+Environment=ARGOS_DASHBOARD_WINDOW_X=960
+Environment=ARGOS_DASHBOARD_WINDOW_Y=0
+Environment=ARGOS_DASHBOARD_WINDOW_WIDTH=960
+Environment=ARGOS_DASHBOARD_WINDOW_HEIGHT=440
+```
+
+`split-right` ではChromiumを枠のないアプリモードで右半分に開きます。環境変数を設定しない場合は従来どおり全画面で起動します。
 
 ### 起動時の演出
 

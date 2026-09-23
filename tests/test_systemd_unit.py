@@ -149,6 +149,25 @@ def test_dashboard_kiosk_uses_portable_splash_url():
     assert 'queryParams.get("target")' in splash
 
 
+def test_dashboard_kiosk_supports_split_right_mode():
+    """Waydroidと並べる右半分モードを選べる。"""
+    script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
+
+    assert 'ARGOS_DASHBOARD_KIOSK_MODE:-fullscreen' in script
+    assert 'if [ "${KIOSK_MODE}" = "split-right" ]' in script
+    assert '"--app=${SPLASH_URL}"' in script
+    assert 'ARGOS_DASHBOARD_WINDOW_X:-960' in script
+    assert 'ARGOS_DASHBOARD_WINDOW_WIDTH:-960' in script
+
+
+def test_dashboard_kiosk_supports_sp_layout():
+    """狭い画面向けにSPレイアウトを直接起動できる。"""
+    script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
+
+    assert 'ARGOS_DASHBOARD_KIOSK_LAYOUT:-standard' in script
+    assert 'DASHBOARD_LAYOUT_PATH="/sp"' in script
+
+
 def test_dashboard_chromium_policy_disables_translation():
     """Chromium管理ポリシーで翻訳バーとサインインUIを無効化する。"""
     policy_path = Path(__file__).parents[1] / "chromium" / "argos-dashboard.json"
