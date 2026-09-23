@@ -42,11 +42,7 @@ if [ -x "${SCRIPT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}/.
 fi
 
 # 閲覧キーが設定されていれば、初回アクセスでCookieを受け取るためURLへ付与する。
-DASHBOARD_LAYOUT_PATH="/"
-if [ "${ARGOS_DASHBOARD_KIOSK_LAYOUT:-standard}" = "sp" ]; then
-  DASHBOARD_LAYOUT_PATH="/sp"
-fi
-DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}${DASHBOARD_LAYOUT_PATH}"
+DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
   DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
 fi
