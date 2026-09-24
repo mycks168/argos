@@ -62,7 +62,7 @@ Androidを使う配置（`split`・`swap`・`android`・`restore`・`boot`）で
 
 #### 再起動後の自動復元
 
-`boot` は保存済みの比率・左右・モードを再適用します。ARGOSのウィンドウを最大60秒待ってから配置します。前回がARGOS全画面なら地図は起動しません。次の端末では何もせず正常終了するため、起動サービスが有効でも失敗しません。
+`boot` は保存済みの比率・左右・モードを再適用します。先にAndroid（凍結の解除・地図の起動）を復旧し、そのあとARGOSのウィンドウを最大300秒待ってから配置します。起動直後はダッシュボードの立ち上がりが遅いことがあるためです。失敗したときは、ユーザーサービスが30秒後から自動で再試行します（1時間に5回まで）。前回がARGOS全画面なら地図は起動しません。次の端末では何もせず正常終了するため、起動サービスが有効でも失敗しません。
 
 - Androidアプリが未設定
 - labwcのセッションではない（openboxなど）
@@ -89,6 +89,9 @@ ARGOSを全画面にし、その中央ペインの位置へ地図のウィンド
 ```bash
 # 中央ペインの位置と大きさを画面幅から自動計算して配置
 uv run python -m argos.tools.window_layout pane
+# 地図を隠す（ARGOSだけ）／隠す前の配置へ戻す
+uv run python -m argos.tools.window_layout hide
+uv run python -m argos.tools.window_layout show
 # 範囲を指定（x,y,w,h）／自動計算へ戻す
 uv run python -m argos.tools.window_layout pane --pane 435,0,960,440
 uv run python -m argos.tools.window_layout pane --pane auto
@@ -96,9 +99,12 @@ uv run python -m argos.tools.window_layout pane --pane auto
 
 - **中央ペインの計算**: ダッシュボードの3分割（`.dashboard` の `grid-template-columns`）と同じ計算式で、画面幅から求めます。1920幅なら x=413・幅1004・高さ440で、実機の画面ダンプで測った値と一致します。ダッシュボードのCSSを変えたら、`window_layout.py` の `GRID_WIDE`・`GRID_NARROW` も合わせます。対象は通常レイアウトだけで、SP表示・Grid表示や、列の最小幅に足りない画面幅は未対応です。
 - **Androidの大きさ**: Androidの描画サイズ（`persist.waydroid.width`・`height`）を読み、ペインより小さければ中央に置きます。ペインと同じ大きさなら、ペインいっぱいに広がります。ペインより大きいと右や下が切れます。出力の `android_fit` が `true` なら、ぴったり収まっています。再起動せずにAndroidの解像度を変えることはできません（`wm size` は表示が崩れました）。ペインに合わせたい場合は、`persist.waydroid.width` を `pane_rect` の幅に、高さを画面の高さにして再起動します。
-- **常に手前**: ARGOS側をタッチするとARGOSが前に出て、地図が隠れてしまうため、地図のウィンドウを最前面に固定します。labwcのToggleAlwaysOnTop/Bottomは現在の層から切り替わるだけなので、どの層から始めても結果が決まる操作の並びを使います。paneモード以外へ切り替えるときは、通常の層へ戻します。
+- **常に手前**: ARGOS側をタッチするとARGOSが前に出て、地図が隠れてしまうため、地図のウィンドウを最前面に固定します。labwcの `ToggleAlwaysOnTop/Bottom` は、`ForEach` で選んだ窓ではなく**フォーカス中の窓**に効き、しかも現在の層から切り替わるだけです。そこで、先に `Focus` で対象へフォーカスを移してから、どの層から始めても結果が決まる操作の並びを使います。paneモード以外へ切り替えるときは、通常の層へ戻します。実機では、地図が最前面に残ること、解除するとARGOSが前に出ることを確認しました。
+- **隠す・出す**: `hide` は `argos` モードと同じ（ARGOSだけを全画面にする）で、直前の配置を覚えます。`show` は隠す前の配置へ戻します。隠しても地図は最小化せず、ARGOSの後ろに残ります（Waydroidは動いたまま）。
 - **上部のパネル**: Raspberry Pi OSのパネル（`wf-panel-pi`）が上部を確保していると、窓を最上端に置けず、下が切れます。paneモードではパネルを止め、他のモードへ切り替えるときに再開します。止めたのはこのツールだけが対象で、利用者が自分で止めたパネルは再開しません。パネルは `lwrespawn` が自動で再起動するため、先に見張り役を止めます。パネルの停止中は、Wi-Fiなどのアイコンを押せません。
 - **再起動後**: `boot` は、保存したモード（pane）と範囲を再適用します。
+
+AIエージェントが地図を出す・隠す・入れ替えるときの手順とはまりどころは、スキル `skills/argos-screen-layout/SKILL.md` にまとめてあります。
 
 #### 実機で分かった制約
 

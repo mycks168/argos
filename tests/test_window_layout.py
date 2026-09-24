@@ -151,6 +151,9 @@ def android(monkeypatch):
             world["window"] = world["launches"] >= world["appear_after"]
             return SimpleNamespace(returncode=0)
         android_query = any(str(part).startswith("app_id:") for part in command)
+        argos_query = any(str(part).startswith("title:") for part in command)
+        if argos_query and not world.get("argos", True):
+            return SimpleNamespace(returncode=1)
         return SimpleNamespace(returncode=0 if world["window"] or not android_query else 1)
 
     monkeypatch.setattr(layout.subprocess, "check_output", status)
@@ -201,7 +204,7 @@ def test_state_defaults(tmp_path):
     """旧形式の保存ファイルの余分な項目は無視し、不足は既定値で補う。"""
     path = tmp_path / "state.json"
     path.write_text('{"ratio": 30, "android_app": "old.package"}')
-    assert layout.load_state(path) == {"ratio": 30, "side": "left", "mode": "split", "pane": None, "panel_hidden": False}
+    assert layout.load_state(path) == {"ratio": 30, "side": "left", "mode": "split", "pane": None, "panel_hidden": False, "return_mode": None}
 
 
 def test_configured_package_sources(tmp_path, monkeypatch):
@@ -339,6 +342,8 @@ def test_fit_android(size, expected):
 
 def _next_layer(layer, action):
     """labwcのToggleAlwaysOnTop/Bottomの層遷移を模擬する。"""
+    if action == "Focus":
+        return layer
     target = "top" if action == "ToggleAlwaysOnTop" else "bottom"
     return "normal" if layer == target else target
 
@@ -353,6 +358,12 @@ def test_layer_sequences_are_idempotent(start):
         assert layer == expected
 
 
+@pytest.mark.parametrize("sequence", ["LAYER_TOP", "LAYER_NORMAL"])
+def test_layer_sequences_focus_target_first(sequence):
+    """層の切り替えはフォーカス中の窓に効くため、必ず先にFocusする。"""
+    assert getattr(layout, sequence)[0] == "Focus"
+
+
 def test_pane_binding_pins_android_on_top_and_fullscreens_argos():
     """paneモードはARGOSを全画面にし、Androidを最前面へ固定して指定位置へ置く。"""
     root = ET.fromstring("<openbox_config><keyboard/></openbox_config>")
@@ -361,7 +372,7 @@ def test_pane_binding_pins_android_on_top_and_fullscreens_argos():
     foreach = [node for node in result.iter() if node.get("name") == "ForEach"]
     argos, android = ([child.get("name") for child in node.find("then")] for node in foreach)
     assert argos == ["ToggleFullscreen", "Raise"]
-    assert android[:3] == list(layout.LAYER_TOP)
+    assert android[:len(layout.LAYER_TOP)] == list(layout.LAYER_TOP)
     assert android[-2:] == ["MoveTo", "Raise"]
     move = next(node for node in result.iter() if node.get("name") == "MoveTo")
     assert (move.get("x"), move.get("y")) == ("435", "0")
@@ -509,3 +520,52 @@ def test_pane_mode_without_panel_binary(desktop, panel, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["layout", "pane", "--pane", "10,0,500,440"])
     layout.main()
     assert panel["killed"] == []
+
+
+def test_boot_recovers_android_even_if_argos_is_late(desktop, android, monkeypatch):
+    """ARGOSのウィンドウが出なくても、Androidの解凍・起動は先に済ませて失敗を返す。"""
+    android.update(frozen=True, window=False, appear_after=1, argos=False)
+    monkeypatch.setattr(layout, "BOOT_WAIT_SECONDS", 2)
+    monkeypatch.setattr(sys, "argv", ["layout", "boot"])
+    with pytest.raises(RuntimeError, match="ARGOS"):
+        layout.main()
+    assert android["launches"] == 1 and not android["frozen"]
+
+
+def _run(monkeypatch, *argv):
+    """コマンドを実行して保存後の状態を返す。"""
+    monkeypatch.setattr(sys, "argv", ["layout", *argv])
+    layout.main()
+    return json.loads((layout.Path.home() / ".local/state/argos/window-layout.json").read_text())
+
+
+def test_hide_and_show_return_to_previous_layout(desktop, panel, monkeypatch):
+    """隠す前の配置を覚え、showでその配置へ戻る。二重にhideしても覚えたまま。"""
+    monkeypatch.setattr(layout, "android_size", lambda: None)
+    assert _run(monkeypatch, "pane")["mode"] == "pane"
+    state = _run(monkeypatch, "hide")
+    assert (state["mode"], state["return_mode"]) == ("argos", "pane")
+    assert _run(monkeypatch, "hide")["return_mode"] == "pane"
+    assert _run(monkeypatch, "show")["mode"] == "pane"
+
+
+def test_argos_mode_also_remembers_previous_layout(desktop, monkeypatch):
+    """argosモードへ切り替えたときも、直前の配置をshowで戻せる。"""
+    assert _run(monkeypatch, "split")["mode"] == "split"
+    assert _run(monkeypatch, "argos")["return_mode"] == "split"
+    assert _run(monkeypatch, "show")["mode"] == "split"
+
+
+def test_show_without_hide_keeps_current_layout(desktop, monkeypatch):
+    """隠していないときのshowは、今の配置を再適用するだけ。"""
+    assert _run(monkeypatch, "android")["mode"] == "android"
+    assert _run(monkeypatch, "show")["mode"] == "android"
+
+
+def test_show_defaults_to_split_when_nothing_remembered(desktop, monkeypatch):
+    """戻し先が未記録のままARGOSだけの状態でshowすると、左右分割へ戻る。"""
+    home, _, _ = desktop
+    path = home / ".local/state/argos/window-layout.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"mode": "argos"}))
+    assert _run(monkeypatch, "show")["mode"] == "split"

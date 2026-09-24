@@ -18,8 +18,10 @@ APP_SETTING = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 PROJECT_CONFIG = Path(__file__).resolve().parents[3] / "config.yaml"
 
 
-DEFAULT_STATE = {"ratio": 50, "side": "left", "mode": "split", "pane": None, "panel_hidden": False}
+DEFAULT_STATE = {"ratio": 50, "side": "left", "mode": "split", "pane": None, "panel_hidden": False, "return_mode": None}
 ARGOS_MATCH = "title:ARGOS Dashboard"
+# 起動直後はダッシュボードが立ち上がるまで接続待ち画面のままなので、長めに待つ。
+BOOT_WAIT_SECONDS = 300
 
 
 # ダッシュボード(dashboard.html)の.dashboardが使うgrid-template-columnsと同じ値。
@@ -108,10 +110,11 @@ def show_panel():
     subprocess.Popen(command, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-# labwcのToggleAlwaysOnTop/Bottomは現在の層から切り替わるだけで、層の取得はできない。
-# 層は 通常・最前面・最背面 の3つで、次の並びなら現在の層によらず結果が決まる。
-LAYER_TOP = ("ToggleAlwaysOnBottom", "ToggleAlwaysOnBottom", "ToggleAlwaysOnTop")
-LAYER_NORMAL = ("ToggleAlwaysOnBottom", "ToggleAlwaysOnTop", "ToggleAlwaysOnTop")
+# labwcのToggleAlwaysOnTop/Bottomは、ForEachで選んだ窓ではなく「フォーカス中の窓」に効く。
+# そのため先にFocusで対象の窓へフォーカスを移す。また切り替えは現在の層から変わるだけで、
+# 層の取得はできない。層は 通常・最前面・最背面 の3つで、次の並びなら現在の層によらず結果が決まる。
+LAYER_TOP = ("Focus", "ToggleAlwaysOnBottom", "ToggleAlwaysOnBottom", "ToggleAlwaysOnTop")
+LAYER_NORMAL = ("Focus", "ToggleAlwaysOnBottom", "ToggleAlwaysOnTop", "ToggleAlwaysOnTop")
 
 
 def parse_pane(value, width, height):
@@ -300,7 +303,7 @@ def build_binding(root, state, width, height, fullscreen=()):
 def main():
     """保存済みの分割設定を使って配置を切り替える。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["split", "android", "argos", "pane", "restore", "swap", "boot", "status"])
+    parser.add_argument("mode", choices=["split", "android", "argos", "pane", "show", "hide", "restore", "swap", "boot", "status"])
     parser.add_argument("--ratio", type=int)
     parser.add_argument("--side", choices=["left", "right"])
     parser.add_argument("--pane", help="paneモードでAndroidを重ねる範囲 x,y,w,h。autoで画面幅から自動計算")
@@ -325,8 +328,16 @@ def apply_layout(args, state, path):
     labwcのセッションでない端末では何もしないため、Waydroidを使わない端末の
     起動サービスに入れても失敗しない。
     """
-    if args.mode != "boot":
+    previous = state["mode"]
+    if args.mode == "show":
+        # 隠す前の配置へ戻す。隠していなければ今の配置を再適用する。
+        state["mode"] = (state["return_mode"] or "split") if previous == "argos" else previous
+    elif args.mode == "hide":
+        state["mode"] = "argos"
+    elif args.mode != "boot":
         state["mode"] = "split" if args.mode in ("restore", "swap") else args.mode
+    if state["mode"] == "argos" and previous != "argos":
+        state["return_mode"] = previous
     if args.ratio is not None:
         state["ratio"] = args.ratio
     if args.side:
@@ -350,7 +361,10 @@ def apply_layout(args, state, path):
         print(json.dumps(dict(state, skipped=str(exc)), ensure_ascii=False))
         return
     fullscreen = []
-    if args.mode == "boot" and not wait_window(ARGOS_MATCH, 60):
+    # Androidの復旧はARGOSの起動を待たずに先に行う。ARGOSのダッシュボードは起動が遅いことがある。
+    if needs_android:
+        ensure_android(package)
+    if args.mode == "boot" and not wait_window(ARGOS_MATCH, BOOT_WAIT_SECONDS):
         raise RuntimeError("ARGOSのウィンドウが現れませんでした")
     android_rect = None
     if state["mode"] == "pane":
@@ -367,8 +381,6 @@ def apply_layout(args, state, path):
             show_panel()
             time.sleep(1)
         state["panel_hidden"] = False
-    if needs_android:
-        ensure_android(package)
     targets = [("argos", ARGOS_MATCH)]
     if package and window_exists("app_id:" + android_id(package)):
         targets.insert(0, ("android", "app_id:" + android_id(package)))
