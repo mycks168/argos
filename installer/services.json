@@ -29,6 +29,15 @@
       "enabled_by_default": true
     },
     {
+      "name": "argos-window-layout",
+      "description": "Waydroidのアプリとダッシュボードを左右に並べ、再起動後も前回の配置を復元する（labwc専用）",
+      "kind": "user",
+      "bundle": "optional",
+      "source": ".",
+      "unit": "systemd/argos-window-layout.service",
+      "enabled_by_default": false
+    },
+    {
       "name": "tts-filter",
       "description": "読み上げ前の辞書変換と読み間違い補正API",
       "kind": "system",

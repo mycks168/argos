@@ -15,6 +15,7 @@ ARGOS本体だけでなく、周辺サービスとスキルを含めて、1つ�
 | `argos` | `/opt/argos` | systemd system | 音声エージェント本体 |
 | `argos-agent-runner` | `/opt/argos` | systemd system | Codex/Antigravityなどの実行分離 |
 | `argos-dashboard-kiosk` | `/opt/argos` | systemd user | HDMIダッシュボード表示 |
+| `argos-window-layout` | `/opt/argos` | systemd user（任意） | Waydroidのアプリとダッシュボードの左右配置を再起動後に復元（labwc専用） |
 | `tts-filter` | `/opt/argos/services/tts-filter` | systemd system | 読み上げ前の辞書変換 |
 | `argos-acknowledgement-api` | `/opt/argos/services/argos-acknowledgement-api` | systemd system | 相槌、状態通知文言の選択 |
 | `argos-reminder` | `/opt/argos/services/argos-reminder` | systemd user | 時刻、位置条件の通知 |
@@ -103,7 +104,7 @@ Pythonを自動的にダウンロードしてインストーラとサービス�
 
 `--bootstrap` は `argos` ユーザーがなければ作成し、`/opt/argos` の所有者も最終的に `argos:argos` に揃える。 kioskを含む構成ではXorg、LightDM、Openboxを導入し、`argos`ユーザーの軽量画面セッションへ自動ログインする。ARGOS本体、Agent Runner、TTSフィルター、相槌APIなどは `User=argos` のsystem serviceとして動かす。ダッシュボードkioskとリマインダーは `argos` ユーザーのuser serviceとして動かす。system serviceにも `HOME=/home/argos` と `PATH=/home/argos/.local/bin:/home/argos/.cargo/bin:...` を設定し、Codex、Antigravity、Claude、Hermesの認証情報とCLIを同じユーザー空間に集約する。
 
-`config.yaml.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。旧 `.env` がある場合は全項目を `config.yaml` へ移行する。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
+`config.yaml.example` は特定ホスト名や特定USBデバイス名を持たない汎用値にする。`--configure` を付けると、STTゲートウェイ、VOICEVOX、VOICEVOX Bearerトークン、OSRM、GPS API、ウェイクワード、Agent Runner、利用するエージェントprovider、会話スロット、PTT GPIO、入力マイク、出力デバイスを対話式に設定する。旧 `.env` がある場合は全項目を `config.yaml` へ移行する。Waydroidと画面を左右に分割するかも質問する（既定は分割しない。対応アプリはGoogleマップのみ）。`y` なら `window_layout.android_app: maps` を保存して `argos-window-layout` を有効化・起動し、`n` なら無効化する。`waydroid` や `labwc` がなければ警告する。質問しない通常の導入・更新では、unitを配置するだけで有効・無効の状態は変えない。詳細は `docs/waydroid.md` を参照。GPIOがないUbuntu環境では `ARGOS_PTT_GPIO` を空欄にする。音声デバイスは `arecord -L` と `aplay -L` から候補を表示し、番号選択または直接入力を受け付ける。
 
 `argos-install --apply` と `--update` は、ARGOS本体の `ARGOS_DASHBOARD_TOKEN` を `services/argos-reminder/.env` にも反映する。両方が空の場合は共有トークンを生成する。これにより、argos-reminder が `POST /api/events` へ通知を送るときにBearer認証不一致で401になることを避ける。
 

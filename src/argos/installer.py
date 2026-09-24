@@ -17,6 +17,8 @@ from typing import Any, Callable
 from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 
 
+WINDOW_LAYOUT_SERVICE = "argos-window-layout"
+WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -308,6 +310,8 @@ def apply_plan(
         _reload_systemd(plan, runner=runner)
         for service in plan.services:
             _enable_service(service, plan, runner=runner)
+        if configure:
+            _apply_window_layout_choice(plan, project_dir / ".env", runner=runner, output_func=output_func)
         if restart_services:
             for service in plan.services:
                 _restart_service(service, plan, runner=runner)
@@ -379,6 +383,7 @@ def configure_env(
     _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
+    _ask_bool(values, WINDOW_LAYOUT_KEY, "Waydroidと画面を左右に分割する（Googleマップ、labwc専用）", true_value="maps", false_value="", input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
     slot_template = _prepare_unified_slots_for_configure(values)
     _ask_agent_slots(values, input_func=input_func, output_func=output_func)
@@ -1095,6 +1100,29 @@ def _enable_service(service: BundledService, plan: InstallPlan, *, runner=subpro
         _run_user_systemctl(plan, ["enable", "--now", Path(service.unit).name], runner=runner)
     else:
         runner(["systemctl", "enable", "--now", Path(service.unit).name], check=True)
+
+
+def _apply_window_layout_choice(
+    plan: InstallPlan,
+    env_path: Path,
+    *,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """画面分割の回答に合わせて、配置復元サービスを有効化または無効化する。
+
+    既定では有効化しない任意サービスのため、対話設定で回答した場合だけ切り替える。
+    """
+    if not any(service.name == WINDOW_LAYOUT_SERVICE for service in plan.services):
+        return
+    unit = f"{WINDOW_LAYOUT_SERVICE}.service"
+    if _read_env_values(env_path).get(WINDOW_LAYOUT_KEY, "").strip():
+        for tool in ("waydroid", "labwc"):
+            if not shutil.which(tool):
+                output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
+        _run_user_systemctl(plan, ["enable", "--now", unit], runner=runner)
+    else:
+        _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
 
 
 def _restart_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:

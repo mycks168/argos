@@ -1,0 +1,17 @@
+[Unit]
+Description=ARGOS window layout (Waydroid split, labwc only)
+After=argos-dashboard-kiosk.service
+PartOf=argos-dashboard-kiosk.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
+EnvironmentFile=-@PROJECT_DIR@/.env
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/.venv/bin/python -m argos.tools.window_layout boot
+TimeoutStartSec=240
+
+[Install]
+WantedBy=default.target

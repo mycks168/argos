@@ -147,6 +147,9 @@ dashboard:
   screensaver_seconds: 1800
   default_font_size: medium
   camera_snapshot_path: /tmp/argos/camera-latest.jpg
+window_layout:
+  # Waydroidのアプリを左右に並べる（labwc専用）。確認済みはmaps（Googleマップ）のみ。空なら使わない。
+  android_app: ''
 greeting:
   enabled: true
   state_path: ~/.local/state/argos/greeting-state.json
