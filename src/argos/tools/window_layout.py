@@ -29,17 +29,24 @@ BOOT_WAIT_SECONDS = 300
 GRID_WIDE = ((250, 0.82), (660, 2.0), (320, 1.0))
 GRID_NARROW = ((178, 0.74), (345, 1.55), (235, 0.95))
 GRID_GAP = 1
+# 状態を示す枠(body::before/after)は、画面の端から5px内側に幅6pxで描かれる。
+# 地図が上下いっぱいまで広がると枠の上下が隠れるため、その分だけ内側に収める。
+FRAME_MARGIN = 12
 PANEL_BINARY = "/usr/bin/wf-panel-pi"
 
 
 def center_pane(width, height):
     """ダッシュボード中央ペインの位置と大きさを、画面幅からCSS gridと同じ計算で求める。
 
+    上下は状態を示す枠を隠さないよう、FRAME_MARGINだけ内側に収める。
+
     minmax(最小幅, fr)の列は、fr按分で最小幅を下回る列を最小幅に固定して残りを再按分する。
     通常レイアウト（幅901px以上と761〜900px）だけが対象で、それより狭い表示は未対応。
     """
     if width <= 760:
         raise ValueError("画面幅が狭く、3分割の通常レイアウトではありません")
+    if height <= 2 * FRAME_MARGIN:
+        raise ValueError("画面の高さが足りません")
     tracks = GRID_WIDE if width > 900 else GRID_NARROW
     free = width - GRID_GAP * (len(tracks) - 1)
     if free < sum(minimum for minimum, _ in tracks):
@@ -55,7 +62,7 @@ def center_pane(width, height):
         fixed[low[0]] = tracks[low[0]][0]
     sizes = [fixed.get(index, unit * fr) for index, (_, fr) in enumerate(tracks)]
     left = sizes[0] + GRID_GAP
-    return [round(left), 0, round(left + sizes[1]) - round(left), height]
+    return [round(left), FRAME_MARGIN, round(left + sizes[1]) - round(left), height - 2 * FRAME_MARGIN]
 
 
 def android_size():
@@ -77,7 +84,7 @@ def android_size():
 def fit_android(pane, size):
     """ペインの中に、Androidの実サイズを中央寄せで収める矩形を返す。
 
-    Androidの描画サイズはペインより大きくても切れるだけなので、ペインを超えない範囲にする。
+    ペインより大きいサイズは指定しても窓が縮まずはみ出すため、矩形はペイン内に収めて要求する。
     サイズが不明ならペイン全体を使う。
     """
     x, y, w, h = pane
@@ -366,10 +373,11 @@ def apply_layout(args, state, path):
         ensure_android(package)
     if args.mode == "boot" and not wait_window(ARGOS_MATCH, BOOT_WAIT_SECONDS):
         raise RuntimeError("ARGOSのウィンドウが現れませんでした")
-    android_rect = None
+    android_rect = size = None
     if state["mode"] == "pane":
         pane = state["pane"] or center_pane(args.width, args.height)
-        android_rect = fit_android(pane, android_size())
+        size = android_size()
+        android_rect = fit_android(pane, size)
         # 上部を占有するパネルがあると窓を最上端に置けないため、先に止める。
         if shutil.which("wf-panel-pi") and (state["panel_hidden"] or panel_running()):
             hide_panel()
@@ -415,7 +423,12 @@ def apply_layout(args, state, path):
     saved.replace(path)
     report = dict(state)
     if android_rect:
-        report.update(pane_rect=pane, android_rect=android_rect, android_fit=android_rect == pane)
+        report.update(
+            pane_rect=pane,
+            android_rect=android_rect,
+            # Waydroidの窓はAndroidの描画サイズより小さくできないため、サイズが違うとはみ出す。
+            android_fit=android_rect == pane and (not size or size == pane[2:]),
+        )
     print(json.dumps(report, ensure_ascii=False))
 
 

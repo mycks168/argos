@@ -296,9 +296,9 @@ def test_argos_without_android(desktop, monkeypatch):
 @pytest.mark.parametrize(
     "width, expected",
     [
-        (1920, [413, 0, 1004, 440]),  # 実機の画面ダンプで測った中央ペインの位置と幅
-        (1280, [275, 0, 669, 440]),
-        (900, [206, 0, 430, 440]),  # 761〜900pxは幅の狭い画面用の列定義
+        (1920, [413, 12, 1004, 416]),  # 実機の画面ダンプで測った中央ペインの位置と幅。上下は枠の分だけ内側
+        (1280, [275, 12, 669, 416]),
+        (900, [206, 12, 430, 416]),  # 761〜900pxは幅の狭い画面用の列定義
     ],
 )
 def test_center_pane_matches_css_grid(width, expected):
@@ -329,15 +329,16 @@ def test_center_pane_rejects_narrow_screen():
 @pytest.mark.parametrize(
     "size, expected",
     [
-        (None, [413, 0, 1004, 440]),
-        ([1004, 440], [413, 0, 1004, 440]),
-        ([960, 440], [435, 0, 960, 440]),
-        ([1200, 600], [413, 0, 1004, 440]),
+        (None, [413, 12, 1004, 416]),
+        ([1004, 416], [413, 12, 1004, 416]),
+        ([1004, 440], [413, 12, 1004, 416]),
+        ([960, 416], [435, 12, 960, 416]),
+        ([1200, 600], [413, 12, 1004, 416]),
     ],
 )
 def test_fit_android(size, expected):
     """Androidの実サイズをペイン内に中央寄せし、ペインからはみ出さない。"""
-    assert layout.fit_android([413, 0, 1004, 440], size) == expected
+    assert layout.fit_android([413, 12, 1004, 416], size) == expected
 
 
 def _next_layer(layer, action):
@@ -473,12 +474,12 @@ def test_pane_mode_hides_panel_and_fits_android(desktop, panel, monkeypatch, cap
     """paneモードはパネルを止め、Androidの実サイズをペインの中央に置く。"""
     home, config, _ = desktop
     original = config.read_bytes()
-    monkeypatch.setattr(layout, "android_size", lambda: [960, 440])
+    monkeypatch.setattr(layout, "android_size", lambda: [960, 416])
     monkeypatch.setattr(sys, "argv", ["layout", "pane"])
     layout.main()
     report = json.loads(capsys.readouterr().out)
-    assert report["pane_rect"] == [413, 0, 1004, 440]
-    assert report["android_rect"] == [435, 0, 960, 440]
+    assert report["pane_rect"] == [413, 12, 1004, 416]
+    assert report["android_rect"] == [435, 12, 960, 416]
     assert report["android_fit"] is False
     assert report["panel_hidden"] is True and not panel["running"]
     assert config.read_bytes() == original
@@ -486,10 +487,26 @@ def test_pane_mode_hides_panel_and_fits_android(desktop, panel, monkeypatch, cap
 
 def test_pane_mode_fits_exactly_when_android_matches(desktop, panel, monkeypatch, capsys):
     """Androidの解像度がペインと同じなら、ペインいっぱいに置く。"""
-    monkeypatch.setattr(layout, "android_size", lambda: [1004, 440])
+    monkeypatch.setattr(layout, "android_size", lambda: [1004, 416])
     monkeypatch.setattr(sys, "argv", ["layout", "pane"])
     layout.main()
     assert json.loads(capsys.readouterr().out)["android_fit"] is True
+
+
+def test_pane_mode_reports_mismatch_when_android_is_taller(desktop, panel, monkeypatch, capsys):
+    """Androidがペインより大きいと窓は縮まずはみ出すため、ぴったりではないと知らせる。"""
+    monkeypatch.setattr(layout, "android_size", lambda: [1004, 440])
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["android_rect"] == [413, 12, 1004, 416]
+    assert report["android_fit"] is False
+
+
+def test_center_pane_rejects_too_short_screen():
+    """枠の分を引くと高さが残らない画面は拒否する。"""
+    with pytest.raises(ValueError):
+        layout.center_pane(1920, 24)
 
 
 def test_leaving_pane_mode_restores_panel(desktop, panel, monkeypatch):

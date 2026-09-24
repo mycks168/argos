@@ -43,7 +43,9 @@ uv run python -m argos.tools.window_layout status
 | 左右を入れ替えて | `swap`（左右分割のとき） |
 | 地図を最大にして | `android`（Androidが960幅だと左右に黒い余白が出る） |
 
-`pane` の出力の `android_fit` が `true` なら、中央ペインにぴったり収まっている。`false` のときは、Androidの解像度がペインと合っていない（下の「解像度」を参照）。
+`pane` の出力の `android_fit` が `true` なら、中央ペインにぴったり収まっている。`false` のときは、Androidの解像度がペインと合っていない（下の「解像度」を参照）。Waydroidの窓はAndroidの描画サイズより小さくできないため、ペインより大きいと下や右が画面の外へはみ出す。
+
+地図は、ダッシュボード外周の状態表示の枠（聞き取り中は黄、処理中は青など）を隠さないよう、上下を12pxずつ内側に置く。
 
 ## 会話欄を右のペインへ移す
 
@@ -72,10 +74,11 @@ uv run python skills/dashboard-overlay/scripts/send_overlay.py --type swap
 
 ## 解像度（Androidの大きさ）
 
-Androidの描画サイズは `persist.waydroid.width`・`height` で決まり、**再起動しないと変わらない**（`wm size` は表示が崩れる）。中央ペインにぴったり合わせるには、`pane` の出力の `pane_rect` の幅と高さ（この実機は1004×440）にして、Waydroidを再起動する。ナビが中断するので、必ず利用者に確認してから行う。
+Androidの描画サイズは `persist.waydroid.width`・`height` で決まり、**再起動しないと変わらない**（`wm size` は表示が崩れる）。中央ペインにぴったり合わせるには、`pane` の出力の `pane_rect` の幅と高さ（この実機は1004×416）にして、Waydroidを再起動する。ナビが中断するので、必ず利用者に確認してから行う。
 
 ```bash
 waydroid prop set persist.waydroid.width 1004
+waydroid prop set persist.waydroid.height 416
 waydroid session stop && sudo systemctl restart waydroid-container
 systemctl --user start waydroid-session waydroid-maps
 ```
