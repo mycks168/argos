@@ -201,7 +201,7 @@ def test_state_defaults(tmp_path):
     """旧形式の保存ファイルの余分な項目は無視し、不足は既定値で補う。"""
     path = tmp_path / "state.json"
     path.write_text('{"ratio": 30, "android_app": "old.package"}')
-    assert layout.load_state(path) == {"ratio": 30, "side": "left", "mode": "split"}
+    assert layout.load_state(path) == {"ratio": 30, "side": "left", "mode": "split", "pane": None, "panel_hidden": False}
 
 
 def test_configured_package_sources(tmp_path, monkeypatch):
@@ -288,3 +288,224 @@ def test_argos_without_android(desktop, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["layout", "argos"])
     layout.main()
     assert config.read_bytes() == original
+
+
+@pytest.mark.parametrize(
+    "width, expected",
+    [
+        (1920, [413, 0, 1004, 440]),  # 実機の画面ダンプで測った中央ペインの位置と幅
+        (1280, [275, 0, 669, 440]),
+        (900, [206, 0, 430, 440]),  # 761〜900pxは幅の狭い画面用の列定義
+    ],
+)
+def test_center_pane_matches_css_grid(width, expected):
+    """中央ペインの想定サイズは、ダッシュボードのgrid計算と一致する。"""
+    assert layout.center_pane(width, 440) == expected
+
+
+def test_center_pane_min_width_takes_priority():
+    """fr按分で最小幅を下回る列は最小幅に固定し、残りを再按分する。"""
+    x, _, w, _ = layout.center_pane(1250, 440)
+    assert w == 660
+    assert 260 < x < 270
+
+
+@pytest.mark.parametrize("width", [901, 1000, 1200])
+def test_center_pane_rejects_width_below_minimums(width):
+    """最小幅の合計に足りない画面幅は、はみ出すため拒否する。"""
+    with pytest.raises(ValueError):
+        layout.center_pane(width, 440)
+
+
+def test_center_pane_rejects_narrow_screen():
+    """3分割にならない狭い画面は未対応として拒否する。"""
+    with pytest.raises(ValueError):
+        layout.center_pane(760, 440)
+
+
+@pytest.mark.parametrize(
+    "size, expected",
+    [
+        (None, [413, 0, 1004, 440]),
+        ([1004, 440], [413, 0, 1004, 440]),
+        ([960, 440], [435, 0, 960, 440]),
+        ([1200, 600], [413, 0, 1004, 440]),
+    ],
+)
+def test_fit_android(size, expected):
+    """Androidの実サイズをペイン内に中央寄せし、ペインからはみ出さない。"""
+    assert layout.fit_android([413, 0, 1004, 440], size) == expected
+
+
+def _next_layer(layer, action):
+    """labwcのToggleAlwaysOnTop/Bottomの層遷移を模擬する。"""
+    target = "top" if action == "ToggleAlwaysOnTop" else "bottom"
+    return "normal" if layer == target else target
+
+
+@pytest.mark.parametrize("start", ["normal", "top", "bottom"])
+def test_layer_sequences_are_idempotent(start):
+    """どの層から始めても、最前面固定・通常復帰の結果が決まる。"""
+    for sequence, expected in ((layout.LAYER_TOP, "top"), (layout.LAYER_NORMAL, "normal")):
+        layer = start
+        for action in sequence:
+            layer = _next_layer(layer, action)
+        assert layer == expected
+
+
+def test_pane_binding_pins_android_on_top_and_fullscreens_argos():
+    """paneモードはARGOSを全画面にし、Androidを最前面へ固定して指定位置へ置く。"""
+    root = ET.fromstring("<openbox_config><keyboard/></openbox_config>")
+    state = {"mode": "pane", "ratio": 50, "side": "left", "android_app": PACKAGE, "pane": [435, 0, 960, 440]}
+    result = layout.build_binding(root, state, 1920, 440, ())
+    foreach = [node for node in result.iter() if node.get("name") == "ForEach"]
+    argos, android = ([child.get("name") for child in node.find("then")] for node in foreach)
+    assert argos == ["ToggleFullscreen", "Raise"]
+    assert android[:3] == list(layout.LAYER_TOP)
+    assert android[-2:] == ["MoveTo", "Raise"]
+    move = next(node for node in result.iter() if node.get("name") == "MoveTo")
+    assert (move.get("x"), move.get("y")) == ("435", "0")
+
+
+def test_pane_binding_keeps_fullscreen_argos():
+    """既に全画面のARGOSは全画面を切り替えない。"""
+    root = ET.fromstring("<openbox_config><keyboard/></openbox_config>")
+    state = {"mode": "pane", "ratio": 50, "side": "left", "android_app": PACKAGE, "pane": [0, 0, 960, 440]}
+    result = layout.build_binding(root, state, 1920, 440, ("argos",))
+    argos = [child.get("name") for child in next(node for node in result.iter() if node.get("name") == "ForEach").find("then")]
+    assert argos == ["Raise"]
+
+
+@pytest.mark.parametrize("value, expected", [("auto", None), ("1,2,3,4", [1, 2, 3, 4])])
+def test_parse_pane(value, expected):
+    """autoは自動計算、x,y,w,hは検証済みの矩形になる。"""
+    assert layout.parse_pane(value, 1920, 440) == expected
+
+
+@pytest.mark.parametrize("value", ["1,2,3", "a,b,c,d", "-1,0,10,10", "0,0,0,10", "1000,0,1000,10", "0,0,10,441"])
+def test_parse_pane_rejects_invalid(value):
+    """形式不正や画面外の矩形を拒否する。"""
+    with pytest.raises(ValueError):
+        layout.parse_pane(value, 1920, 440)
+
+
+def test_android_size(monkeypatch):
+    """waydroidのプロパティからAndroidの描画サイズを読む。"""
+    values = {"persist.waydroid.width": "1004\n", "persist.waydroid.height": "440\n"}
+    monkeypatch.setattr(layout.subprocess, "check_output", lambda command, **kwargs: values[command[-1]])
+    assert layout.android_size() == [1004, 440]
+
+
+@pytest.mark.parametrize("output", ["", "\n", "abc\n", "0\n"])
+def test_android_size_unknown(monkeypatch, output):
+    """値が読めない・不正なら不明(None)として扱う。"""
+    monkeypatch.setattr(layout.subprocess, "check_output", lambda command, **kwargs: output)
+    assert layout.android_size() is None
+
+
+def test_android_size_command_failure(monkeypatch):
+    """waydroidコマンドが使えなければ不明(None)として扱う。"""
+    def fail(*args, **kwargs):
+        """コマンドがない状態を模擬する。"""
+        raise FileNotFoundError
+
+    monkeypatch.setattr(layout.subprocess, "check_output", fail)
+    assert layout.android_size() is None
+
+
+@pytest.fixture
+def panel(monkeypatch):
+    """パネルの起動状態を模擬し、停止・起動の操作を記録する。"""
+    world = {"running": True, "started": 0, "killed": []}
+    real_run = layout.subprocess.run
+
+    def run(command, **kwargs):
+        """pgrepは状態を返し、pkillは停止として記録する。それ以外は元の模擬に任せる。"""
+        if command[0] == "pgrep" and command[-1] == "wf-panel-pi":
+            return SimpleNamespace(returncode=0 if world["running"] else 1)
+        if command[0] == "pkill":
+            world["killed"].append(command)
+            if command[-1] == "wf-panel-pi":
+                world["running"] = False
+            return SimpleNamespace(returncode=0)
+        return real_run(command, **kwargs)
+
+    def popen(command, **kwargs):
+        """パネルの起動を記録する。"""
+        world["started"] += 1
+        world["running"] = True
+
+    monkeypatch.setattr(layout.subprocess, "run", run)
+    monkeypatch.setattr(layout.subprocess, "Popen", popen)
+    return world
+
+
+def test_hide_panel_stops_respawner_first(panel):
+    """見張り役(lwrespawn)を先に止めてからパネルを止める。"""
+    layout.hide_panel()
+    assert "lwrespawn" in panel["killed"][0][-1]
+    assert panel["killed"][1][-1] == "wf-panel-pi"
+
+
+def test_show_panel_uses_respawner_when_available(desktop, monkeypatch):
+    """lwrespawnがあれば、それ経由でパネルを起動する。"""
+    started = []
+    monkeypatch.setattr(layout.subprocess, "Popen", lambda command, **kwargs: started.append(command))
+    layout.show_panel()
+    assert started == [["/usr/bin/lwrespawn", layout.PANEL_BINARY]]
+    monkeypatch.setattr(layout.shutil, "which", lambda tool: None)
+    layout.show_panel()
+    assert started[-1] == [layout.PANEL_BINARY]
+
+
+def test_pane_mode_hides_panel_and_fits_android(desktop, panel, monkeypatch, capsys):
+    """paneモードはパネルを止め、Androidの実サイズをペインの中央に置く。"""
+    home, config, _ = desktop
+    original = config.read_bytes()
+    monkeypatch.setattr(layout, "android_size", lambda: [960, 440])
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["pane_rect"] == [413, 0, 1004, 440]
+    assert report["android_rect"] == [435, 0, 960, 440]
+    assert report["android_fit"] is False
+    assert report["panel_hidden"] is True and not panel["running"]
+    assert config.read_bytes() == original
+
+
+def test_pane_mode_fits_exactly_when_android_matches(desktop, panel, monkeypatch, capsys):
+    """Androidの解像度がペインと同じなら、ペインいっぱいに置く。"""
+    monkeypatch.setattr(layout, "android_size", lambda: [1004, 440])
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["android_fit"] is True
+
+
+def test_leaving_pane_mode_restores_panel(desktop, panel, monkeypatch):
+    """paneモードで止めたパネルは、通常の配置へ戻すときに再開する。"""
+    home, _, _ = desktop
+    monkeypatch.setattr(layout, "android_size", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    assert panel["started"] == 0
+    monkeypatch.setattr(sys, "argv", ["layout", "restore"])
+    layout.main()
+    assert panel["started"] == 1 and panel["running"]
+    assert json.loads((home / ".local/state/argos/window-layout.json").read_text())["panel_hidden"] is False
+
+
+def test_panel_left_alone_when_not_hidden_by_tool(desktop, panel, monkeypatch):
+    """このツールが止めていないパネルは、通常の配置でも触らない。"""
+    panel["running"] = False
+    monkeypatch.setattr(sys, "argv", ["layout", "split"])
+    layout.main()
+    assert panel["started"] == 0
+
+
+def test_pane_mode_without_panel_binary(desktop, panel, monkeypatch):
+    """パネルのない端末では、パネル操作をせずに配置する。"""
+    monkeypatch.setattr(layout.shutil, "which", lambda tool: None if tool == "wf-panel-pi" else f"/usr/bin/{tool}")
+    monkeypatch.setattr(layout, "android_size", lambda: None)
+    monkeypatch.setattr(sys, "argv", ["layout", "pane", "--pane", "10,0,500,440"])
+    layout.main()
+    assert panel["killed"] == []

@@ -18,8 +18,113 @@ APP_SETTING = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 PROJECT_CONFIG = Path(__file__).resolve().parents[3] / "config.yaml"
 
 
-DEFAULT_STATE = {"ratio": 50, "side": "left", "mode": "split"}
+DEFAULT_STATE = {"ratio": 50, "side": "left", "mode": "split", "pane": None, "panel_hidden": False}
 ARGOS_MATCH = "title:ARGOS Dashboard"
+
+
+# ダッシュボード(dashboard.html)の.dashboardが使うgrid-template-columnsと同じ値。
+# 画面幅ごとに (最小幅px, fr) の3列になる。CSSを変えたらここも合わせる。
+GRID_WIDE = ((250, 0.82), (660, 2.0), (320, 1.0))
+GRID_NARROW = ((178, 0.74), (345, 1.55), (235, 0.95))
+GRID_GAP = 1
+PANEL_BINARY = "/usr/bin/wf-panel-pi"
+
+
+def center_pane(width, height):
+    """ダッシュボード中央ペインの位置と大きさを、画面幅からCSS gridと同じ計算で求める。
+
+    minmax(最小幅, fr)の列は、fr按分で最小幅を下回る列を最小幅に固定して残りを再按分する。
+    通常レイアウト（幅901px以上と761〜900px）だけが対象で、それより狭い表示は未対応。
+    """
+    if width <= 760:
+        raise ValueError("画面幅が狭く、3分割の通常レイアウトではありません")
+    tracks = GRID_WIDE if width > 900 else GRID_NARROW
+    free = width - GRID_GAP * (len(tracks) - 1)
+    if free < sum(minimum for minimum, _ in tracks):
+        raise ValueError("画面幅が3列の最小幅の合計に足りません")
+    fixed = {}
+    while True:
+        rest = free - sum(fixed.values())
+        total = sum(fr for index, (_, fr) in enumerate(tracks) if index not in fixed)
+        unit = rest / total
+        low = [index for index, (minimum, fr) in enumerate(tracks) if index not in fixed and unit * fr < minimum]
+        if not low:
+            break
+        fixed[low[0]] = tracks[low[0]][0]
+    sizes = [fixed.get(index, unit * fr) for index, (_, fr) in enumerate(tracks)]
+    left = sizes[0] + GRID_GAP
+    return [round(left), 0, round(left + sizes[1]) - round(left), height]
+
+
+def android_size():
+    """WaydroidのAndroid描画サイズ(幅, 高さ)を返す。取得できなければNone。"""
+    values = []
+    for prop in ("persist.waydroid.width", "persist.waydroid.height"):
+        try:
+            output = subprocess.check_output(["waydroid", "prop", "get", prop], text=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        lines = output.strip().splitlines()
+        digits = "".join(char for char in (lines[-1] if lines else "") if char.isdigit())
+        if not digits:
+            return None
+        values.append(int(digits))
+    return values if all(value > 0 for value in values) else None
+
+
+def fit_android(pane, size):
+    """ペインの中に、Androidの実サイズを中央寄せで収める矩形を返す。
+
+    Androidの描画サイズはペインより大きくても切れるだけなので、ペインを超えない範囲にする。
+    サイズが不明ならペイン全体を使う。
+    """
+    x, y, w, h = pane
+    if not size:
+        return list(pane)
+    width, height = min(size[0], w), min(size[1], h)
+    return [x + (w - width) // 2, y + (h - height) // 2, width, height]
+
+
+def panel_running():
+    """Raspberry Pi OSのパネル(wf-panel-pi)が動いているか確認する。"""
+    result = subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "wf-panel-pi"], capture_output=True, check=False, timeout=5)
+    return result.returncode == 0
+
+
+def hide_panel():
+    """パネルを止める。パネルが確保する上部の領域があると、窓を画面の最上端に置けない。
+
+    lwrespawnが再起動してしまうため、先に見張り役を止める。
+    """
+    uid = str(os.getuid())
+    subprocess.run(["pkill", "-u", uid, "-f", f"^/bin/sh .*lwrespawn {PANEL_BINARY}$"], check=False, timeout=5)
+    subprocess.run(["pkill", "-u", uid, "-x", "wf-panel-pi"], check=False, timeout=5)
+
+
+def show_panel():
+    """止めたパネルを、元と同じ見張り役付きで起動し直す。"""
+    respawn = shutil.which("lwrespawn")
+    command = [respawn, PANEL_BINARY] if respawn else [PANEL_BINARY]
+    subprocess.Popen(command, start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# labwcのToggleAlwaysOnTop/Bottomは現在の層から切り替わるだけで、層の取得はできない。
+# 層は 通常・最前面・最背面 の3つで、次の並びなら現在の層によらず結果が決まる。
+LAYER_TOP = ("ToggleAlwaysOnBottom", "ToggleAlwaysOnBottom", "ToggleAlwaysOnTop")
+LAYER_NORMAL = ("ToggleAlwaysOnBottom", "ToggleAlwaysOnTop", "ToggleAlwaysOnTop")
+
+
+def parse_pane(value, width, height):
+    """"x,y,w,h形式の矩形を検証して整数のリストで返す。autoならNone（画面幅から自動計算）。画面外の指定は拒否する。"""
+    if str(value).strip() == "auto":
+        return None
+    try:
+        x, y, w, h = (int(part) for part in str(value).split(","))
+    except ValueError as exc:
+        raise ValueError("--paneはx,y,w,hの整数4つで指定します") from exc
+    if x < 0 or y < 0 or w < 1 or h < 1 or x + w > width or y + h > height:
+        raise ValueError("--paneが画面の範囲外です")
+    return [x, y, w, h]
 
 
 def android_id(package):
@@ -132,6 +237,31 @@ def build_binding(root, state, width, height, fullscreen=()):
             keyboard.remove(child)
     binding = add(keyboard, "keybind", key=key)
     package = state.get("android_app")
+    if state["mode"] == "pane":
+        # ARGOSを全画面にし、その上の指定範囲へAndroidを重ねる。重なり順は最後のRaiseで決まる。
+        for target in ("argos", "android"):
+            action = add(binding, "action", name="ForEach")
+            if target == "android":
+                add(action, "query", identifier=android_id(package))
+            else:
+                add(action, "query", identifier="*chrom*", title="ARGOS Dashboard")
+            then = add(action, "then")
+            if target == "argos":
+                if target not in fullscreen:
+                    add(then, "action", name="ToggleFullscreen")
+            else:
+                x, y, w, h = state["pane"]
+                if target in fullscreen:
+                    add(then, "action", name="ToggleFullscreen")
+                # ARGOS側をタッチして前面に出ても、地図が隠れないよう最前面に固定する。
+                for name in LAYER_TOP:
+                    add(then, "action", name=name)
+                add(then, "action", name="UnMaximize")
+                add(then, "action", name="UnSnap")
+                add(then, "action", name="ResizeTo", width=str(w), height=str(h))
+                add(then, "action", name="MoveTo", x=str(x), y=str(y))
+            add(then, "action", name="Raise")
+        return root
     rectangles = geometry(width, height, state["ratio"], state["side"])
     for target, rect in zip(("android", "argos"), rectangles):
         if target == "android" and not package:
@@ -142,6 +272,10 @@ def build_binding(root, state, width, height, fullscreen=()):
         else:
             add(action, "query", identifier="*chrom*", title="ARGOS Dashboard")
         then = add(action, "then")
+        if target == "android":
+            # paneモードで最前面にした場合に備え、通常の層へ戻す。
+            for name in LAYER_NORMAL:
+                add(then, "action", name=name)
         if target in fullscreen:
             add(then, "action", name="ToggleFullscreen")
         add(then, "action", name="UnMaximize")
@@ -166,9 +300,10 @@ def build_binding(root, state, width, height, fullscreen=()):
 def main():
     """保存済みの分割設定を使って配置を切り替える。"""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["split", "android", "argos", "restore", "swap", "boot", "status"])
+    parser.add_argument("mode", choices=["split", "android", "argos", "pane", "restore", "swap", "boot", "status"])
     parser.add_argument("--ratio", type=int)
     parser.add_argument("--side", choices=["left", "right"])
+    parser.add_argument("--pane", help="paneモードでAndroidを重ねる範囲 x,y,w,h。autoで画面幅から自動計算")
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=440)
     args = parser.parse_args()
@@ -198,6 +333,8 @@ def apply_layout(args, state, path):
         state["side"] = args.side
     if args.mode == "swap":
         state["side"] = "right" if state["side"] == "left" else "left"
+    if args.pane is not None:
+        state["pane"] = parse_pane(args.pane, args.width, args.height)
     package = configured_package()
     needs_android = state["mode"] != "argos"
     if needs_android and not package:
@@ -215,6 +352,21 @@ def apply_layout(args, state, path):
     fullscreen = []
     if args.mode == "boot" and not wait_window(ARGOS_MATCH, 60):
         raise RuntimeError("ARGOSのウィンドウが現れませんでした")
+    android_rect = None
+    if state["mode"] == "pane":
+        pane = state["pane"] or center_pane(args.width, args.height)
+        android_rect = fit_android(pane, android_size())
+        # 上部を占有するパネルがあると窓を最上端に置けないため、先に止める。
+        if shutil.which("wf-panel-pi") and (state["panel_hidden"] or panel_running()):
+            hide_panel()
+            state["panel_hidden"] = True
+            time.sleep(0.5)
+    elif state["panel_hidden"]:
+        # 止めたのはこのツールなので、通常の配置に戻すときは再開する。
+        if not panel_running():
+            show_panel()
+            time.sleep(1)
+        state["panel_hidden"] = False
     if needs_android:
         ensure_android(package)
     targets = [("argos", ARGOS_MATCH)]
@@ -230,7 +382,7 @@ def apply_layout(args, state, path):
     root = ET.fromstring(original, parser=parser)
     if any(node.get("key") == "W-C-A-F12" for node in root.iter()):
         raise RuntimeError("専用キーW-C-A-F12が既に使われています")
-    root = build_binding(root, dict(state, android_app=package), args.width, args.height, fullscreen)
+    root = build_binding(root, dict(state, android_app=package, pane=android_rect), args.width, args.height, fullscreen)
     backup = config.with_suffix(".xml.before-argos-layout")
     if not backup.exists():
         shutil.copy2(config, backup)
@@ -249,7 +401,10 @@ def apply_layout(args, state, path):
     saved = path.with_suffix(".tmp")
     saved.write_text(json.dumps(state))
     saved.replace(path)
-    print(json.dumps(state, ensure_ascii=False))
+    report = dict(state)
+    if android_rect:
+        report.update(pane_rect=pane, android_rect=android_rect, android_fit=android_rect == pane)
+    print(json.dumps(report, ensure_ascii=False))
 
 
 if __name__ == "__main__":
