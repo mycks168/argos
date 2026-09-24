@@ -6,10 +6,12 @@ import argparse
 import json
 import os
 import pwd
+import re
 import secrets
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -1121,8 +1123,38 @@ def _apply_window_layout_choice(
             if not shutil.which(tool):
                 output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
         _run_user_systemctl(plan, ["enable", "--now", unit], runner=runner)
+        _enable_multitouch(plan, runner=runner, output_func=output_func)
     else:
         _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
+
+
+def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print) -> None:
+    """labwcのタッチをマウス変換から外し、Androidでピンチ操作できるようにする。
+
+    labwcの既定は変換なしなので、rc.xmlに明示的なmouseEmulation="yes"がある場合だけ
+    "no"へ変える。変更前にバックアップを残し、コメントなど他の記述は保つ。
+    """
+    config = Path(plan.service_home) / ".config/labwc/rc.xml"
+    if not config.is_file():
+        return
+    text = config.read_text(encoding="utf-8")
+    try:
+        touches = [node for node in ET.fromstring(text).iter() if str(node.tag).rpartition("}")[2] == "touch"]
+    except ET.ParseError:
+        output_func(f"警告: {config}を解析できないため、タッチ設定は変更しません")
+        return
+    if not any(node.get("mouseEmulation") == "yes" for node in touches):
+        return
+    backup = config.with_name(config.name + ".before-argos-touch")
+    if not backup.exists():
+        shutil.copy2(config, backup)
+        if os.geteuid() == 0:
+            shutil.chown(backup, plan.service_user, plan.service_group)
+    pattern = re.compile(r"""(<touch\b[^>]*?\bmouseEmulation\s*=\s*)(["'])yes\2""")
+    config.write_text(pattern.sub(r"\1\2no\2", text), encoding="utf-8")
+    # labwcはSIGHUPで設定を再読み込みする。起動していなければ次回起動時に反映される。
+    runner(["pkill", "-HUP", "-u", plan.service_user, "-x", "labwc"], check=False)
+    output_func(f"タッチをマウス変換から外しました（ピンチ操作用）。元の設定: {backup}")
 
 
 def _restart_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:

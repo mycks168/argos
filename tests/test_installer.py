@@ -1078,6 +1078,7 @@ def _window_layout_plan(tmp_path):
         user_unit_dir=tmp_path / "user-units",
         service_user="argos",
         service_group="argos",
+        service_home=tmp_path / "home",
     )
 
 
@@ -1138,3 +1139,84 @@ def test_window_layout_choice_ignored_without_service(tmp_path):
     commands = []
     installer._apply_window_layout_choice(plan, tmp_path / ".env", runner=lambda command, **kwargs: commands.append(command))
     assert commands == []
+
+
+TOUCH_CONFIG = """<?xml version="1.0"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+	<!-- 保持するコメント -->
+	<touch deviceName="ILITEK" mapToOutput="HDMI-A-1" mouseEmulation="yes"/>
+</openbox_config>
+"""
+
+
+def _labwc_config(tmp_path, text):
+    """サービスユーザーのrc.xmlを作って返す。"""
+    config = tmp_path / "home/.config/labwc/rc.xml"
+    config.parent.mkdir(parents=True)
+    config.write_text(text, encoding="utf-8")
+    return config
+
+
+def test_enable_multitouch_flips_emulation_with_backup(tmp_path):
+    """mouseEmulationがyesなら、バックアップを残してnoへ変え、labwcへ再読み込みを通知する。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    commands, messages = [], []
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=messages.append)
+    text = config.read_text(encoding="utf-8")
+    assert 'mouseEmulation="no"' in text and 'mouseEmulation="yes"' not in text
+    assert "<!-- 保持するコメント -->" in text and 'deviceName="ILITEK"' in text
+    assert config.with_name("rc.xml.before-argos-touch").read_text(encoding="utf-8") == TOUCH_CONFIG
+    assert commands == [["pkill", "-HUP", "-u", "argos", "-x", "labwc"]]
+    assert messages and "before-argos-touch" in messages[0]
+
+
+def test_enable_multitouch_keeps_first_backup(tmp_path):
+    """既存のバックアップは上書きしない。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    backup = config.with_name("rc.xml.before-argos-touch")
+    backup.write_text("最初の設定", encoding="utf-8")
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert backup.read_text(encoding="utf-8") == "最初の設定"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        TOUCH_CONFIG.replace('"yes"', '"no"'),
+        '<openbox_config><touch deviceName="x"/></openbox_config>',
+        "<openbox_config><keyboard/></openbox_config>",
+    ],
+)
+def test_enable_multitouch_leaves_other_configs(tmp_path, text):
+    """yesが明示されていない設定は変更せず、バックアップも作らない。"""
+    config = _labwc_config(tmp_path, text)
+    commands = []
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None)
+    assert config.read_text(encoding="utf-8") == text
+    assert not config.with_name("rc.xml.before-argos-touch").exists()
+    assert commands == []
+
+
+def test_enable_multitouch_without_config_or_broken_xml(tmp_path):
+    """rc.xmlがない端末は何もせず、壊れたXMLは変更せず警告する。"""
+    plan = _window_layout_plan(tmp_path)
+    installer._enable_multitouch(plan, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    config = _labwc_config(tmp_path, "<openbox_config><touch")
+    messages = []
+    installer._enable_multitouch(plan, runner=lambda command, **kwargs: None, output_func=messages.append)
+    assert config.read_text(encoding="utf-8") == "<openbox_config><touch"
+    assert messages and "解析できない" in messages[0]
+
+
+def test_window_layout_choice_yes_enables_multitouch_only(tmp_path, monkeypatch):
+    """画面分割にyと答えたときだけタッチ設定を変え、nでは変えない。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    env_path = tmp_path / ".env"
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    plan = _window_layout_plan(tmp_path)
+    env_path.write_text("ARGOS_WINDOW_LAYOUT_ANDROID_APP=\n", encoding="utf-8")
+    installer._apply_window_layout_choice(plan, env_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert config.read_text(encoding="utf-8") == TOUCH_CONFIG
+    env_path.write_text("ARGOS_WINDOW_LAYOUT_ANDROID_APP=maps\n", encoding="utf-8")
+    installer._apply_window_layout_choice(plan, env_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert 'mouseEmulation="no"' in config.read_text(encoding="utf-8")
