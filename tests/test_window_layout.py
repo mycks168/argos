@@ -879,3 +879,112 @@ def test_session_running_handles_missing_command(monkeypatch):
 
     monkeypatch.setattr(layout.subprocess, "check_output", fail)
     assert layout.session_running() is False
+
+
+@pytest.mark.parametrize("mode, expected", [("split", "sp"), ("pane", "standard"), ("argos", None), ("android", None)])
+def test_desired_dashboard_layout_auto(tmp_path, monkeypatch, mode, expected):
+    """左右分割はSP、重ねる表示は通常にし、それ以外のモードでは変えない。"""
+    _config(tmp_path, monkeypatch)
+    assert layout.desired_dashboard_layout(mode) == expected
+
+
+@pytest.mark.parametrize("mode", ["split", "pane", "argos"])
+def test_desired_dashboard_layout_fixed_setting(tmp_path, monkeypatch, mode):
+    """設定でレイアウトを固定すると、モードによらずそれを使う。"""
+    _config(tmp_path, monkeypatch, "window_layout:\n  dashboard_layout: grid\n")
+    assert layout.desired_dashboard_layout(mode) == "grid"
+    monkeypatch.setenv(layout.DASHBOARD_LAYOUT_SETTING, "auto")
+    assert layout.desired_dashboard_layout(mode) == layout.AUTO_DASHBOARD_LAYOUT.get(mode)
+
+
+def test_desired_dashboard_layout_rejects_unknown(monkeypatch):
+    """未知のレイアウト名は拒否する。"""
+    monkeypatch.setenv(layout.DASHBOARD_LAYOUT_SETTING, "tiles")
+    with pytest.raises(RuntimeError, match="standard"):
+        layout.desired_dashboard_layout("split")
+
+
+def _kiosk_env(desktop, monkeypatch, exists=True):
+    """キオスクの有無と再起動の記録を用意する。"""
+    home, _, calls = desktop
+    real_run = layout.subprocess.run
+
+    def run(command, **kwargs):
+        """キオスクunitの有無を切り替えられるようにする。"""
+        if command[:4] == ["systemctl", "--user", "cat", layout.KIOSK_UNIT]:
+            return SimpleNamespace(returncode=0 if exists else 1)
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(layout.subprocess, "run", run)
+    return home / ".local/state/argos/dashboard-layout", calls
+
+
+def test_apply_dashboard_layout_restarts_only_on_change(desktop, monkeypatch):
+    """レイアウトが変わったときだけ、ファイルを書いてキオスクを再起動する。"""
+    path, calls = _kiosk_env(desktop, monkeypatch)
+    restart = ["systemctl", "--user", "restart", layout.KIOSK_UNIT]
+    assert layout.apply_dashboard_layout("split") is True
+    assert path.read_text().strip() == "sp" and calls.count(restart) == 1
+    assert layout.apply_dashboard_layout("split") is False
+    assert layout.apply_dashboard_layout("pane") is True
+    assert path.read_text().strip() == "standard" and calls.count(restart) == 2
+    assert layout.apply_dashboard_layout("argos") is False
+    assert path.read_text().strip() == "standard"
+
+
+def test_apply_dashboard_layout_skips_without_kiosk(desktop, monkeypatch):
+    """キオスクをこのユーザーが動かしていない端末では、何もしない。"""
+    path, calls = _kiosk_env(desktop, monkeypatch, exists=False)
+    assert layout.apply_dashboard_layout("split") is False
+    assert not path.exists()
+    assert ["systemctl", "--user", "restart", layout.KIOSK_UNIT] not in calls
+
+
+def test_layout_switches_with_style(desktop, monkeypatch, capsys):
+    """分割ではSP、重ねる表示では通常へ切り替わり、同じ表示方式の再実行では再起動しない。"""
+    path, calls = _kiosk_env(desktop, monkeypatch)
+    for mode, layout_name, restarted in (("split", "sp", True), ("split", "sp", False), ("pane", "standard", True), ("pane", "standard", False)):
+        monkeypatch.setattr(sys, "argv", ["layout", mode])
+        layout.main()
+        report = json.loads(capsys.readouterr().out)
+        assert (report["dashboard_layout"], report["dashboard_restarted"]) == (layout_name, restarted)
+        assert path.read_text().strip() == layout_name
+
+
+def test_hide_keeps_dashboard_layout(desktop, monkeypatch, capsys):
+    """ARGOSだけの表示に切り替えても、ダッシュボードのレイアウトは変えず、キオスクも再起動しない。"""
+    path, calls = _kiosk_env(desktop, monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["layout", "split"])
+    layout.main()
+    capsys.readouterr()
+    calls.clear()
+    monkeypatch.setattr(sys, "argv", ["layout", "hide"])
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["dashboard_restarted"] is False
+    assert path.read_text().strip() == "sp"
+    assert ["systemctl", "--user", "restart", layout.KIOSK_UNIT] not in calls
+
+
+def test_layout_fails_if_argos_window_missing_after_kiosk_restart(desktop, monkeypatch):
+    """キオスクを再起動したのにARGOSの窓が出なければ、成功扱いにしない。"""
+    monkeypatch.setattr(layout, "apply_dashboard_layout", lambda mode: True)
+    monkeypatch.setattr(layout, "wait_window", lambda match, seconds: False)
+    monkeypatch.setattr(sys, "argv", ["layout", "split"])
+    with pytest.raises(RuntimeError, match="レイアウト切り替え後"):
+        layout.main()
+
+
+def test_lock_waits_for_other_operation(desktop, monkeypatch):
+    """別の配置操作がロックを持っている間は待ち、待ち切れなければ分かりやすいエラーにする。"""
+    home, config, _ = desktop
+    lock_path = home / ".local/state/argos/window-layout.lock"
+    lock_path.parent.mkdir(parents=True)
+    original = config.read_bytes()
+    monkeypatch.setattr(layout, "LOCK_WAIT_SECONDS", 2)
+    with lock_path.open("w") as other:
+        layout.fcntl.flock(other, layout.fcntl.LOCK_EX)
+        monkeypatch.setattr(sys, "argv", ["layout", "split"])
+        with pytest.raises(RuntimeError, match="別の画面配置"):
+            layout.main()
+    assert config.read_bytes() == original
+    layout.main()

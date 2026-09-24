@@ -43,8 +43,23 @@ fi
 
 # 閲覧キーが設定されていれば、初回アクセスでCookieを受け取るためURLへ付与する。
 DASHBOARD_URL="http://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
+DASHBOARD_QUERY=""
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
-  DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
+  DASHBOARD_QUERY="key=${ARGOS_DASHBOARD_VIEW_KEY}"
+fi
+
+# 画面配置ツール(argos.tools.window_layout)が選んだレイアウトがあれば、Cookieより優先して開く。
+# 環境変数の指定が最優先。standard/sp/grid以外の値は無視する。
+LAYOUT_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/argos/dashboard-layout"
+KIOSK_LAYOUT="${ARGOS_DASHBOARD_KIOSK_LAYOUT:-}"
+if [ -z "${KIOSK_LAYOUT}" ] && [ -f "${LAYOUT_FILE}" ]; then
+  KIOSK_LAYOUT="$(head -c 16 "${LAYOUT_FILE}" | tr -d '[:space:]')"
+fi
+case "${KIOSK_LAYOUT}" in
+  standard|sp|grid) DASHBOARD_QUERY="${DASHBOARD_QUERY:+${DASHBOARD_QUERY}&}layout=${KIOSK_LAYOUT}" ;;
+esac
+if [ -n "${DASHBOARD_QUERY}" ]; then
+  DASHBOARD_URL="${DASHBOARD_URL}?${DASHBOARD_QUERY}"
 fi
 
 # 母艦起動直後はダッシュボードより先にChromiumが立ち上がるため、

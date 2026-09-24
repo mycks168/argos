@@ -20,6 +20,12 @@ STYLE_SETTING = "ARGOS_WINDOW_LAYOUT_STYLE"
 RATIO_SETTING = "ARGOS_WINDOW_LAYOUT_SPLIT_RATIO"
 PANEL_HEIGHT_SETTING = "ARGOS_WINDOW_LAYOUT_PANEL_HEIGHT"
 RESTART_SERVICES_SETTING = "ARGOS_WINDOW_LAYOUT_RESTART_SERVICES"
+DASHBOARD_LAYOUT_SETTING = "ARGOS_WINDOW_LAYOUT_DASHBOARD_LAYOUT"
+DASHBOARD_LAYOUTS = ("standard", "sp", "grid")
+# 表示方式ごとの、ダッシュボードのレイアウト。ここにないモード(argos・android)は今のまま変えない。
+AUTO_DASHBOARD_LAYOUT = {"split": "sp", "pane": "standard"}
+KIOSK_UNIT = "argos-dashboard-kiosk.service"
+LOCK_WAIT_SECONDS = 300
 # 表示方式の名前と、対応するモード。overlayはダッシュボードの中央ペインへ重ねる。
 STYLE_MODES = {"overlay": "pane", "split": "split"}
 
@@ -408,6 +414,55 @@ def session_running():
     return any(line.split()[:2] == ["Session:", "RUNNING"] for line in output.splitlines())
 
 
+def desired_dashboard_layout(mode):
+    """モードに合わせてキオスクが開くダッシュボードのレイアウトを返す。変えないならNone。
+
+    設定dashboard_layoutがstandard/sp/gridなら、モードによらずそれを使う。既定(auto)は、
+    左右分割ならSP（狭い幅向け）、重ねる表示なら通常（中央ペインの計算が前提）にする。
+    """
+    fixed = setting(DASHBOARD_LAYOUT_SETTING).lower()
+    if fixed and fixed != "auto":
+        if fixed not in DASHBOARD_LAYOUTS:
+            raise RuntimeError(f"dashboard_layoutはauto/standard/sp/gridで指定してください: {fixed}")
+        return fixed
+    return AUTO_DASHBOARD_LAYOUT.get(mode)
+
+
+def apply_dashboard_layout(mode):
+    """必要ならキオスクのレイアウトを切り替える。キオスクを再起動したらTrueを返す。
+
+    キオスクの起動スクリプトが読むファイルへレイアウトを書き、変わったときだけキオスクを
+    再起動する（Chromiumの再読み込みで数秒かかる）。キオスクをこのユーザーが動かしていない
+    端末では何もしない。
+    """
+    wanted = desired_dashboard_layout(mode)
+    if not wanted or not user_unit_exists(KIOSK_UNIT):
+        return False
+    path = Path.home()/".local/state/argos/dashboard-layout"
+    if path.exists() and path.read_text().strip() == wanted:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_suffix(".tmp")
+    temp.write_text(wanted + "\n")
+    temp.replace(path)
+    subprocess.run(["systemctl", "--user", "restart", KIOSK_UNIT], check=True, timeout=60)
+    return True
+
+
+def acquire_lock(lock, wait=None):
+    """配置操作の排他ロックを取る。他の操作が終わるまで最大wait秒待つ。
+
+    キオスクの再起動で配置サービス(boot)も動くため、失敗にせず順番を待つ。
+    """
+    for _ in range(LOCK_WAIT_SECONDS if wait is None else wait):
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            time.sleep(1)
+    raise RuntimeError("別の画面配置の操作が続いているため、実行できません")
+
+
 def restart_android(size, wait=90):
     """Androidの描画サイズを変えてWaydroidを再起動する。ナビなど実行中のAndroid側の処理は中断される。
 
@@ -458,7 +513,7 @@ def main():
         return
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.with_suffix(".lock").open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        acquire_lock(lock)
         # ロック取得後に読み直し、同時操作による状態の取り違えを防ぐ。
         apply_layout(args, load_state(path), path)
 
@@ -524,6 +579,10 @@ def apply_layout(args, state, path):
     # Androidの復旧はARGOSの起動を待たずに先に行う。ARGOSのダッシュボードは起動が遅いことがある。
     if needs_android:
         ensure_android(package)
+    # ダッシュボードのレイアウトが変わるときはキオスクが再起動するので、新しい窓が出るまで待つ。
+    restarted = apply_dashboard_layout(state["mode"])
+    if restarted and not wait_window(ARGOS_MATCH, 120):
+        raise RuntimeError("ダッシュボードのレイアウト切り替え後に、ARGOSのウィンドウが現れませんでした")
     if args.mode == "boot" and not wait_window(ARGOS_MATCH, BOOT_WAIT_SECONDS):
         raise RuntimeError("ARGOSのウィンドウが現れませんでした")
     if state["mode"] == "pane":
@@ -571,7 +630,7 @@ def apply_layout(args, state, path):
     saved = path.with_suffix(".tmp")
     saved.write_text(json.dumps(state))
     saved.replace(path)
-    report = dict(state, display=[width, height])
+    report = dict(state, display=[width, height], dashboard_layout=desired_dashboard_layout(state["mode"]), dashboard_restarted=restarted)
     if needs_android:
         report.update(android_rect=android_rect, android_needed=needed, android_current=size, restart_required=restart_required)
         if state["mode"] == "pane":

@@ -158,6 +158,8 @@ window_layout:
   panel_height: ''
   # Androidの解像度を変えて再起動するとき、止めて再開するユーザーサービス（カンマ区切り）。例: GPS中継
   restart_services: ''
+  # 表示方式に合わせて開くダッシュボードのレイアウト。auto=分割はsp・overlayは通常。standard/sp/gridなら常にそれを使う。
+  dashboard_layout: ''
 greeting:
   enabled: true
   state_path: ~/.local/state/argos/greeting-state.json

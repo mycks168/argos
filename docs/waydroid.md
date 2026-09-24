@@ -76,7 +76,18 @@ uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
 
 - **画面サイズ**: 指定がなければ、`wlr-randr --json` で有効な出力の現在のモードから、幅と高さを自動取得します。`--width` と `--height`（両方必要）で上書きできます。有効な画面が複数ある、拡大率が1.0でない、回転している構成は、未対応としてエラーにします。
 - **パネルの高さ**: 分割のとき、上のパネル（`wf-panel-pi`）の下から窓を置きます。高さは `window_layout.panel_height`（既定36）で、パネルがない端末では0です。
-- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`。空の値は既定値になります。
+- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`、`dashboard_layout`。空の値は既定値になります。
+
+#### ダッシュボードのレイアウトの自動切り替え
+
+分割のときはARGOSの幅が狭くなるため、ダッシュボードを狭い幅向けのSP表示にします。重ねる表示（overlay）では、中央ペインの計算が通常レイアウトを前提にしているため、通常表示へ戻します。
+
+- **仕組み**: `window_layout` が、キオスクの起動スクリプトが読むファイル（`~/.local/state/argos/dashboard-layout`）へレイアウト名を書き、**変わったときだけ**キオスク（`argos-dashboard-kiosk`）を再起動します。キオスクは `/?layout=sp` のようにURLで指定して開くので、ブラウザに残っているCookieの設定（設定画面で選んだレイアウト）より優先されます。再起動のあと、ARGOSの窓が出るのを待ってから配置します。
+- **対象のモード**: `split` はSP、`pane` は通常です。`hide`（ARGOSだけ）や `android` は今のレイアウトのままで、キオスクも再起動しません（隠す・出すを繰り返しても、画面が乱れません）。
+- **固定する**: `window_layout.dashboard_layout` に `standard`・`sp`・`grid` を書くと、モードによらずそれを使います。既定（空または `auto`）は上の自動切り替えです。
+- **サーバー**: `GET /?layout=standard|sp|grid` を受け付けます（不明な値は無視して、Cookieと既定値に従います）。`grid` は `/grid` へ転送します。環境変数 `ARGOS_DASHBOARD_KIOSK_LAYOUT` でもキオスクに指定できます（最優先）。
+- **キオスクがない端末**: キオスクをこのユーザーが動かしていない端末では、何もしません。
+- **切り替え中**: キオスクの再起動で、ARGOSの画面が数秒消えます。
 
 #### 並べるAndroidアプリの設定と凍結対策
 

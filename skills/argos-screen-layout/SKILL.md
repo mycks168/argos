@@ -14,7 +14,7 @@ HDMI画面に、ARGOSダッシュボードとWaydroidのGoogleマップを並べ
 - Waydroidは1つの画面に1つのAndroidしか出せない（複数ウィンドウ設定は枠が付いて使えなかった）。別のAndroidアプリを並べる場合は、地図と入れ替える形になる。
 - ダッシュボードは「通常」レイアウト（3分割）が前提。SP表示・Grid表示では、オーバーレイ（`pane`）の中央ペインの計算が合わない。
 - 画面は、有効な出力が1つで、拡大率1.0、回転なしの構成が前提（違うとエラー）。`--width` と `--height`（両方）で画面サイズを手動指定できる。
-- 設定は `config.yaml` の `window_layout`（`android_app`・`style`・`split_ratio`・`panel_height`・`restart_services`）。
+- 設定は `config.yaml` の `window_layout`（`android_app`・`style`・`split_ratio`・`panel_height`・`restart_services`・`dashboard_layout`）。
 
 ## コマンド
 
@@ -68,6 +68,13 @@ uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
 コンテナの再起動にパスワードなしの `sudo` が必要。GPS中継など、再起動の前後で止めて再開するユーザーサービスは `config.yaml` の `window_layout.restart_services` に書く（この実機は `waydroid-gps-bridge.service`）。
 
 Androidの描画サイズを変えても、別の表示方式へ戻すときは再度サイズが変わる（再起動）。頻繁に切り替える運用なら、片方の表示方式に絞る。
+
+## ダッシュボードのレイアウトの自動切り替え
+
+- `split` にするとダッシュボードは**SP表示**（狭い幅向け）に、`pane`（オーバーレイ）にすると**通常表示**に、自動で切り替わる。`hide`・`android` では変えない。
+- レイアウトが変わるときだけキオスク（Chromium）が再起動し、ARGOSの画面が数秒消える。出力の `dashboard_layout`（選んだレイアウト）と `dashboard_restarted`（再起動したか）で分かる。
+- 固定したいときは、`config.yaml` の `window_layout.dashboard_layout` に `standard`・`sp`・`grid` を書く（空か `auto` なら自動）。
+- 手動で見たいレイアウトは、URLの `?layout=sp` のように指定できる（Cookieより優先）。
 
 ## 会話欄を右のペインへ移す
 
