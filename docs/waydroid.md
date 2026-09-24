@@ -22,7 +22,7 @@ Waydroidはラズパイ専用ではなく、Waylandを使う一般のLinuxでも
 
 ### 画面配置コマンド（実験段階・labwc専用）
 
-`argos.tools.window_layout` に配置検証用コマンドを追加しました。ARGOS本体のAPI・設定画面にはまだ接続していません。他のLinuxデスクトップでは使用しないでください。対象はAndroidアプリ（この実機ではGoogleマップ）と、タイトルが `ARGOS Dashboard` のChromiumウィンドウです。Androidの別アプリを二つ並べる機能ではありません。
+`argos.tools.window_layout` は、labwc上の地図（Androidアプリ。この実機ではGoogleマップ）と、タイトルが `ARGOS Dashboard` のChromiumウィンドウの配置を切り替えるコマンドです。ARGOS本体の設定画面や音声操作にはまだ接続していません（ダッシュボードのAPIは、会話欄の入れ替えとレイアウトの切り替えにだけ使います）。labwc専用なので、他のLinuxデスクトップでは使用しないでください。Waydroidは1つの画面に1つのAndroidしか出せないため、Androidの別アプリを二つ同時に並べる機能ではありません。
 
 必要なパッケージは `labwc`、`wtype`、`wlrctl` です。デスクトップへログインしているユーザーのWaylandセッションから、リポジトリ内で実行します。サービスやSSH経由では、そのセッションの `XDG_RUNTIME_DIR` と `WAYLAND_DISPLAY` を明示してください。rootとしては実行しません。
 
@@ -157,6 +157,8 @@ uv run python -m argos.tools.window_layout pane --pane auto
 AIエージェントが地図を出す・隠す・入れ替えるときの手順とはまりどころは、スキル `skills/argos-screen-layout/SKILL.md` にまとめてあります。
 
 #### 実機で分かった制約
+
+> この節は2026-09-24時点の記録です。描画サイズと窓の大きさの連動は、その後、モードごとに必要な描画サイズを計算し、`--restart-android` で合わせる方式で対応しました（上の「表示方式とAndroidの大きさ」）。以下は、その方式を選んだ経緯として残しています。
 
 2026-09-24の画面確認では、左右の入れ替え、ARGOSの全画面化、左右半分への復帰を確認しました。一方、Androidは `persist.waydroid.width=960`、高さ440に固定されています。幅40%の配置を要求してもAndroidの描画解像度まで追従する保証はなく、`android` コマンドで全画面にすると中央に幅960の地図が表示され、左右に黒い余白が残りました。任意比率やAndroidの全画面を完成済み機能とは扱いません。
 
