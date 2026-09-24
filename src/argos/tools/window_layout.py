@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import time
+import urllib.request
 import xml.etree.ElementTree as ET
 
 from argos.yaml_config import load_yaml_environment
@@ -26,6 +27,7 @@ DASHBOARD_LAYOUTS = ("standard", "sp", "grid")
 AUTO_DASHBOARD_LAYOUT = {"split": "sp", "pane": "standard"}
 KIOSK_UNIT = "argos-dashboard-kiosk.service"
 LOCK_WAIT_SECONDS = 300
+SWAP_SETTING = "ARGOS_WINDOW_LAYOUT_SWAP_CONVERSATION"
 # 表示方式の名前と、対応するモード。overlayはダッシュボードの中央ペインへ重ねる。
 STYLE_MODES = {"overlay": "pane", "split": "split"}
 
@@ -449,6 +451,48 @@ def apply_dashboard_layout(mode):
     return True
 
 
+def dashboard_call(path, payload=None):
+    """ダッシュボードのAPIを呼ぶ。payloadがあればBearer認証付きのPOST、なければGETでJSONを返す。"""
+    port = setting("ARGOS_DASHBOARD_PORT") or "8765"
+    url = f"http://127.0.0.1:{port}{path}"
+    headers = {}
+    view_key = setting("ARGOS_DASHBOARD_VIEW_KEY")
+    if payload is None:
+        if view_key:
+            url += ("&" if "?" in url else "?") + "key=" + view_key
+        request = urllib.request.Request(url)
+    else:
+        token = setting("ARGOS_DASHBOARD_TOKEN")
+        if not token:
+            raise RuntimeError("ARGOS_DASHBOARD_TOKENが未設定です")
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {token}"},
+            method="POST",
+        )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode())
+
+
+def ensure_conversation_right():
+    """中央ペインに会話欄があれば、中央と右を入れ替えて会話欄を右へ移す。結果の文字列を返す。
+
+    中央ペインには地図が重なるため、会話欄が中央にあると隠れる。中央が会話欄以外
+    （通知欄や重ねた表示）なら何もしない。ダッシュボードが応答しなくても配置は止めない。
+    """
+    if setting(SWAP_SETTING).lower() in ("false", "no", "0", "off"):
+        return "disabled"
+    try:
+        stacks = dashboard_call("/api/state")["slot_stacks"]
+        if stacks["center"][-1]["type"] != "conversation":
+            return "already"
+        dashboard_call("/api/events", {"type": "swap_slots"})
+    except (OSError, ValueError, KeyError, IndexError, RuntimeError) as exc:
+        return f"skipped: {exc}"
+    return "swapped"
+
+
 def acquire_lock(lock, wait=None):
     """配置操作の排他ロックを取る。他の操作が終わるまで最大wait秒待つ。
 
@@ -631,6 +675,8 @@ def apply_layout(args, state, path):
     saved.write_text(json.dumps(state))
     saved.replace(path)
     report = dict(state, display=[width, height], dashboard_layout=desired_dashboard_layout(state["mode"]), dashboard_restarted=restarted)
+    if state["mode"] == "pane":
+        report["conversation"] = ensure_conversation_right()
     if needs_android:
         report.update(android_rect=android_rect, android_needed=needed, android_current=size, restart_required=restart_required)
         if state["mode"] == "pane":

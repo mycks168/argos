@@ -76,7 +76,7 @@ uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
 
 - **画面サイズ**: 指定がなければ、`wlr-randr --json` で有効な出力の現在のモードから、幅と高さを自動取得します。`--width` と `--height`（両方必要）で上書きできます。有効な画面が複数ある、拡大率が1.0でない、回転している構成は、未対応としてエラーにします。
 - **パネルの高さ**: 分割のとき、上のパネル（`wf-panel-pi`）の下から窓を置きます。高さは `window_layout.panel_height`（既定36）で、パネルがない端末では0です。
-- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`、`dashboard_layout`。空の値は既定値になります。
+- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`、`dashboard_layout`、`swap_conversation`。空の値は既定値になります。
 
 #### ダッシュボードのレイアウトの自動切り替え
 
@@ -150,6 +150,7 @@ uv run python -m argos.tools.window_layout pane --pane auto
 - **Androidの大きさ**: Androidの描画サイズ（`persist.waydroid.width`・`height`）を読み、ペインより小さければ中央に置きます。**Waydroidの窓はAndroidの描画サイズより小さくできない**ため、ペインより大きいと、窓は縮まず下や右が画面の外へはみ出します（枠も隠れます）。出力の `android_fit` が `true` なら、ぴったり収まっています。再起動せずにAndroidの解像度を変えることはできません（`wm size` は表示が崩れました）。ペインに合わせるには、`persist.waydroid.width`・`height` を `pane_rect` の幅・高さ（この実機は1004×416）にして再起動します。
 - **常に手前**: ARGOS側をタッチするとARGOSが前に出て、地図が隠れてしまうため、地図のウィンドウを最前面に固定します。labwcの `ToggleAlwaysOnTop/Bottom` は、`ForEach` で選んだ窓ではなく**フォーカス中の窓**に効き、しかも現在の層から切り替わるだけです。そこで、先に `Focus` で対象へフォーカスを移してから、どの層から始めても結果が決まる操作の並びを使います。paneモード以外へ切り替えるときは、通常の層へ戻します。実機では、地図が最前面に残ること、解除するとARGOSが前に出ることを確認しました。
 - **隠す・出す**: `hide` は `argos` モードと同じ（ARGOSだけを全画面にする）で、直前の配置を覚えます。`show` は隠す前の配置へ戻します。隠しても地図は最小化せず、ARGOSの後ろに残ります（Waydroidは動いたまま）。
+- **会話欄の自動移動**: 中央ペインは地図の裏になるため、会話欄が中央にあると読めません。`pane` に入るとき、ダッシュボードの状態（`GET /api/state`）を見て、**中央の先頭が会話欄のときだけ**中央と右を入れ替えて、会話欄を右へ移します（`swap_slots` イベントを、Bearer認証付きで送ります）。中央が通知欄や重ねた表示なら、入れ替えません（もう一度入れ替えると、会話欄が隠れるため）。`split`・`hide`・`android` では入れ替えません。ダッシュボードが応答しなくても、配置は成功し、出力の `conversation` に `skipped: …` が入ります。設定 `window_layout.swap_conversation: false` で無効にできます。ダッシュボードの状態はARGOS本体の再起動で初期に戻るので、そのときは `pane` をもう一度実行します。
 - **上部のパネル**: Raspberry Pi OSのパネル（`wf-panel-pi`）が上部を確保していると、窓を最上端に置けず、下が切れます。paneモードではパネルを止め、他のモードへ切り替えるときに再開します。止めたのはこのツールだけが対象で、利用者が自分で止めたパネルは再開しません。パネルは `lwrespawn` が自動で再起動するため、先に見張り役を止めます。パネルの停止中は、Wi-Fiなどのアイコンを押せません。
 - **再起動後**: `boot` は、保存したモード（pane）と範囲を再適用します。
 

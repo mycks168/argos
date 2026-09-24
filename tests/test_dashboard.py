@@ -254,6 +254,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "previousMessages = \"\";" in html
         assert "previousNotifications = \"\";" in html
         assert "renderSlots(state);" in html
+        # オーバーレイ表示中も、各スロットに置かれている標準ビューだけを隠す（入れ替え後の反対側を隠さない）。
+        assert "viewIn(slotContainerCenter)" in html and "viewIn(slotContainerRight)" in html
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html

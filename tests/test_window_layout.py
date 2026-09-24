@@ -58,7 +58,7 @@ def desktop(tmp_path, monkeypatch):
     monkeypatch.setenv("ARGOS_CONFIG_FILE", str(tmp_path / "config.yaml"))
     monkeypatch.setenv(layout.APP_SETTING, "maps")
     # 他のテストが環境変数へ取り込んだ設定に左右されないよう、配置の設定は毎回消す。
-    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING):
+    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(layout.shutil, "which", lambda tool: f"/usr/bin/{tool}")
     monkeypatch.setattr(layout.subprocess, "check_output", lambda *args, **kwargs: "123\n")
@@ -66,6 +66,8 @@ def desktop(tmp_path, monkeypatch):
     # 実機の画面・Androidの状態には依存させない。個別のテストで必要に応じて上書きする。
     monkeypatch.setattr(layout, "detect_display", lambda: (1920, 440))
     monkeypatch.setattr(layout, "android_size", lambda: None)
+    # 実機のダッシュボードへは接続しない。会話欄は既に右にある状態を返す。
+    monkeypatch.setattr(layout, "dashboard_call", lambda path, payload=None: {"slot_stacks": {"center": [{"type": "notifications"}], "right": [{"type": "conversation"}]}})
     calls = []
 
     def run(command, **kwargs):
@@ -679,7 +681,7 @@ def _config(tmp_path, monkeypatch, text=""):
     config = tmp_path / "config.yaml"
     config.write_text(text)
     monkeypatch.setenv("ARGOS_CONFIG_FILE", str(config))
-    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING):
+    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING, "ARGOS_DASHBOARD_PORT", "ARGOS_DASHBOARD_TOKEN", "ARGOS_DASHBOARD_VIEW_KEY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -988,3 +990,119 @@ def test_lock_waits_for_other_operation(desktop, monkeypatch):
             layout.main()
     assert config.read_bytes() == original
     layout.main()
+
+
+@pytest.fixture
+def dashboard(desktop, monkeypatch):
+    """ダッシュボードのスロット状態と呼び出しを模擬する。中央ペインの先頭の種類は書き換えられる。"""
+    world = {"center": "conversation", "calls": [], "down": False}
+
+    def call(path, payload=None):
+        """状態の取得と入れ替えを記録し、入れ替えると中央の種類も入れ替わる。"""
+        world["calls"].append((path, payload))
+        if world["down"]:
+            raise OSError("接続できません")
+        if payload:
+            world["center"] = "notifications" if world["center"] == "conversation" else "conversation"
+            return {"status": "slots_swapped"}
+        right = "notifications" if world["center"] == "conversation" else "conversation"
+        return {"slot_stacks": {"center": [{"type": "notifications"}, {"type": world["center"]}], "right": [{"type": right}]}}
+
+    monkeypatch.setattr(layout, "dashboard_call", call)
+    return world
+
+
+def test_pane_moves_conversation_to_right(dashboard, monkeypatch, capsys):
+    """オーバーレイ(pane)に入るとき、会話欄が中央にあれば入れ替えて右へ移す。"""
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["conversation"] == "swapped"
+    assert dashboard["calls"][-1] == ("/api/events", {"type": "swap_slots"})
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["conversation"] == "already"
+    assert sum(1 for call in dashboard["calls"] if call[1]) == 1
+
+
+def test_pane_leaves_slots_when_center_is_not_conversation(dashboard, monkeypatch):
+    """中央が通知欄などで会話欄でなければ、入れ替えない（もう一度入れ替えると会話欄が隠れる）。"""
+    dashboard["center"] = "notifications"
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    assert not any(call[1] for call in dashboard["calls"])
+
+
+@pytest.mark.parametrize("mode", ["split", "hide", "android", "argos"])
+def test_other_modes_do_not_touch_dashboard_slots(dashboard, monkeypatch, capsys, mode):
+    """オーバーレイ以外のモードでは、ダッシュボードのスロットに触れない。"""
+    monkeypatch.setattr(sys, "argv", ["layout", mode])
+    layout.main()
+    assert "conversation" not in json.loads(capsys.readouterr().out)
+    assert dashboard["calls"] == []
+
+
+def test_pane_continues_when_dashboard_is_down(dashboard, monkeypatch, capsys):
+    """ダッシュボードが応答しなくても、配置は成功として、入れ替えを見送ったと知らせる。"""
+    dashboard["down"] = True
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["conversation"].startswith("skipped") and report["mode"] == "pane"
+
+
+@pytest.mark.parametrize("value", ["false", "no", "0", "OFF"])
+def test_swap_can_be_disabled(dashboard, monkeypatch, capsys, value):
+    """設定swap_conversationをfalseにすると、自動で入れ替えない。"""
+    monkeypatch.setenv(layout.SWAP_SETTING, value)
+    monkeypatch.setattr(sys, "argv", ["layout", "pane"])
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["conversation"] == "disabled"
+    assert dashboard["calls"] == []
+
+
+class _Response:
+    """urlopenの戻り値を模擬する。"""
+
+    def __init__(self, body):
+        """レスポンスの本文を保持する。"""
+        self.body = body
+
+    def __enter__(self):
+        """with文で自身を返す。"""
+        return self
+
+    def __exit__(self, *args):
+        """with文の終了処理。何もしない。"""
+
+    def read(self):
+        """本文を返す。"""
+        return self.body
+
+
+def test_dashboard_call_get_uses_view_key_and_port(tmp_path, monkeypatch):
+    """状態の取得は、設定のポートと閲覧キー付きのGETで行う。"""
+    _config(tmp_path, monkeypatch, "dashboard:\n  port: 9000\n  view_key: viewer\n")
+    seen = []
+    monkeypatch.setattr(layout.urllib.request, "urlopen", lambda request, timeout: seen.append(request) or _Response(b'{"ok": 1}'))
+    assert layout.dashboard_call("/api/state") == {"ok": 1}
+    assert seen[0].full_url == "http://127.0.0.1:9000/api/state?key=viewer" and seen[0].get_method() == "GET"
+
+
+def test_dashboard_call_post_sends_bearer_token(tmp_path, monkeypatch):
+    """更新はBearer認証付きのPOSTで送る。"""
+    _config(tmp_path, monkeypatch, "dashboard:\n  token: secret\n")
+    seen = []
+    monkeypatch.setattr(layout.urllib.request, "urlopen", lambda request, timeout: seen.append(request) or _Response(b'{"status": "slots_swapped"}'))
+    assert layout.dashboard_call("/api/events", {"type": "swap_slots"})["status"] == "slots_swapped"
+    request = seen[0]
+    assert request.get_method() == "POST" and request.get_header("Authorization") == "Bearer secret"
+    assert json.loads(request.data) == {"type": "swap_slots"}
+    assert request.full_url == "http://127.0.0.1:8765/api/events"
+
+
+def test_dashboard_call_post_requires_token(tmp_path, monkeypatch):
+    """トークンが未設定なら、送らずにエラーにする。"""
+    _config(tmp_path, monkeypatch)
+    monkeypatch.delenv("ARGOS_DASHBOARD_TOKEN", raising=False)
+    monkeypatch.setattr(layout.urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("送信しないはず"))
+    with pytest.raises(RuntimeError, match="TOKEN"):
+        layout.dashboard_call("/api/events", {"type": "swap_slots"})

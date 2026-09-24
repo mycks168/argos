@@ -14,7 +14,7 @@ HDMI画面に、ARGOSダッシュボードとWaydroidのGoogleマップを並べ
 - Waydroidは1つの画面に1つのAndroidしか出せない（複数ウィンドウ設定は枠が付いて使えなかった）。別のAndroidアプリを並べる場合は、地図と入れ替える形になる。
 - ダッシュボードは「通常」レイアウト（3分割）が前提。SP表示・Grid表示では、オーバーレイ（`pane`）の中央ペインの計算が合わない。
 - 画面は、有効な出力が1つで、拡大率1.0、回転なしの構成が前提（違うとエラー）。`--width` と `--height`（両方）で画面サイズを手動指定できる。
-- 設定は `config.yaml` の `window_layout`（`android_app`・`style`・`split_ratio`・`panel_height`・`restart_services`・`dashboard_layout`）。
+- 設定は `config.yaml` の `window_layout`（`android_app`・`style`・`split_ratio`・`panel_height`・`restart_services`・`dashboard_layout`・`swap_conversation`）。
 
 ## コマンド
 
@@ -78,13 +78,15 @@ Androidの描画サイズを変えても、別の表示方式へ戻すときは�
 
 ## 会話欄を右のペインへ移す
 
-地図は中央ペインに重ねるので、中央にある欄は隠れる。会話が読めなくなったら、ダッシュボードの中央と右を入れ替える。
+地図は中央ペインに重ねるので、中央にある欄は隠れる。`pane` に入るとき、中央の先頭が会話欄なら、コマンドが自動で中央と右を入れ替えて、会話欄を右へ移す（出力の `conversation` が `swapped`／`already`／`skipped: …`／`disabled`）。中央が通知欄などのときは入れ替えない。`split`・`hide`・`android` では入れ替えない。設定 `window_layout.swap_conversation: false` で無効にできる。
+
+手動で入れ替えるときは、次を使う。実行のたびに反転するので、先に `GET /api/state`（閲覧キーがあれば `?key=`）の `slot_stacks` で、会話が `right` にあるかを確認する。
 
 ```bash
 uv run python skills/dashboard-overlay/scripts/send_overlay.py --type swap
 ```
 
-入れ替えた結果は `GET /api/state`（閲覧キーがあれば `?key=`）の `slot_stacks` で分かる。会話が `right` にあれば読める。この入れ替えはダッシュボードの状態で、ARGOS本体の再起動で元に戻ることがある。実行のたびに反転するので、先に `slot_stacks` を確認してから実行する。
+ダッシュボードの状態はARGOS本体の再起動で初期に戻る。そのときは `pane` をもう一度実行する。
 
 ## 実行のたびに自動で行われること
 

@@ -1407,8 +1407,11 @@
         }
       }
 
-      const centerDefaultView = (centerTop.type === "notifications") ? notificationsView : conversationView;
-      const rightDefaultView = (rightTop.type === "conversation") ? conversationView : notificationsView;
+      // オーバーレイ表示中は先頭が会話・通知ではないため、種別ではなく各スロットに今置かれている
+      // 標準ビューを選ぶ。種別で決めると、入れ替え後に反対側のビューを隠してしまう。
+      const viewIn = container => (conversationView.parentNode === container ? conversationView : notificationsView);
+      const centerDefaultView = viewIn(slotContainerCenter);
+      const rightDefaultView = viewIn(slotContainerRight);
 
       renderSlot("center", centerTop, centerDefaultView, overlayCenter, overlayTitleCenter, iframeCenter);
       renderSlot("right", rightTop, rightDefaultView, overlayRight, overlayTitleRight, iframeRight);
