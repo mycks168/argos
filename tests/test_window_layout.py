@@ -57,9 +57,15 @@ def desktop(tmp_path, monkeypatch):
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("ARGOS_CONFIG_FILE", str(tmp_path / "config.yaml"))
     monkeypatch.setenv(layout.APP_SETTING, "maps")
+    # 他のテストが環境変数へ取り込んだ設定に左右されないよう、配置の設定は毎回消す。
+    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(layout.shutil, "which", lambda tool: f"/usr/bin/{tool}")
     monkeypatch.setattr(layout.subprocess, "check_output", lambda *args, **kwargs: "123\n")
     monkeypatch.setattr(layout.time, "sleep", lambda seconds: None)
+    # 実機の画面・Androidの状態には依存させない。個別のテストで必要に応じて上書きする。
+    monkeypatch.setattr(layout, "detect_display", lambda: (1920, 440))
+    monkeypatch.setattr(layout, "android_size", lambda: None)
     calls = []
 
     def run(command, **kwargs):
@@ -200,8 +206,11 @@ def test_container_frozen_unknown(monkeypatch):
     assert layout.container_frozen() is False
 
 
-def test_state_defaults(tmp_path):
+def test_state_defaults(tmp_path, monkeypatch):
     """旧形式の保存ファイルの余分な項目は無視し、不足は既定値で補う。"""
+    monkeypatch.setenv("ARGOS_CONFIG_FILE", str(tmp_path / "config.yaml"))
+    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING):
+        monkeypatch.delenv(name, raising=False)
     path = tmp_path / "state.json"
     path.write_text('{"ratio": 30, "android_app": "old.package"}')
     assert layout.load_state(path) == {"ratio": 30, "side": "left", "mode": "split", "pane": None, "panel_hidden": False, "return_mode": None}
@@ -586,3 +595,287 @@ def test_show_defaults_to_split_when_nothing_remembered(desktop, monkeypatch):
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps({"mode": "argos"}))
     assert _run(monkeypatch, "show")["mode"] == "split"
+
+
+def _randr(monkeypatch, outputs):
+    """wlr-randr --jsonの出力を差し替える。"""
+    monkeypatch.setattr(layout.subprocess, "check_output", lambda command, **kwargs: json.dumps(outputs))
+
+
+def _output(width=1920, height=440, **extra):
+    """現在のモードを1つ持つ出力を作る。"""
+    return {"name": "HDMI-A-1", "enabled": True, "scale": 1.0, "transform": "normal", "modes": [{"width": width, "height": height, "current": True}], **extra}
+
+
+@pytest.mark.parametrize("width, height", [(1920, 440), (1280, 720), (1366, 768)])
+def test_detect_display_reads_current_mode(monkeypatch, width, height):
+    """有効な1画面の現在のモードから、幅と高さを取得する。"""
+    _randr(monkeypatch, [_output(width, height), {"name": "HDMI-A-2", "enabled": False, "modes": []}])
+    assert layout.detect_display() == (width, height)
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        [_output(), _output()],
+        [],
+        [_output(scale=2.0)],
+        [_output(transform="90")],
+        [{"enabled": True, "scale": 1.0, "transform": "normal", "modes": [{"width": 1, "height": 1}]}],
+    ],
+)
+def test_detect_display_rejects_unsupported(monkeypatch, outputs):
+    """複数画面・拡大・回転・現在のモード不明は、未対応として拒否する。"""
+    _randr(monkeypatch, outputs)
+    with pytest.raises(RuntimeError):
+        layout.detect_display()
+
+
+@pytest.mark.parametrize("error", [FileNotFoundError(), subprocess.CalledProcessError(1, "wlr-randr")])
+def test_detect_display_command_failure(monkeypatch, error):
+    """wlr-randrが使えない環境では、手動指定を案内するエラーにする。"""
+    def fail(*args, **kwargs):
+        """コマンドの失敗を模擬する。"""
+        raise error
+
+    monkeypatch.setattr(layout.subprocess, "check_output", fail)
+    with pytest.raises(RuntimeError, match="--width"):
+        layout.detect_display()
+
+
+def test_detect_display_invalid_json(monkeypatch):
+    """出力がJSONでなければ、手動指定を案内するエラーにする。"""
+    monkeypatch.setattr(layout.subprocess, "check_output", lambda *args, **kwargs: "not json")
+    with pytest.raises(RuntimeError):
+        layout.detect_display()
+
+
+def test_resolve_display(monkeypatch):
+    """幅と高さの両方の指定が優先され、片方だけは拒否し、無指定なら自動取得する。"""
+    monkeypatch.setattr(layout, "detect_display", lambda: (800, 600))
+    assert layout.resolve_display(SimpleNamespace(width=1024, height=768)) == (1024, 768)
+    assert layout.resolve_display(SimpleNamespace(width=None, height=None)) == (800, 600)
+    with pytest.raises(RuntimeError):
+        layout.resolve_display(SimpleNamespace(width=1024, height=None))
+
+
+def test_geometry_leaves_room_for_panel():
+    """上部のパネルの分だけ、左右の窓の上端と高さを詰める。"""
+    android, argos = layout.geometry(1920, 440, 50, "left", top=36)
+    assert android == (0, 36, 960, 404) and argos == (960, 36, 960, 404)
+
+
+@pytest.mark.parametrize("width, height", [(1280, 720), (1366, 768)])
+def test_layouts_follow_display_size(width, height):
+    """画面サイズが違っても、中央ペインは画面内に収まり、分割は画面を覆う。"""
+    x, y, w, h = layout.center_pane(width, height)
+    assert x > 0 and x + w < width and y + h < height
+    android, argos = layout.geometry(width, height, 50, "left", top=36)
+    assert android[2] + argos[2] == width and android[3] == height - 36
+
+
+def _config(tmp_path, monkeypatch, text=""):
+    """設定ファイルだけを使う状態にする。"""
+    config = tmp_path / "config.yaml"
+    config.write_text(text)
+    monkeypatch.setenv("ARGOS_CONFIG_FILE", str(config))
+    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING):
+        monkeypatch.delenv(name, raising=False)
+
+
+@pytest.mark.parametrize("style, mode", [("", "split"), ("split", "split"), ("overlay", "pane")])
+def test_default_mode_follows_style(tmp_path, monkeypatch, style, mode):
+    """設定の表示方式が、最初に使うモードになる。未設定は左右分割。"""
+    _config(tmp_path, monkeypatch, f"window_layout:\n  style: '{style}'\n  split_ratio: 40\n")
+    state = layout.load_state(tmp_path / "none.json")
+    assert (state["mode"], state["ratio"]) == (mode, 40)
+
+
+def test_default_mode_rejects_unknown_style(tmp_path, monkeypatch):
+    """未知の表示方式は、黙って無視せず拒否する。"""
+    _config(tmp_path, monkeypatch, "window_layout:\n  style: floating\n")
+    with pytest.raises(RuntimeError, match="overlay"):
+        layout.default_mode()
+
+
+@pytest.mark.parametrize("value", ["abc", "10", "90"])
+def test_split_ratio_setting_rejected_when_invalid(tmp_path, monkeypatch, value):
+    """分割の比率が数値でない・範囲外なら拒否する。"""
+    _config(tmp_path, monkeypatch, f"window_layout:\n  split_ratio: '{value}'\n")
+    with pytest.raises(RuntimeError):
+        layout.load_state(tmp_path / "none.json")
+
+
+def test_saved_state_beats_config_defaults(tmp_path, monkeypatch):
+    """保存済みのモードと比率は、設定の既定値より優先する。"""
+    _config(tmp_path, monkeypatch, "window_layout:\n  style: overlay\n  split_ratio: 40\n")
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"mode": "android", "ratio": 70}))
+    state = layout.load_state(path)
+    assert (state["mode"], state["ratio"]) == ("android", 70)
+
+
+def test_effective_panel_height(tmp_path, monkeypatch):
+    """パネルがない端末では0、あれば設定値（既定36）を使う。"""
+    _config(tmp_path, monkeypatch)
+    monkeypatch.setattr(layout.shutil, "which", lambda tool: None)
+    assert layout.effective_panel_height() == 0
+    monkeypatch.setattr(layout.shutil, "which", lambda tool: f"/usr/bin/{tool}")
+    assert layout.effective_panel_height() == 36
+    _config(tmp_path, monkeypatch, "window_layout:\n  panel_height: 48\n")
+    assert layout.effective_panel_height() == 48
+
+
+@pytest.mark.parametrize(
+    "mode, expected_rect, expected_needed",
+    [
+        ("argos", None, None),
+        ("android", [0, 0, 1920, 440], [1920, 440]),
+        ("split", [0, 36, 960, 404], [960, 404]),
+        ("pane", [413, 12, 1004, 416], [1004, 416]),
+    ],
+)
+def test_plan_android_per_mode(mode, expected_rect, expected_needed):
+    """モードごとに、Androidの窓の位置と、必要な描画サイズが決まる。"""
+    state = {"mode": mode, "ratio": 50, "side": "left", "pane": None}
+    assert layout.plan_android(state, 1920, 440, 36, None) == (expected_rect, expected_needed)
+
+
+def test_plan_android_third_on_right_side():
+    """比率33%を右側に置く3分割にも、同じ仕組みで対応する。"""
+    state = {"mode": "split", "ratio": 33, "side": "right", "pane": None}
+    rect, needed = layout.plan_android(state, 1920, 440, 36, None)
+    assert rect == [1920 - 634, 36, 634, 404] and needed == [634, 404]
+
+
+def test_split_binding_starts_below_panel():
+    """分割の窓は、パネルの下から始まり、パネルの分だけ高さを詰める。"""
+    root = ET.fromstring("<openbox_config><keyboard/></openbox_config>")
+    state = {"mode": "split", "ratio": 50, "side": "left", "android_app": PACKAGE}
+    result = layout.build_binding(root, state, 1920, 440, (), top=36)
+    moves = [(node.get("x"), node.get("y")) for node in result.iter() if node.get("name") == "MoveTo"]
+    resizes = [(node.get("width"), node.get("height")) for node in result.iter() if node.get("name") == "ResizeTo"]
+    assert moves == [("0", "36"), ("960", "36")] and resizes == [("960", "404"), ("960", "404")]
+
+
+def test_split_reports_restart_required_when_size_differs(desktop, monkeypatch, capsys):
+    """Androidの描画サイズが必要なサイズと違えば、再起動が必要と知らせるだけで再起動しない。"""
+    monkeypatch.setattr(layout, "android_size", lambda: [1004, 416])
+    called = []
+    monkeypatch.setattr(layout, "restart_android", lambda size: called.append(size))
+    monkeypatch.setattr(sys, "argv", ["layout", "split"])
+    layout.main()
+    report = json.loads(capsys.readouterr().out)
+    assert report["android_needed"] == [960, 404] and report["android_current"] == [1004, 416]
+    assert report["restart_required"] is True and report["android_fit"] is False
+    assert called == []
+
+
+def test_restart_android_flag_restarts_then_lays_out(desktop, monkeypatch, capsys):
+    """--restart-androidなら、必要なサイズへ再起動してから配置し、ぴったりだと知らせる。"""
+    monkeypatch.setattr(layout, "android_size", lambda: [1004, 416])
+    called = []
+    monkeypatch.setattr(layout, "restart_android", lambda size: called.append(size))
+    monkeypatch.setattr(sys, "argv", ["layout", "split", "--restart-android"])
+    layout.main()
+    report = json.loads(capsys.readouterr().out)
+    assert called == [[960, 404]]
+    assert report["restart_required"] is False and report["android_fit"] is True
+
+
+def test_no_restart_when_size_matches_or_unknown(desktop, monkeypatch):
+    """サイズが合っている、または取得できないときは、フラグがあっても再起動しない。"""
+    called = []
+    monkeypatch.setattr(layout, "restart_android", lambda size: called.append(size))
+    for size in ([960, 404], None):
+        monkeypatch.setattr(layout, "android_size", lambda size=size: size)
+        monkeypatch.setattr(sys, "argv", ["layout", "split", "--restart-android"])
+        layout.main()
+    assert called == []
+
+
+def test_display_flags_override_detection(desktop, monkeypatch, capsys):
+    """--widthと--heightを指定すると、自動取得より優先する。"""
+    monkeypatch.setattr(layout, "detect_display", lambda: pytest.fail("自動取得しないはず"))
+    monkeypatch.setattr(sys, "argv", ["layout", "split", "--width", "1280", "--height", "720"])
+    layout.main()
+    assert json.loads(capsys.readouterr().out)["display"] == [1280, 720]
+
+
+def test_restore_uses_configured_style(desktop, monkeypatch):
+    """restoreは、設定の表示方式のモードへ戻す。"""
+    monkeypatch.setenv(layout.STYLE_SETTING, "overlay")
+    assert _run(monkeypatch, "split")["mode"] == "split"
+    assert _run(monkeypatch, "restore")["mode"] == "pane"
+
+
+@pytest.fixture
+def restart(monkeypatch):
+    """再起動手順で実行されるコマンドを記録し、成功する環境を模擬する。"""
+    world = {"commands": [], "units": {"waydroid-session.service"}, "sudo_ok": True, "running_after": 2, "checks": 0, "popen": []}
+    monkeypatch.setattr(layout.time, "sleep", lambda seconds: None)
+    monkeypatch.setenv(layout.RESTART_SERVICES_SETTING, "waydroid-gps-bridge.service, other.service")
+
+    def run(command, **kwargs):
+        """コマンドを記録する。sudoは失敗も模擬できる。"""
+        world["commands"].append(command)
+        if command[0] == "sudo" and not world["sudo_ok"]:
+            raise subprocess.CalledProcessError(1, command)
+        if command[:3] == ["systemctl", "--user", "cat"]:
+            return SimpleNamespace(returncode=0 if command[3] in world["units"] else 1)
+        return SimpleNamespace(returncode=0)
+
+    def status(command, **kwargs):
+        """セッションが数回目の確認で立ち上がる様子を模擬する。"""
+        world["checks"] += 1
+        return "Session:\tRUNNING\n" if world["checks"] >= world["running_after"] else "Session:\tSTOPPED\n"
+
+    monkeypatch.setattr(layout.subprocess, "run", run)
+    monkeypatch.setattr(layout.subprocess, "check_output", status)
+    monkeypatch.setattr(layout.subprocess, "Popen", lambda command, **kwargs: world["popen"].append(command))
+    return world
+
+
+def test_restart_android_sequence(restart):
+    """サイズ設定→セッション停止→コンテナ再起動→セッション開始の順で行い、関連サービスを止めて再開する。"""
+    layout.restart_android([960, 404])
+    commands = restart["commands"]
+    names = [" ".join(command[:3]) for command in commands]
+    assert commands[0] == ["systemctl", "--user", "stop", "waydroid-gps-bridge.service"]
+    assert ["waydroid", "prop", "set", "persist.waydroid.width", "960"] in commands
+    assert ["waydroid", "prop", "set", "persist.waydroid.height", "404"] in commands
+    order = [names.index(key) for key in ("waydroid session stop", "sudo -n systemctl", "systemctl --user start")]
+    assert order == sorted(order)
+    assert commands[-1] == ["systemctl", "--user", "start", "other.service"]
+    assert restart["popen"] == []
+
+
+def test_restart_android_starts_session_directly_without_unit(restart):
+    """セッション用のユーザーサービスがない端末では、waydroid session startを直接起動する。"""
+    restart["units"] = set()
+    layout.restart_android([960, 404])
+    assert restart["popen"] == [["waydroid", "session", "start"]]
+
+
+def test_restart_android_requires_passwordless_sudo(restart):
+    """パスワードなしのsudoがなければ、分かりやすいエラーにする。"""
+    restart["sudo_ok"] = False
+    with pytest.raises(RuntimeError, match="sudo"):
+        layout.restart_android([960, 404])
+
+
+def test_restart_android_times_out_when_session_stays_down(restart):
+    """再起動後にセッションが立ち上がらなければ、成功扱いにしない。"""
+    restart["running_after"] = 10**6
+    with pytest.raises(RuntimeError, match="セッション"):
+        layout.restart_android([960, 404], wait=3)
+
+
+def test_session_running_handles_missing_command(monkeypatch):
+    """waydroidコマンドがなければ、動いていない扱いにする。"""
+    def fail(*args, **kwargs):
+        """コマンドがない状態を模擬する。"""
+        raise FileNotFoundError
+
+    monkeypatch.setattr(layout.subprocess, "check_output", fail)
+    assert layout.session_running() is False

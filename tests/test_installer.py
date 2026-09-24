@@ -1,6 +1,8 @@
 import json
+import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -843,6 +845,7 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
             "http://gps.local:8080/gps",
             "y",
             "y",
+            "1",
             "y",
             "",
             "-",
@@ -881,6 +884,7 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
     assert "ARGOS_REMOTE_LOCATION_URL=http://gps.local:8080/gps" in text
     assert "ARGOS_WAKEWORD_ENABLED=true" in text
     assert "ARGOS_WINDOW_LAYOUT_ANDROID_APP=maps" in text
+    assert "ARGOS_WINDOW_LAYOUT_STYLE=overlay" in text
     assert "ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765" in text
     assert "ARGOS_PTT_GPIO=" in text
     assert "AUDIO_INPUT_DEVICES=plughw:CARD=Mic,DEV=0" in text
@@ -1220,3 +1224,44 @@ def test_window_layout_choice_yes_enables_multitouch_only(tmp_path, monkeypatch)
     env_path.write_text("ARGOS_WINDOW_LAYOUT_ANDROID_APP=maps\n", encoding="utf-8")
     installer._apply_window_layout_choice(plan, env_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
     assert 'mouseEmulation="no"' in config.read_text(encoding="utf-8")
+
+
+def test_window_layout_choice_disable_failure_does_not_stop_install(tmp_path):
+    """画面分割を使わない端末での無効化に失敗しても、インストールは続ける。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_WINDOW_LAYOUT_ANDROID_APP=\n", encoding="utf-8")
+    messages = []
+
+    def fail(command, **kwargs):
+        """ユーザーのsystemdに接続できない状態を模擬する。"""
+        raise subprocess.CalledProcessError(1, command)
+
+    installer._apply_window_layout_choice(_window_layout_plan(tmp_path), env_path, runner=fail, output_func=messages.append)
+    assert messages and "無効化できませんでした" in messages[0]
+
+
+@pytest.mark.parametrize(
+    "answer, current, expected",
+    [("1", "", "overlay"), ("overlay", "split", "overlay"), ("2", "overlay", "split"), ("SPLIT", "", "split"), ("", "overlay", "overlay"), ("x", "overlay", "overlay"), ("", "", "")],
+)
+def test_ask_layout_style(answer, current, expected):
+    """表示方式は番号か名前で選べ、空入力や不明な入力なら現在値を保つ。"""
+    values = {installer.WINDOW_LAYOUT_STYLE_KEY: current} if current else {}
+    installer._ask_layout_style(values, input_func=lambda prompt: answer)
+    assert values.get(installer.WINDOW_LAYOUT_STYLE_KEY, "") == expected
+
+
+@pytest.mark.parametrize("layout_answer, asked", [("y", 1), ("n", 0), ("", 0)])
+def test_configure_asks_style_only_when_layout_is_used(tmp_path, layout_answer, asked):
+    """表示方式の質問は、Waydroidと並べて使うと答えたときだけ出す。"""
+    env_path = tmp_path / ".env"
+    env_path.write_text("ARGOS_DASHBOARD_TOKEN=token\nAUDIO_INPUT_DEVICES=default\nAUDIO_OUTPUT_DEVICE=default\n", encoding="utf-8")
+    prompts = []
+
+    def answer(prompt):
+        """質問文を記録し、画面配置の質問だけに答える。"""
+        prompts.append(prompt)
+        return layout_answer if "並べて使う" in prompt else ""
+
+    installer.configure_env(env_path, runner=lambda command, **kwargs: SimpleNamespace(returncode=1, stdout=""), input_func=answer, output_func=lambda message: None)
+    assert sum("表示方式" in prompt for prompt in prompts) == asked

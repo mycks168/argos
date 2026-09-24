@@ -16,6 +16,12 @@ from argos.yaml_config import load_yaml_environment
 ANDROID_APPS = {"maps": "com.google.android.apps.maps"}
 APP_SETTING = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 PROJECT_CONFIG = Path(__file__).resolve().parents[3] / "config.yaml"
+STYLE_SETTING = "ARGOS_WINDOW_LAYOUT_STYLE"
+RATIO_SETTING = "ARGOS_WINDOW_LAYOUT_SPLIT_RATIO"
+PANEL_HEIGHT_SETTING = "ARGOS_WINDOW_LAYOUT_PANEL_HEIGHT"
+RESTART_SERVICES_SETTING = "ARGOS_WINDOW_LAYOUT_RESTART_SERVICES"
+# 表示方式の名前と、対応するモード。overlayはダッシュボードの中央ペインへ重ねる。
+STYLE_MODES = {"overlay": "pane", "split": "split"}
 
 
 DEFAULT_STATE = {"ratio": 50, "side": "left", "mode": "split", "pane": None, "panel_hidden": False, "return_mode": None}
@@ -182,27 +188,88 @@ def ensure_android(package, attempts=3, wait=15):
 
 
 def load_state(path):
-    """保存済みの配置を読み、未保存の項目は既定値で補う。旧形式の余分な項目は捨てる。"""
+    """保存済みの配置を読み、未保存の項目は設定に基づく既定値で補う。旧形式の余分な項目は捨てる。"""
     saved = json.loads(path.read_text()) if path.exists() else {}
-    return {key: saved.get(key, default) for key, default in DEFAULT_STATE.items()}
+    defaults = dict(DEFAULT_STATE, mode=default_mode(), ratio=configured_int(RATIO_SETTING, 50, 20, 80))
+    return {key: saved.get(key, default) for key, default in defaults.items()}
+
+
+def setting(name):
+    """設定値を返す。空でない環境変数を優先し、なければconfig.yamlを読む。
+
+    古い.envの空欄がconfig.yamlの設定を打ち消さないよう、空の環境変数は無視する。
+    """
+    value = os.environ.get(name, "").strip()
+    if not value:
+        config = Path(os.environ.get("ARGOS_CONFIG_FILE") or PROJECT_CONFIG).expanduser()
+        value = load_yaml_environment(config).get(name, "").strip()
+    return value
 
 
 def configured_package():
-    """設定されたAndroidアプリのパッケージ名を返す。未設定ならNone。
-
-    空でない環境変数を優先し、なければconfig.yamlを読む。登録のない名前は拒否する。
-    古い.envの空欄がconfig.yamlの設定を打ち消さないよう、空の環境変数は無視する。
-    """
-    name = os.environ.get(APP_SETTING, "").strip()
-    if not name:
-        config = Path(os.environ.get("ARGOS_CONFIG_FILE") or PROJECT_CONFIG).expanduser()
-        name = load_yaml_environment(config).get(APP_SETTING, "")
-    name = name.strip()
+    """設定されたAndroidアプリのパッケージ名を返す。未設定ならNone。登録のない名前は拒否する。"""
+    name = setting(APP_SETTING)
     if not name:
         return None
     if name not in ANDROID_APPS:
         raise RuntimeError(f"未対応のAndroidアプリ設定です: {name}（対応: {', '.join(ANDROID_APPS)}）")
     return ANDROID_APPS[name]
+
+
+def configured_int(name, default, minimum, maximum):
+    """整数の設定値を返す。未設定なら既定値。範囲外や数値でなければエラー。"""
+    raw = setting(name)
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise RuntimeError(f"{name}は整数で指定してください: {raw}") from exc
+    if not minimum <= value <= maximum:
+        raise RuntimeError(f"{name}は{minimum}〜{maximum}で指定してください: {raw}")
+    return value
+
+
+def default_mode():
+    """設定の表示方式(overlay/split)に対応する、最初に使うモードを返す。未設定はsplit。"""
+    style = setting(STYLE_SETTING) or "split"
+    if style not in STYLE_MODES:
+        raise RuntimeError(f"表示方式はoverlayまたはsplitで指定してください: {style}")
+    return STYLE_MODES[style]
+
+
+def effective_panel_height():
+    """分割時に窓が使えない上部の高さ。パネル(wf-panel-pi)がない端末では0。"""
+    if not shutil.which("wf-panel-pi"):
+        return 0
+    return configured_int(PANEL_HEIGHT_SETTING, 36, 0, 200)
+
+
+def detect_display():
+    """labwcの出力から画面サイズ(幅, 高さ)を取得する。複数画面・拡大・回転は未対応。"""
+    try:
+        outputs = json.loads(subprocess.check_output(["wlr-randr", "--json"], text=True, timeout=10))
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise RuntimeError("画面サイズを取得できません。--widthと--heightで指定してください") from exc
+    outputs = [item for item in outputs if item.get("enabled")]
+    if len(outputs) != 1:
+        raise RuntimeError("有効な画面が1つではありません。複数画面は未対応です")
+    output = outputs[0]
+    if output.get("scale", 1) != 1 or output.get("transform", "normal") != "normal":
+        raise RuntimeError("画面の拡大率が1.0でない、または回転している構成は未対応です")
+    mode = next((item for item in output.get("modes", []) if item.get("current")), None)
+    if not mode:
+        raise RuntimeError("現在の画面モードを取得できません。--widthと--heightで指定してください")
+    return mode["width"], mode["height"]
+
+
+def resolve_display(args):
+    """画面サイズ(幅, 高さ)を返す。--widthと--heightの両方があればそれを使い、なければ自動取得する。"""
+    if args.width and args.height:
+        return args.width, args.height
+    if args.width or args.height:
+        raise RuntimeError("--widthと--heightは両方指定してください")
+    return detect_display()
 
 
 def preflight():
@@ -218,19 +285,20 @@ def preflight():
     return dict(os.environ, LABWC_PID=pids[0])
 
 
-def geometry(width, height, ratio, side):
-    """指定比率から重なりのない左右の矩形を求める。"""
+def geometry(width, height, ratio, side, top=0):
+    """指定比率から重なりのない左右の矩形を求める。topは上部でふさがっている高さ（パネルなど）。"""
     if not 20 <= ratio <= 80 or side not in ("left", "right"):
         raise ValueError("Androidの幅は20〜80%、位置はleftまたはrightです")
-    if width < 2 or height < 1:
+    if width < 2 or height - top < 1:
         raise ValueError("画面サイズが不正です")
     android = round(width * ratio / 100)
+    usable = height - top
     if side == "left":
-        return (0, 0, android, height), (android, 0, width-android, height)
-    return (width-android, 0, android, height), (0, 0, width-android, height)
+        return (0, top, android, usable), (android, top, width-android, usable)
+    return (width-android, top, android, usable), (0, top, width-android, usable)
 
 
-def build_binding(root, state, width, height, fullscreen=()):
+def build_binding(root, state, width, height, fullscreen=(), top=0):
     """専用キーだけを置換し、他のlabwc設定を保持する。"""
     ns = root.tag.partition("}")[0] + "}" if "}" in root.tag else ""
     if ns:
@@ -272,7 +340,7 @@ def build_binding(root, state, width, height, fullscreen=()):
                 add(then, "action", name="MoveTo", x=str(x), y=str(y))
             add(then, "action", name="Raise")
         return root
-    rectangles = geometry(width, height, state["ratio"], state["side"])
+    rectangles = geometry(width, height, state["ratio"], state["side"], top)
     for target, rect in zip(("android", "argos"), rectangles):
         if target == "android" and not package:
             continue
@@ -307,15 +375,82 @@ def build_binding(root, state, width, height, fullscreen=()):
     return root
 
 
+def plan_android(state, width, height, panel_height, size):
+    """モードごとの、Androidの窓の矩形と、その矩形に必要なAndroidの描画サイズを返す。
+
+    Waydroidの窓はAndroidの描画サイズより小さくできないため、窓の大きさと描画サイズは揃える。
+    ARGOSだけを出すモードはAndroidを使わないのでNone。
+    """
+    mode = state["mode"]
+    if mode == "argos":
+        return None, None
+    if mode == "android":
+        return [0, 0, width, height], [width, height]
+    if mode == "pane":
+        pane = state["pane"] or center_pane(width, height)
+        return fit_android(pane, size), pane[2:]
+    android = list(geometry(width, height, state["ratio"], state["side"], panel_height)[0])
+    return android, android[2:]
+
+
+def user_unit_exists(unit):
+    """ユーザーのsystemdにunitがあるか確認する。"""
+    result = subprocess.run(["systemctl", "--user", "cat", unit], capture_output=True, check=False, timeout=10)
+    return result.returncode == 0
+
+
+def session_running():
+    """Waydroidのセッションが動いているか確認する。"""
+    try:
+        output = subprocess.check_output(["waydroid", "status"], text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return any(line.split()[:2] == ["Session:", "RUNNING"] for line in output.splitlines())
+
+
+def restart_android(size, wait=90):
+    """Androidの描画サイズを変えてWaydroidを再起動する。ナビなど実行中のAndroid側の処理は中断される。
+
+    描画サイズは再起動しないと反映されない。コンテナの再起動にsudoが必要なため、
+    パスワードなしで実行できない環境ではエラーにする。関連するユーザーサービス
+    （GPS中継など）は、設定のrestart_servicesに書かれたものを止めてから、起動後に再開する。
+    """
+    services = [unit.strip() for unit in setting(RESTART_SERVICES_SETTING).split(",") if unit.strip()]
+    for unit in services:
+        subprocess.run(["systemctl", "--user", "stop", unit], check=False, timeout=30)
+    subprocess.run(["waydroid", "prop", "set", "persist.waydroid.width", str(size[0])], check=True, timeout=30)
+    subprocess.run(["waydroid", "prop", "set", "persist.waydroid.height", str(size[1])], check=True, timeout=30)
+    subprocess.run(["waydroid", "session", "stop"], check=False, timeout=60)
+    time.sleep(2)
+    try:
+        subprocess.run(["sudo", "-n", "systemctl", "restart", "waydroid-container"], check=True, timeout=120)
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError("Waydroidのコンテナを再起動できません。パスワードなしのsudoが必要です") from exc
+    time.sleep(2)
+    if user_unit_exists("waydroid-session.service"):
+        subprocess.run(["systemctl", "--user", "start", "waydroid-session.service"], check=True, timeout=60)
+    else:
+        subprocess.Popen(["waydroid", "session", "start"], start_new_session=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(wait):
+        if session_running():
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("Waydroidのセッションが再起動後に立ち上がりませんでした")
+    for unit in services:
+        subprocess.run(["systemctl", "--user", "start", unit], check=False, timeout=30)
+
+
 def main():
-    """保存済みの分割設定を使って配置を切り替える。"""
+    """保存済みの配置設定を使って、ARGOSとAndroidの画面配置を切り替える。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=["split", "android", "argos", "pane", "show", "hide", "restore", "swap", "boot", "status"])
     parser.add_argument("--ratio", type=int)
     parser.add_argument("--side", choices=["left", "right"])
     parser.add_argument("--pane", help="paneモードでAndroidを重ねる範囲 x,y,w,h。autoで画面幅から自動計算")
-    parser.add_argument("--width", type=int, default=1920)
-    parser.add_argument("--height", type=int, default=440)
+    parser.add_argument("--width", type=int, help="画面の幅。省略すると出力から自動取得する")
+    parser.add_argument("--height", type=int, help="画面の高さ。省略すると出力から自動取得する")
+    parser.add_argument("--restart-android", action="store_true", help="Androidの描画サイズが合わないとき、サイズを変えてWaydroidを再起動する（ナビが中断される）")
     args = parser.parse_args()
     path = Path.home()/".local/state/argos/window-layout.json"
     if args.mode == "status":
@@ -328,21 +463,20 @@ def main():
         apply_layout(args, load_state(path), path)
 
 
-def apply_layout(args, state, path):
-    """一時的なキー割り当てで配置し、終了時に元の設定を復元する。
-
-    bootは保存済みの状態をそのまま再適用する。Androidアプリが未設定、または
-    labwcのセッションでない端末では何もしないため、Waydroidを使わない端末の
-    起動サービスに入れても失敗しない。
-    """
+def update_state(args, state):
+    """コマンドに合わせて、モード・比率・左右・戻し先を更新する。"""
     previous = state["mode"]
     if args.mode == "show":
         # 隠す前の配置へ戻す。隠していなければ今の配置を再適用する。
-        state["mode"] = (state["return_mode"] or "split") if previous == "argos" else previous
+        state["mode"] = (state["return_mode"] or default_mode()) if previous == "argos" else previous
     elif args.mode == "hide":
         state["mode"] = "argos"
+    elif args.mode == "restore":
+        state["mode"] = default_mode()
+    elif args.mode == "swap":
+        state["mode"] = "split"
     elif args.mode != "boot":
-        state["mode"] = "split" if args.mode in ("restore", "swap") else args.mode
+        state["mode"] = args.mode
     if state["mode"] == "argos" and previous != "argos":
         state["return_mode"] = previous
     if args.ratio is not None:
@@ -351,8 +485,16 @@ def apply_layout(args, state, path):
         state["side"] = args.side
     if args.mode == "swap":
         state["side"] = "right" if state["side"] == "left" else "left"
-    if args.pane is not None:
-        state["pane"] = parse_pane(args.pane, args.width, args.height)
+
+
+def apply_layout(args, state, path):
+    """一時的なキー割り当てで配置し、終了時に元の設定を復元する。
+
+    bootは保存済みの状態をそのまま再適用する。Androidアプリが未設定、または
+    labwcのセッションでない端末では何もしないため、Waydroidを使わない端末の
+    起動サービスに入れても失敗しない。
+    """
+    update_state(args, state)
     package = configured_package()
     needs_android = state["mode"] != "argos"
     if needs_android and not package:
@@ -367,17 +509,24 @@ def apply_layout(args, state, path):
             raise
         print(json.dumps(dict(state, skipped=str(exc)), ensure_ascii=False))
         return
+    width, height = resolve_display(args)
+    if args.pane is not None:
+        state["pane"] = parse_pane(args.pane, width, height)
+    panel_height = effective_panel_height()
+    size = android_size() if needs_android else None
+    android_rect, needed = plan_android(state, width, height, panel_height, size)
+    restart_required = bool(needed and size and needed != size)
+    if restart_required and args.restart_android:
+        restart_android(needed)
+        size, restart_required = needed, False
+        android_rect, needed = plan_android(state, width, height, panel_height, size)
     fullscreen = []
     # Androidの復旧はARGOSの起動を待たずに先に行う。ARGOSのダッシュボードは起動が遅いことがある。
     if needs_android:
         ensure_android(package)
     if args.mode == "boot" and not wait_window(ARGOS_MATCH, BOOT_WAIT_SECONDS):
         raise RuntimeError("ARGOSのウィンドウが現れませんでした")
-    android_rect = size = None
     if state["mode"] == "pane":
-        pane = state["pane"] or center_pane(args.width, args.height)
-        size = android_size()
-        android_rect = fit_android(pane, size)
         # 上部を占有するパネルがあると窓を最上端に置けないため、先に止める。
         if shutil.which("wf-panel-pi") and (state["panel_hidden"] or panel_running()):
             hide_panel()
@@ -402,7 +551,8 @@ def apply_layout(args, state, path):
     root = ET.fromstring(original, parser=parser)
     if any(node.get("key") == "W-C-A-F12" for node in root.iter()):
         raise RuntimeError("専用キーW-C-A-F12が既に使われています")
-    root = build_binding(root, dict(state, android_app=package, pane=android_rect), args.width, args.height, fullscreen)
+    top = panel_height if state["mode"] in ("split", "android") else 0
+    root = build_binding(root, dict(state, android_app=package, pane=android_rect), width, height, fullscreen, top)
     backup = config.with_suffix(".xml.before-argos-layout")
     if not backup.exists():
         shutil.copy2(config, backup)
@@ -421,14 +571,13 @@ def apply_layout(args, state, path):
     saved = path.with_suffix(".tmp")
     saved.write_text(json.dumps(state))
     saved.replace(path)
-    report = dict(state)
-    if android_rect:
-        report.update(
-            pane_rect=pane,
-            android_rect=android_rect,
-            # Waydroidの窓はAndroidの描画サイズより小さくできないため、サイズが違うとはみ出す。
-            android_fit=android_rect == pane and (not size or size == pane[2:]),
-        )
+    report = dict(state, display=[width, height])
+    if needs_android:
+        report.update(android_rect=android_rect, android_needed=needed, android_current=size, restart_required=restart_required)
+        if state["mode"] == "pane":
+            report["pane_rect"] = state["pane"] or center_pane(width, height)
+        # Waydroidの窓はAndroidの描画サイズより小さくできないため、サイズが違うとはみ出す。
+        report["android_fit"] = not restart_required
     print(json.dumps(report, ensure_ascii=False))
 
 

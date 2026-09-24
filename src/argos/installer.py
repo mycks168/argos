@@ -21,6 +21,7 @@ from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 
 WINDOW_LAYOUT_SERVICE = "argos-window-layout"
 WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
+WINDOW_LAYOUT_STYLE_KEY = "ARGOS_WINDOW_LAYOUT_STYLE"
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -385,7 +386,9 @@ def configure_env(
     _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
-    _ask_bool(values, WINDOW_LAYOUT_KEY, "Waydroidと画面を左右に分割する（Googleマップ、labwc専用）", true_value="maps", false_value="", input_func=input_func)
+    _ask_bool(values, WINDOW_LAYOUT_KEY, "Waydroidと画面を並べて使う（Googleマップ、labwc専用）", true_value="maps", false_value="", input_func=input_func)
+    if values.get(WINDOW_LAYOUT_KEY):
+        _ask_layout_style(values, input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
     slot_template = _prepare_unified_slots_for_configure(values)
     _ask_agent_slots(values, input_func=input_func, output_func=output_func)
@@ -661,6 +664,15 @@ def _ask_bool(
         values[key] = true_value
     elif answer in {"n", "no", "0", "false"}:
         values[key] = false_value
+
+
+def _ask_layout_style(values: dict[str, str], *, input_func: Callable[[str], str]) -> None:
+    """画面配置の表示方式（overlay/split）を、番号または名前で選ぶ。空入力や不明な入力なら現在値を維持する。"""
+    current = values.get(WINDOW_LAYOUT_STYLE_KEY, "") or "split"
+    answer = input_func(f"表示方式 1=ダッシュボードに重ねる(overlay) 2=左右に分割(split) [{current}]: ").strip().lower()
+    choice = {"1": "overlay", "overlay": "overlay", "2": "split", "split": "split"}.get(answer)
+    if choice:
+        values[WINDOW_LAYOUT_STYLE_KEY] = choice
 
 
 def _ask_agent_slots(
@@ -1125,7 +1137,11 @@ def _apply_window_layout_choice(
         _run_user_systemctl(plan, ["enable", "--now", unit], runner=runner)
         _enable_multitouch(plan, runner=runner, output_func=output_func)
     else:
-        _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
+        # 画面分割を使わない端末でも毎回通る後始末なので、失敗してもインストールは止めない。
+        try:
+            _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
+        except subprocess.CalledProcessError as exc:
+            output_func(f"警告: {unit}を無効化できませんでした。必要なら手動で確認してください: {exc}")
 
 
 def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print) -> None:

@@ -1,17 +1,20 @@
 ---
 name: argos-screen-layout
-description: ARGOSのダッシュボードとWaydroid上のGoogleマップの画面配置を切り替える（地図を出す・隠す、ARGOSだけ表示、地図を最大化、左右入れ替え、会話欄を右ペインへ移す）。ユーザーが「地図を出して」「地図を隠して」「地図を消して」「ARGOSだけ見せて」「地図を最大にして」「左右を入れ替えて」「会話を右に移して」「メッセージが見えない」などと言ったときに使う。
+description: Waydroidとlabwcがある端末専用。ARGOSのダッシュボードとWaydroid上のGoogleマップの画面配置を切り替える（地図を出す・隠す、ARGOSだけ表示、地図を最大化、左右入れ替え、会話欄を右ペインへ移す）。ユーザーが「地図を出して」「地図を隠して」「地図を消して」「ARGOSだけ見せて」「地図を最大にして」「左右を入れ替えて」「会話を右に移して」「メッセージが見えない」などと言ったときに使う。
 ---
 
 # ARGOS画面配置 (argos-screen-layout)
 
-HDMI画面（この実機は1920×440）に、ARGOSダッシュボードとWaydroidのGoogleマップを重ねて表示するためのスキルです。地図の中身（ナビ開始・ズーム・GPS追従）は `waydroid-google-maps` スキルの担当で、このスキルは「窓の置き方」だけを扱います。仕組みと実機での確認結果は `docs/waydroid.md` にあります。
+HDMI画面に、ARGOSダッシュボードとWaydroidのGoogleマップを並べる（左右分割）か、ダッシュボードの中央ペインへ重ねる（オーバーレイ）ためのスキルです。画面サイズは自動で取得します（この実機は1920×440）。地図の中身（ナビ開始・ズーム・GPS追従）は `waydroid-google-maps` スキルの担当で、このスキルは「窓の置き方」だけを扱います。仕組みと実機での確認結果は `docs/waydroid.md` にあります。
 
 ## 使える端末
 
 - labwc（Wayland）とWaydroidがある端末だけ。設定 `window_layout.android_app: maps`（config.yaml）が有効なこと。
 - 確認済みのアプリはGoogleマップ（`maps`）だけ。それ以外の端末では、`boot` は何もせず正常終了し、他のコマンドはエラーになる。
-- ダッシュボードは「通常」レイアウト（3分割）が前提。SP表示・Grid表示では中央ペインの計算が合わない。
+- Waydroidは1つの画面に1つのAndroidしか出せない（複数ウィンドウ設定は枠が付いて使えなかった）。別のAndroidアプリを並べる場合は、地図と入れ替える形になる。
+- ダッシュボードは「通常」レイアウト（3分割）が前提。SP表示・Grid表示では、オーバーレイ（`pane`）の中央ペインの計算が合わない。
+- 画面は、有効な出力が1つで、拡大率1.0、回転なしの構成が前提（違うとエラー）。`--width` と `--height`（両方）で画面サイズを手動指定できる。
+- 設定は `config.yaml` の `window_layout`（`android_app`・`style`・`split_ratio`・`panel_height`・`restart_services`）。
 
 ## コマンド
 
@@ -38,14 +41,33 @@ uv run python -m argos.tools.window_layout status
 
 | 依頼 | コマンド |
 | --- | --- |
-| 地図を出して | `show`（初回や配置が不明なら `pane`） |
+| 地図を出して | `show`（初回や配置が不明なら、設定の表示方式のコマンド） |
 | 地図を隠して・消して・ARGOSだけ | `hide` |
 | 左右を入れ替えて | `swap`（左右分割のとき） |
-| 地図を最大にして | `android`（Androidが960幅だと左右に黒い余白が出る） |
+| 地図を最大にして | `android`（Androidの描画サイズが画面と同じでないと黒い余白が出る） |
+| 3分の1・半分にして | `split --ratio 33` ／ `split --ratio 50`（`--side left|right` で側を選ぶ） |
+| オーバーレイにして・重ねて | `pane` |
 
-`pane` の出力の `android_fit` が `true` なら、中央ペインにぴったり収まっている。`false` のときは、Androidの解像度がペインと合っていない（下の「解像度」を参照）。Waydroidの窓はAndroidの描画サイズより小さくできないため、ペインより大きいと下や右が画面の外へはみ出す。
+設定 `window_layout.style`（`overlay` か `split`）が、最初に使う表示方式になる。`restore` はその表示方式の配置へ戻す。
 
-地図は、ダッシュボード外周の状態表示の枠（聞き取り中は黄、処理中は青など）を隠さないよう、上下を12pxずつ内側に置く。
+## Androidの描画サイズと再起動
+
+**Waydroidの窓はAndroidの描画サイズより小さくできない**ので、窓の大きさとAndroidの描画サイズ（`persist.waydroid.width`・`height`）を揃える必要がある。コマンドは、モードごとに必要な描画サイズを計算し、出力に次を返す。
+
+- `android_needed`: 必要な描画サイズ（例: 半分の分割は960×404、オーバーレイは1004×416）
+- `android_current`: 今の描画サイズ
+- `restart_required`: 違うとき `true`。配置だけ行うので、はみ出したり余白が出たりする
+- `android_fit`: ぴったり収まっているか
+
+描画サイズは**再起動しないと変わらない**。`--restart-android` を付けると、サイズを変えてWaydroidを再起動し、地図を起動し直してから配置する。**ナビが中断されるので、必ず利用者に確認してから付ける。**
+
+```bash
+uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
+```
+
+コンテナの再起動にパスワードなしの `sudo` が必要。GPS中継など、再起動の前後で止めて再開するユーザーサービスは `config.yaml` の `window_layout.restart_services` に書く（この実機は `waydroid-gps-bridge.service`）。
+
+Androidの描画サイズを変えても、別の表示方式へ戻すときは再度サイズが変わる（再起動）。頻繁に切り替える運用なら、片方の表示方式に絞る。
 
 ## 会話欄を右のペインへ移す
 
@@ -71,19 +93,6 @@ uv run python skills/dashboard-overlay/scripts/send_overlay.py --type swap
 - **`lwrespawn`**: バーは `lwrespawn` が再起動するので、`pkill wf-panel-pi` だけでは止まらない。見張り役を先に止める。
 - **タッチ**: labwcの `<touch mouseEmulation="yes">` だと指1本にしかならず、地図でピンチできない。`no` にする。
 - **`wlrctl`**: `wlrctl toplevel minimize/focus/find` が使えるが、最小化を解除するコマンドは無い（`focus` で戻る）。labwcの `ForEach` を自作するときは、ウィンドウの指定に `app_id:waydroid.com.google.android.apps.maps`（地図）と `title:ARGOS Dashboard`（ダッシュボード）を使う。
-
-## 解像度（Androidの大きさ）
-
-Androidの描画サイズは `persist.waydroid.width`・`height` で決まり、**再起動しないと変わらない**（`wm size` は表示が崩れる）。中央ペインにぴったり合わせるには、`pane` の出力の `pane_rect` の幅と高さ（この実機は1004×416）にして、Waydroidを再起動する。ナビが中断するので、必ず利用者に確認してから行う。
-
-```bash
-waydroid prop set persist.waydroid.width 1004
-waydroid prop set persist.waydroid.height 416
-waydroid session stop && sudo systemctl restart waydroid-container
-systemctl --user start waydroid-session waydroid-maps
-```
-
-解像度を変えると、左右半分の分割表示（各960幅）では地図の端が切れる。
 
 ## 確認方法
 

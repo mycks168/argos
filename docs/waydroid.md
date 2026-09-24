@@ -27,19 +27,56 @@ Waydroidはラズパイ専用ではなく、Waylandを使う一般のLinuxでも
 必要なパッケージは `labwc`、`wtype`、`wlrctl` です。デスクトップへログインしているユーザーのWaylandセッションから、リポジトリ内で実行します。サービスやSSH経由では、そのセッションの `XDG_RUNTIME_DIR` と `WAYLAND_DISPLAY` を明示してください。rootとしては実行しません。
 
 ```bash
-# Androidを左半分、ARGOSを右半分へ配置
+# Androidを左半分、ARGOSを右半分へ配置（比率は20〜80）
 uv run python -m argos.tools.window_layout split --ratio 50 --side left
+# 3分の1をAndroidに（右側）
+uv run python -m argos.tools.window_layout split --ratio 33 --side right
 # 左右を入れ替え
 uv run python -m argos.tools.window_layout swap
 # ARGOSを全画面表示
 uv run python -m argos.tools.window_layout argos
-# 保存した比率と左右へ戻す
+# 設定の表示方式（overlay/split）の配置へ戻す
 uv run python -m argos.tools.window_layout restore
 # 保存した要求状態を確認（実際のウィンドウ状態の取得ではない）
 uv run python -m argos.tools.window_layout status
 # 保存済みの状態を再適用（再起動後の復帰用）
 uv run python -m argos.tools.window_layout boot
 ```
+
+#### 表示方式とAndroidの大きさ
+
+表示方式は2つあり、`config.yaml` の `window_layout.style` で最初に使うものを決めます（実行のたびに `pane` や `split` で切り替えられます）。
+
+| 表示方式 | コマンド | Androidの窓 | ARGOS |
+| --- | --- | --- | --- |
+| `overlay` | `pane` | 中央ペインの位置（下の節） | 全画面 |
+| `split` | `split` | 画面の指定割合（`--ratio`）を左右どちらかに | 残り |
+
+**Waydroidの窓はAndroidの描画サイズより小さくできない**ため、窓の大きさとAndroidの描画サイズ（`persist.waydroid.width`・`height`）は揃える必要があります。ツールは、モードごとに必要な描画サイズを計算して、今の値と比べます。
+
+- 同じなら、そのまま配置します。
+- 違うと、出力の `restart_required` が `true` になり、`android_needed`（必要なサイズ）と `android_current`（今のサイズ）を表示して、配置だけ行います（はみ出したり余白が出たりします）。
+- `--restart-android` を付けると、描画サイズを変えてWaydroidを再起動し、地図を起動し直してから配置します。**ナビなどAndroid側の処理は中断されます。** コンテナの再起動に、パスワードなしの `sudo` が必要です。`config.yaml` の `window_layout.restart_services` にユーザーサービス（この実機はGPS中継 `waydroid-gps-bridge.service`）を書くと、再起動の前後で止めて再開します。
+
+例（この実機・1920×440、上のパネル36px）:
+
+| モード | Androidの窓 | 必要な描画サイズ |
+| --- | --- | --- |
+| `pane`（overlay） | 中央ペイン | 1004×416 |
+| `split --ratio 50` | 左半分 | 960×404 |
+| `split --ratio 33` | 左または右の約3分の1 | 634×404 |
+| `android`（全画面） | 画面全体 | 1920×440 |
+
+```bash
+# 半分の分割へ切り替える（描画サイズが合わなければ再起動する）
+uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
+```
+
+#### 画面サイズと設定
+
+- **画面サイズ**: 指定がなければ、`wlr-randr --json` で有効な出力の現在のモードから、幅と高さを自動取得します。`--width` と `--height`（両方必要）で上書きできます。有効な画面が複数ある、拡大率が1.0でない、回転している構成は、未対応としてエラーにします。
+- **パネルの高さ**: 分割のとき、上のパネル（`wf-panel-pi`）の下から窓を置きます。高さは `window_layout.panel_height`（既定36）で、パネルがない端末では0です。
+- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`。空の値は既定値になります。
 
 #### 並べるAndroidアプリの設定と凍結対策
 
@@ -69,7 +106,7 @@ Androidを使う配置（`split`・`swap`・`android`・`restore`・`boot`）で
 
 起動時の実行はユーザーサービス `argos-window-layout` が行います。ARGOSのキオスク（`argos-dashboard-kiosk`）に `PartOf` で紐づけてあり、キオスクが再起動されると配置もやり直されます。**このサービスは任意で、インストーラーは既定では有効化しません。**
 
-- インストーラーの対話設定（`--configure`）で「Waydroidと画面を左右に分割する」に `y` と答えると、有効化して起動します。`n` なら無効化します。
+- インストーラーの対話設定（`--configure`）で「Waydroidと画面を並べて使う」に `y` と答えると、表示方式（overlay/split）を聞いたうえで、有効化して起動します。`n` なら無効化します。
 - 質問しない通常のインストール・更新では、unitファイルを置くだけで、有効・無効の状態は変えません。
 - 手動なら `systemctl --user enable --now argos-window-layout` です。
 - Waydroid本体や地図の起動サービス（この実機の `waydroid-maps.service` など）は端末固有で、インストーラーは作りません。`After=` などの順序指定は、リポジトリのunitに書かず、端末側のドロップイン（`~/.config/systemd/user/argos-window-layout.service.d/*.conf`）に書きます。ドロップインはインストーラーが上書きしません。
@@ -211,7 +248,7 @@ Googleマップのピンチイン・ピンチアウトができない場合は�
 この実機（ILITEKのタッチパネル、10点まで検知）では `mouseEmulation="no"` に変更し、`labwc -r` で反映してピンチ操作が効くことを、利用者が画面で確認しました。ARGOSダッシュボードのタップ・スクロールにも問題はありませんでした。Android側にはマルチタッチ用の入力（`wl_touch_events`）があります。
 
 - 対象はタッチパネルだけで、USBマウスの動作には影響しません（マウスのズームはホイール）。
-- インストーラーの対話設定（`--configure`）で画面分割に `y` と答えたときだけ、`rc.xml` の `<touch>` に `mouseEmulation="yes"` があれば `no` に変えます。変更前に `rc.xml.before-argos-touch` を残し、コメントなど他の記述は保ち、labwcへSIGHUPで再読み込みを通知します。`no` や未指定（labwcの既定は変換なし）、`rc.xml` がない端末では何もしません。`n` と答え直しても `yes` には戻しません。
+- インストーラーの対話設定（`--configure`）で「Waydroidと画面を並べて使う」に `y` と答えたときだけ、`rc.xml` の `<touch>` に `mouseEmulation="yes"` があれば `no` に変えます。変更前に `rc.xml.before-argos-touch` を残し、コメントなど他の記述は保ち、labwcへSIGHUPで再読み込みを通知します。`no` や未指定（labwcの既定は変換なし）、`rc.xml` がない端末では何もしません。`n` と答え直しても `yes` には戻しません。
 - 戻すときは手動で `yes` に戻して `labwc -r` を実行します。
 - 変更前の設定は、この実機の `rc.xml.before-touch-test` に残してあります。
 - 画面配置ツール（`window_layout`）は、実行時点の `rc.xml` を保存して復元するため、この設定を保ちます。
