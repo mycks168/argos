@@ -6,8 +6,8 @@ set -euo pipefail
 #
 # ARGOSはTTSを aplay、ウェイクワード/STTを arecord で鳴らし、どちらもALSAを直接叩く
 # （PipeWireを経由しない）。そのため PipeWire の仮想ノード ec-sink/ec-source をそのまま
-# .env に書いても aplay/arecord は開けない。ALSA↔PipeWire を橋渡しする ALSA PCM
-# （ec_sink / ec_source）を /etc/asound.conf に定義し、その **ALSA名** を .env に指定する。
+# config.yaml に書いても aplay/arecord は開けない。ALSA↔PipeWire を橋渡しする ALSA PCM
+# （ec_sink / ec_source）を /etc/asound.conf に定義し、その **ALSA名** をconfig.yamlに指定する。
 # （~/.asoundrc は Raspberry Pi OS 等で再起動時に消えることがあるため、システム側に置く。sudo要）
 #
 # 構成:
@@ -15,7 +15,7 @@ set -euo pipefail
 #   2. ALSA ブリッジPCM (/etc/asound.conf) … aplay/arecord から使える ec_sink / ec_source を定義
 #   3. WirePlumber ドロップイン    … アイドルサスペンド無効化 + HDMI headroom増（プチプチ防止）
 #   4. 既定sink音量を100%に固定    … ec_sink経由でTTS音量がPipeWire既定sink音量に従うため
-#   5. .env（手動）        … AUDIO_OUTPUT_DEVICE=ec_sink / AUDIO_INPUT_DEVICES=ec_source
+#   5. config.yaml（手動） … audio.output_device=ec_sink / audio.input_devices=[ec_source]
 #
 # 使い方:
 #   scripts/setup-echo-cancel.sh                 # 1〜4を設定（依存が足りなければ案内して中断）
@@ -46,7 +46,7 @@ usage() {
 usage: $(basename "$0") [--install-deps | --revert | --help]
   (引数なし)      エコーキャンセルの PipeWire設定 と ALSAブリッジ を設定する
   --install-deps  不足パッケージを apt で導入してから設定する
-  --revert        設定を削除して元に戻す（既定デバイスや .env には触れない）
+  --revert        設定を削除して元に戻す（既定デバイスやconfig.yamlには触れない）
 USAGE
 }
 
@@ -228,10 +228,10 @@ do_install() {
   echo "  2) 疎通確認（音が出ることを先に確かめる。無音のまま本番投入しない）:"
   echo "       aplay -D ec_sink /usr/share/sounds/alsa/Front_Center.wav"
   echo "       arecord -D ec_source -d 2 -f S16_LE -r 16000 /tmp/ec_test.wav && aplay /tmp/ec_test.wav"
-  echo "  3) .env に以下を設定して ARGOS を再起動:"
-  echo "       AUDIO_OUTPUT_DEVICE=ec_sink"
-  echo "       AUDIO_INPUT_DEVICES=ec_source"
-  echo "       ARGOS_WAKEWORD_BARGEIN_ENABLED=true"
+  echo "  3) config.yamlに以下を設定してARGOSを再起動:"
+  echo "       audio.output_device: ec_sink"
+  echo "       audio.input_devices: [ec_source]"
+  echo "       wakeword.bargein_enabled: true"
   echo "  4) 実運用音量で自己エコーが消えるか実機計測（docs/basic_design.md）"
   echo
   echo "元に戻すには: $(basename "$0") --revert"
@@ -259,7 +259,7 @@ do_revert() {
   echo
   echo "反映するには: systemctl --user restart pipewire pipewire-pulse wireplumber"
   echo "  ※ 'Failed to connect to bus: No medium found' が出たら 'export XDG_RUNTIME_DIR=/run/user/\$(id -u)' を先に実行"
-  echo ".env で AUDIO_OUTPUT_DEVICE / AUDIO_INPUT_DEVICES / ARGOS_WAKEWORD_BARGEIN_ENABLED を"
+  echo "config.yamlでaudio.output_device / audio.input_devices / wakeword.bargein_enabledを"
   echo "変更していた場合は、そちらも元に戻して ARGOS を再起動すること。"
   echo "既定sink音量(100%)は元に戻していない。必要なら 'wpctl set-volume @DEFAULT_AUDIO_SINK@ <値>' で調整すること。"
 }

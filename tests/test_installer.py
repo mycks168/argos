@@ -10,7 +10,7 @@ from argos.installer import (
     DEFAULT_MANIFEST,
     apply_plan,
     build_install_plan,
-    configure_env,
+    configure_config,
     load_manifest,
     main,
     migrate_config,
@@ -22,18 +22,18 @@ from argos.installer import (
     _ensure_uv_for_user,
     _resolve_os_packages,
     _ensure_agent_limit_cron,
-    _ensure_core_env_defaults,
+    _ensure_config_file,
+    _ensure_core_config_defaults,
     _ensure_reminder_dashboard_token,
     _ensure_tts_filter_shared_token,
     _install_chromium_policy,
-    _merge_yaml_into_compat_env,
     _prepare_unified_slots_for_configure,
     _reload_systemd,
     _remove_inaccessible_venv,
     _configure_kiosk_display,
     _restore_unified_slots_after_configure,
-    _sync_config_yaml,
 )
+from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 
 
 def test_project_python_range_stays_compatible_with_lgpio_wheels():
@@ -80,7 +80,7 @@ def test_build_install_plan_includes_external_and_planned_steps(tmp_path):
     assert plan.service_user == "argos"
 
 
-def test_sync_config_yaml_migrates_all_env_values(tmp_path):
+def test_ensure_config_file_migrates_all_env_values(tmp_path):
     """インストーラーは既存.envを階層YAMLへ欠落なく同期する。"""
     env_path = tmp_path / ".env"
     env_path.write_text(
@@ -90,9 +90,7 @@ def test_sync_config_yaml_migrates_all_env_values(tmp_path):
         encoding="utf-8",
     )
 
-    _sync_config_yaml(tmp_path)
-
-    from argos.yaml_config import load_yaml_environment
+    _ensure_config_file(tmp_path)
 
     values = load_yaml_environment(tmp_path / "config.yaml")
     assert values["ARGOS_DASHBOARD_PORT"] == "8765"
@@ -108,13 +106,13 @@ def test_sync_config_yaml_migrates_all_env_values(tmp_path):
     assert values["CUSTOM_SECRET"] == "secret"
 
 
-def test_sync_config_yaml_preserves_existing_file_without_overwrite(tmp_path):
+def test_ensure_config_file_preserves_existing_file(tmp_path):
     """通常更新では利用者が編集したconfig.yamlを上書きしない。"""
     (tmp_path / ".env").write_text("ARGOS_DASHBOARD_PORT=8765\n", encoding="utf-8")
     config_path = tmp_path / "config.yaml"
     config_path.write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
 
-    _sync_config_yaml(tmp_path)
+    _ensure_config_file(tmp_path)
 
     assert config_path.read_text(encoding="utf-8") == "dashboard:\n  port: 9999\n"
 
@@ -156,17 +154,15 @@ def test_main_migrate_config_skips_manifest_and_plan(capsys, tmp_path):
     assert "設定を移行しました" in capsys.readouterr().out
 
 
-def test_merge_yaml_into_compat_env_uses_yaml_as_configure_base(tmp_path):
-    """対話設定時は古い.envより既存YAMLを優先する。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text("ARGOS_DASHBOARD_PORT=8765\nLEGACY_VALUE=keep\n", encoding="utf-8")
-    (tmp_path / "config.yaml").write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
+def test_ensure_config_file_copies_yaml_example(tmp_path):
+    """設定がない新規環境ではYAMLサンプルを共通設定として使う。"""
+    example = tmp_path / "config.yaml.example"
+    example.write_text("dashboard:\n  port: 9999\n", encoding="utf-8")
 
-    _merge_yaml_into_compat_env(tmp_path)
+    config_path = _ensure_config_file(tmp_path)
 
-    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines())
-    assert values["ARGOS_DASHBOARD_PORT"] == "9999"
-    assert values["LEGACY_VALUE"] == "keep"
+    assert config_path.read_text(encoding="utf-8") == example.read_text(encoding="utf-8")
+    assert config_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_configure_helpers_preserve_remote_slot_position():
@@ -365,7 +361,7 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
     project = tmp_path / "argos"
     project.mkdir()
     (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
-    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    (project / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
     systemd_dir = project / "systemd"
     systemd_dir.mkdir()
     (systemd_dir / "argos.service").write_text("User=@ARGOS_USER@\nExecStart=@PROJECT_DIR@/.venv/bin/argos\n", encoding="utf-8")
@@ -386,10 +382,11 @@ def test_apply_plan_syncs_and_writes_units_without_enabling(tmp_path):
 
     apply_plan(plan, enable=False, runner=fake_runner)
 
-    env_text = (project / ".env").read_text(encoding="utf-8")
-    assert "DRY_RUN=true" in env_text
-    assert "ARGOS_DASHBOARD_TOKEN=" in env_text
-    assert "ARGOS_DASHBOARD_TOKEN=\n" not in env_text
+    config_values = load_yaml_environment(project / "config.yaml")
+    assert config_values["DRY_RUN"] == "true"
+    assert config_values["ARGOS_DASHBOARD_TOKEN"]
+    assert config_values["ARGOS_AGENT_RUNNER_TOKEN"]
+    assert not (project / ".env").exists()
     assert (tmp_path / "system-units" / "argos.service").exists()
     assert any(
         command[0]
@@ -436,7 +433,7 @@ def test_apply_plan_syncs_subprojects_as_service_user(tmp_path):
     project = tmp_path / "argos"
     project.mkdir()
     (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
-    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    (project / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
     service_dir = project / "services" / "agent-limit"
     service_dir.mkdir(parents=True)
     (service_dir / "pyproject.toml").write_text("[project]\nname='agent-limit'\nversion='0.1.0'\n", encoding="utf-8")
@@ -516,7 +513,7 @@ def test_apply_plan_bootstrap_runs_host_setup(tmp_path, monkeypatch):
     project = tmp_path / "argos"
     project.mkdir()
     (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
-    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    (project / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
     monkeypatch.setattr("argos.installer._group_exists", lambda group: group in {"audio", "video"})
     services = []
     plan = build_install_plan(
@@ -594,7 +591,7 @@ def test_apply_plan_update_restarts_enabled_services(tmp_path, monkeypatch):
     project = tmp_path / "argos"
     project.mkdir()
     (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
-    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    (project / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
     systemd_dir = project / "systemd"
     systemd_dir.mkdir()
     (systemd_dir / "argos.service").write_text("User=@ARGOS_USER@\n", encoding="utf-8")
@@ -637,7 +634,7 @@ def test_apply_plan_repairs_home_dirs_for_user_services(tmp_path, monkeypatch):
     project = tmp_path / "argos"
     project.mkdir()
     (project / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
-    (project / ".env.example").write_text("DRY_RUN=true\n", encoding="utf-8")
+    (project / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
     systemd_dir = project / "systemd"
     systemd_dir.mkdir()
     (systemd_dir / "argos-dashboard-kiosk.service").write_text("ExecStart=@PROJECT_DIR@/run\n", encoding="utf-8")
@@ -811,35 +808,34 @@ def test_resolve_os_packages_selects_available_chromium_package():
     ]
 
 
-def test_configure_env_updates_urls_and_audio_devices(tmp_path):
-    """対話式設定でURLと音声デバイスを.envへ反映できる。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "\n".join(
-            [
-                "STT_GATEWAY_URL=",
-                "VOICEVOX_URL=http://localhost:50021",
-                "VOICEVOX_BEARER_TOKEN=",
-                "OSRM_URL=",
-                "ARGOS_REMOTE_LOCATION_URL=",
-                "ARGOS_WAKEWORD_ENABLED=false",
-                "ARGOS_AGENT_RUNNER_URL=",
-                "ARGOS_PTT_GPIO=17",
-                "AUDIO_INPUT_DEVICES=default",
-                "AUDIO_OUTPUT_DEVICE=default",
-                "ARGOS_DASHBOARD_TOKEN=",
-            ]
-        )
-        + "\n",
-        encoding="utf-8",
+def test_configure_config_updates_urls_tokens_ssl_and_audio_devices(tmp_path, monkeypatch):
+    """対話式設定で接続先、認証、HTTPS、音声デバイスをYAMLへ反映できる。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment(
+        {
+            "STT_GATEWAY_URL": "",
+            "VOICEVOX_URL": "http://localhost:50021",
+            "VOICEVOX_BEARER_TOKEN": "",
+            "OSRM_URL": "",
+            "ARGOS_REMOTE_LOCATION_URL": "",
+            "ARGOS_WAKEWORD_ENABLED": "false",
+            "ARGOS_AGENT_RUNNER_URL": "",
+            "ARGOS_PTT_GPIO": "17",
+            "AUDIO_INPUT_DEVICES": "default",
+            "AUDIO_OUTPUT_DEVICE": "default",
+            "ARGOS_DASHBOARD_TOKEN": "",
+        },
+        config_path,
     )
     answers = iter(
         [
             "http://stt.local:23000",
+            "stt-token",
             "",
             "voice-token",
             "http://router.local:5000",
             "http://gps.local:8080/gps",
+            "y",
             "y",
             "y",
             "",
@@ -864,34 +860,38 @@ def test_configure_env_updates_urls_and_audio_devices(tmp_path):
             return Result("default\nplughw:CARD=Mic,DEV=0\n  説明行\n")
         return Result("default\nplughw:CARD=Speaker,DEV=0\n")
 
-    configure_env(
-        env_path,
+    monkeypatch.setattr("argos.installer.getpass.getpass", lambda _prompt: next(answers))
+
+    configure_config(
+        config_path,
         runner=fake_runner,
         input_func=lambda _prompt: next(answers),
         output_func=lambda _message: None,
     )
 
-    text = env_path.read_text(encoding="utf-8")
-    assert "STT_GATEWAY_URL=http://stt.local:23000" in text
-    assert "VOICEVOX_URL=http://localhost:50021" in text
-    assert "VOICEVOX_BEARER_TOKEN=voice-token" in text
-    assert "OSRM_URL=http://router.local:5000" in text
-    assert "ARGOS_REMOTE_LOCATION_URL=http://gps.local:8080/gps" in text
-    assert "ARGOS_WAKEWORD_ENABLED=true" in text
-    assert "ARGOS_AGENT_RUNNER_URL=http://127.0.0.1:28765" in text
-    assert "ARGOS_PTT_GPIO=" in text
-    assert "AUDIO_INPUT_DEVICES=plughw:CARD=Mic,DEV=0" in text
-    assert "AUDIO_OUTPUT_DEVICE=hw:CARD=Speaker,DEV=0" in text
-    assert "ARGOS_DASHBOARD_TOKEN=" in text
-    assert "ARGOS_DASHBOARD_TOKEN=\n" not in text
+    values = load_yaml_environment(config_path)
+    assert values["STT_GATEWAY_URL"] == "http://stt.local:23000"
+    assert values["STT_GATEWAY_BEARER_TOKEN"] == "stt-token"
+    assert values["VOICEVOX_URL"] == "http://localhost:50021"
+    assert values["VOICEVOX_BEARER_TOKEN"] == "voice-token"
+    assert values["OSRM_URL"] == "http://router.local:5000"
+    assert values["ARGOS_REMOTE_LOCATION_URL"] == "http://gps.local:8080/gps"
+    assert values["ARGOS_WAKEWORD_ENABLED"] == "true"
+    assert values["ARGOS_AGENT_RUNNER_URL"] == "http://127.0.0.1:28765"
+    assert values["ARGOS_DASHBOARD_SSL"] == "true"
+    assert values["ARGOS_PTT_GPIO"] == ""
+    assert values["AUDIO_INPUT_DEVICES"] == "plughw:CARD=Mic,DEV=0"
+    assert values["AUDIO_OUTPUT_DEVICE"] == "hw:CARD=Speaker,DEV=0"
+    assert values["ARGOS_DASHBOARD_TOKEN"]
 
 
-def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
+def test_configure_config_sets_agent_slots_from_selected_providers(tmp_path, monkeypatch):
     """対話式設定で利用providerからスロットを生成できる。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "\n".join(
-            [
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment(
+        dict(
+            line.split("=", 1)
+            for line in [
                 "ARGOS_AGENT_PROVIDER=codex",
                 "ARGOS_AGENT_CWD=/home/argos",
                 "ARGOS_AGENT_SLOT_1=デフォルト,codex,/home/argos,2",
@@ -910,12 +910,13 @@ def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
                 "AUDIO_INPUT_DEVICES=default",
                 "AUDIO_OUTPUT_DEVICE=default",
             ]
-        )
-        + "\n",
-        encoding="utf-8",
+        ),
+        config_path,
     )
     answers = iter(
         [
+            "",
+            "",
             "",
             "",
             "",
@@ -944,52 +945,66 @@ def test_configure_env_sets_agent_slots_from_selected_providers(tmp_path):
         returncode = 1
         stdout = ""
 
-    configure_env(
-        env_path,
+    monkeypatch.setattr("argos.installer.getpass.getpass", lambda _prompt: next(answers))
+
+    configure_config(
+        config_path,
         runner=lambda _command, **_kwargs: Result(),
         input_func=lambda _prompt: next(answers),
         output_func=lambda _message: None,
     )
 
-    text = env_path.read_text(encoding="utf-8")
-    assert "ARGOS_AGENT_PROVIDER=codex" in text
-    assert "ARGOS_AGENT_SLOT_1=作業,codex,/opt/argos,2,gpt-test" in text
-    assert "ARGOS_AGENT_SLOT_2=Claude,claude,/home/argos,,sonnet" in text
-    assert "ARGOS_AGENT_SLOT_3=\n" in text
-    assert "ARGOS_AGENT_SLOT_4=\n" in text
+    values = load_yaml_environment(config_path)
+    slots = json.loads(values["ARGOS_AGENT_SLOTS_JSON"])
+    assert values["ARGOS_AGENT_PROVIDER"] == "codex"
+    assert slots[0] == {
+        "type": "local",
+        "name": "作業",
+        "provider": "codex",
+        "cwd": "/opt/argos",
+        "voicevox_speaker": 2,
+        "model": "gpt-test",
+    }
+    assert slots[1] == {
+        "type": "local",
+        "name": "Claude",
+        "provider": "claude",
+        "cwd": "/home/argos",
+        "model": "sonnet",
+    }
 
 
-def test_ensure_core_env_defaults_generates_dashboard_token(tmp_path):
-    """既存.envのダッシュボードトークンが空なら自動生成する。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text("ARGOS_DASHBOARD_TOKEN=\nARGOS_DASHBOARD_ENABLED=true\n", encoding="utf-8")
+def test_ensure_core_config_defaults_generates_dashboard_token(tmp_path):
+    """共通設定のダッシュボードトークンが空なら自動生成する。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_DASHBOARD_TOKEN": "", "ARGOS_DASHBOARD_ENABLED": "true"}, config_path)
 
-    _ensure_core_env_defaults(env_path)
+    _ensure_core_config_defaults(config_path)
 
-    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+    values = load_yaml_environment(config_path)
     assert values["ARGOS_DASHBOARD_TOKEN"]
 
 
-def test_ensure_core_env_defaults_generates_agent_runner_token(tmp_path):
-    """既存.envのAgent Runnerトークンが空なら自動生成する。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text("ARGOS_AGENT_RUNNER_TOKEN=\nARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
+def test_ensure_core_config_defaults_generates_agent_runner_token(tmp_path):
+    """共通設定のAgent Runnerトークンが空なら自動生成する。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_AGENT_RUNNER_TOKEN": "", "ARGOS_DASHBOARD_TOKEN": "token"}, config_path)
 
-    _ensure_core_env_defaults(env_path)
+    _ensure_core_config_defaults(config_path)
 
-    values = dict(line.split("=", 1) for line in env_path.read_text(encoding="utf-8").splitlines() if "=" in line)
+    values = load_yaml_environment(config_path)
     assert values["ARGOS_AGENT_RUNNER_TOKEN"]
 
 
-def test_ensure_core_env_defaults_restricts_env_permissions(tmp_path):
-    """トークンを含む.envは所有者のみ読める権限へ変更する。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text("ARGOS_DASHBOARD_TOKEN=token\n", encoding="utf-8")
-    env_path.chmod(0o644)
+def test_ensure_core_config_defaults_restricts_permissions(tmp_path):
+    """トークンを含む共通設定は所有者だけが読める権限へ変更する。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_DASHBOARD_TOKEN": "token"}, config_path)
+    config_path.chmod(0o644)
 
-    _ensure_core_env_defaults(env_path)
+    _ensure_core_config_defaults(config_path)
 
-    assert env_path.stat().st_mode & 0o777 == 0o600
+    assert config_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_ensure_tts_filter_shared_token_generates_and_syncs(tmp_path):
@@ -997,14 +1012,17 @@ def test_ensure_tts_filter_shared_token_generates_and_syncs(tmp_path):
     project = tmp_path / "argos"
     service_dir = project / "services" / "tts-filter"
     service_dir.mkdir(parents=True)
-    app_env = project / ".env"
+    config_path = project / "config.yaml"
     filter_env = service_dir / ".env"
-    app_env.write_text("TTS_FILTER_URL=http://127.0.0.1:9191\nTTS_FILTER_BEARER_TOKEN=\n", encoding="utf-8")
+    write_yaml_from_environment(
+        {"TTS_FILTER_URL": "http://127.0.0.1:9191", "TTS_FILTER_BEARER_TOKEN": ""},
+        config_path,
+    )
     filter_env.write_text("TTS_FILTER_BEARER_TOKEN=change-me\nTTS_FILTER_CONFIG=src/tts_filter/dictionary.yml\n", encoding="utf-8")
 
     assert _ensure_tts_filter_shared_token(project) is True
 
-    app_values = dict(line.split("=", 1) for line in app_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    app_values = load_yaml_environment(config_path)
     filter_values = dict(line.split("=", 1) for line in filter_env.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert app_values["TTS_FILTER_BEARER_TOKEN"]
     assert app_values["TTS_FILTER_BEARER_TOKEN"] != "change-me"
@@ -1016,9 +1034,9 @@ def test_ensure_tts_filter_shared_token_prefers_app_token(tmp_path):
     project = tmp_path / "argos"
     service_dir = project / "services" / "tts-filter"
     service_dir.mkdir(parents=True)
-    app_env = project / ".env"
+    config_path = project / "config.yaml"
     filter_env = service_dir / ".env"
-    app_env.write_text("TTS_FILTER_BEARER_TOKEN=app-token\n", encoding="utf-8")
+    write_yaml_from_environment({"TTS_FILTER_BEARER_TOKEN": "app-token"}, config_path)
     filter_env.write_text("TTS_FILTER_BEARER_TOKEN=service-token\n", encoding="utf-8")
 
     assert _ensure_tts_filter_shared_token(project) is True
@@ -1032,9 +1050,9 @@ def test_ensure_reminder_dashboard_token_syncs_from_app_env(tmp_path):
     project = tmp_path / "argos"
     service_dir = project / "services" / "argos-reminder"
     service_dir.mkdir(parents=True)
-    app_env = project / ".env"
+    config_path = project / "config.yaml"
     reminder_env = service_dir / ".env"
-    app_env.write_text("ARGOS_DASHBOARD_TOKEN=dashboard-token\n", encoding="utf-8")
+    write_yaml_from_environment({"ARGOS_DASHBOARD_TOKEN": "dashboard-token"}, config_path)
     reminder_env.write_text(
         "ARGOS_DASHBOARD_URL=http://127.0.0.1:8765\nARGOS_DASHBOARD_TOKEN=\n",
         encoding="utf-8",
@@ -1051,14 +1069,14 @@ def test_ensure_reminder_dashboard_token_generates_shared_token(tmp_path):
     project = tmp_path / "argos"
     service_dir = project / "services" / "argos-reminder"
     service_dir.mkdir(parents=True)
-    app_env = project / ".env"
+    config_path = project / "config.yaml"
     reminder_env = service_dir / ".env"
-    app_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
+    write_yaml_from_environment({"ARGOS_DASHBOARD_TOKEN": ""}, config_path)
     reminder_env.write_text("ARGOS_DASHBOARD_TOKEN=\n", encoding="utf-8")
 
     assert _ensure_reminder_dashboard_token(project) is True
 
-    app_values = dict(line.split("=", 1) for line in app_env.read_text(encoding="utf-8").splitlines() if "=" in line)
+    app_values = load_yaml_environment(config_path)
     reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert app_values["ARGOS_DASHBOARD_TOKEN"]
     assert app_values["ARGOS_DASHBOARD_TOKEN"] == reminder_values["ARGOS_DASHBOARD_TOKEN"]

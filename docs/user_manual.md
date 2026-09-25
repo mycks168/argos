@@ -39,7 +39,25 @@ wakeword:
   enabled: true
 ```
 
-環境変数でも一時的に上書きできます。旧形式の `.env` も移行互換として読み込みます。
+環境変数でも一時的に上書きできます。ルートの旧 `.env` は通常起動では読み込みません。旧設定だけが残る環境では、先に `uv run argos-install --migrate-config` で `config.yaml` へ移行してください。
+
+### ダッシュボードをHTTPSにする
+
+```yaml
+dashboard:
+  ssl: true
+  ssl_cert_path: ~/.config/argos/tls/dashboard.crt
+  ssl_key_path: ~/.config/argos/tls/dashboard.key
+```
+
+初回起動時に自己署名証明書を自動生成し、以後は同じ証明書を使います。リモートのブラウザでは初回に証明書警告を承認してください。
+
+STT Gatewayの認証トークンは次の項目です。`argos-install --configure --apply`でも非表示入力できます。
+
+```yaml
+stt:
+  bearer_token: トークン
+```
 
 ### 設定を間違えたとき
 

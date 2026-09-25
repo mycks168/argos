@@ -6,14 +6,15 @@ import pytest
 
 from argos.tools import ttyd_overlay
 from argos.tools.ttyd_overlay import (
+    TtydTlsConfig,
     build_overlay_payload,
     build_ttyd_command,
     ensure_tmux_session,
     main,
-    parse_env_file,
     post_overlay_event,
     start_ttyd_if_needed,
 )
+from argos.yaml_config import write_yaml_from_environment
 
 
 def test_build_ttyd_command():
@@ -31,6 +32,32 @@ def test_build_ttyd_command():
     ]
 
 
+def test_build_ttyd_command_enables_dashboard_certificate(tmp_path: Path) -> None:
+    """ダッシュボードHTTPS時はttydも同じ証明書で起動する。"""
+    certificate_path = tmp_path / "dashboard.crt"
+    key_path = tmp_path / "dashboard.key"
+
+    command = build_ttyd_command(
+        "127.0.0.1",
+        7681,
+        "argos-terminal",
+        TtydTlsConfig(True, certificate_path, key_path),
+    )
+
+    assert command[:9] == [
+        "ttyd",
+        "-i",
+        "127.0.0.1",
+        "-p",
+        "7681",
+        "-S",
+        "-C",
+        str(certificate_path),
+        "-K",
+    ]
+    assert command[9] == str(key_path)
+
+
 def test_build_overlay_payload():
     """ダッシュボードoverlayイベントのpayloadを作れる。"""
     assert build_overlay_payload("center", "tmux", "http://127.0.0.1:7681/", True) == {
@@ -43,36 +70,30 @@ def test_build_overlay_payload():
     }
 
 
-def test_parse_env_file(tmp_path: Path):
-    """ARGOS_DASHBOARD_TOKENなどを.envから読める。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text(
-        "ARGOS_DASHBOARD_TOKEN='secret-token'\n"
-        'ARGOS_DASHBOARD_URL="http://localhost:8765"\n'
-        "# comment\n",
-        encoding="utf-8",
-    )
-
-    assert parse_env_file(env_path) == {
-        "ARGOS_DASHBOARD_TOKEN": "secret-token",
-        "ARGOS_DASHBOARD_URL": "http://localhost:8765",
-    }
-
-
 def test_ensure_tmux_session_creates_missing_session(monkeypatch, tmp_path: Path):
     """tmuxセッションがない場合は作業ディレクトリ付きで作成する。"""
     calls = []
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
-        return type("Result", (), {"returncode": 1 if "has-session" in command else 0})()
+        return type(
+            "Result", (), {"returncode": 1 if "has-session" in command else 0}
+        )()
 
     monkeypatch.setattr(ttyd_overlay.subprocess, "run", fake_run)
 
     ensure_tmux_session("argos-terminal", tmp_path)
 
     assert calls[0][0] == ["tmux", "has-session", "-t", "argos-terminal"]
-    assert calls[1][0] == ["tmux", "new-session", "-d", "-s", "argos-terminal", "-c", str(tmp_path)]
+    assert calls[1][0] == [
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        "argos-terminal",
+        "-c",
+        str(tmp_path),
+    ]
     assert calls[1][1]["check"] is True
 
 
@@ -102,11 +123,19 @@ def test_start_ttyd_if_needed_starts_process(monkeypatch):
     """ttydが未起動ならPopenで起動する。"""
     popen_calls = []
     monkeypatch.setattr(ttyd_overlay, "is_port_open", lambda _host, _port: False)
-    monkeypatch.setattr(ttyd_overlay.shutil, "which", lambda command: f"/usr/bin/{command}")
-    monkeypatch.setattr(ttyd_overlay.subprocess, "Popen", lambda *args, **kwargs: popen_calls.append((args, kwargs)))
+    monkeypatch.setattr(
+        ttyd_overlay.shutil, "which", lambda command: f"/usr/bin/{command}"
+    )
+    monkeypatch.setattr(
+        ttyd_overlay.subprocess,
+        "Popen",
+        lambda *args, **kwargs: popen_calls.append((args, kwargs)),
+    )
 
     assert start_ttyd_if_needed("127.0.0.1", 7681, "argos-terminal") is True
-    assert popen_calls[0][0][0] == build_ttyd_command("127.0.0.1", 7681, "argos-terminal")
+    assert popen_calls[0][0][0] == build_ttyd_command(
+        "127.0.0.1", 7681, "argos-terminal"
+    )
     assert popen_calls[0][1]["start_new_session"] is True
 
 
@@ -133,11 +162,12 @@ def test_post_overlay_event(monkeypatch):
         def read(self):
             return b'{"status":"overlay_updated"}'
 
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request, timeout, context):
         captured["url"] = request.full_url
         captured["auth"] = request.headers["Authorization"]
         captured["timeout"] = timeout
         captured["data"] = request.data
+        captured["context"] = context
         return FakeResponse()
 
     monkeypatch.setattr(ttyd_overlay, "urlopen", fake_urlopen)
@@ -152,6 +182,7 @@ def test_post_overlay_event(monkeypatch):
     assert captured["url"] == "http://127.0.0.1:8765/api/events"
     assert captured["auth"] == "Bearer secret"
     assert b'"overlay_type": "terminal"' in captured["data"]
+    assert captured["context"] is None
 
 
 def test_post_overlay_event_requires_token():
@@ -162,25 +193,53 @@ def test_post_overlay_event_requires_token():
 
 def test_post_overlay_event_reports_http_error(monkeypatch):
     """HTTPエラー本文を含めて例外にする。"""
-    error = HTTPError("http://127.0.0.1:8765/api/events", 401, "Unauthorized", {}, BytesIO(b"bad token"))
-    monkeypatch.setattr(ttyd_overlay, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    error = HTTPError(
+        "http://127.0.0.1:8765/api/events",
+        401,
+        "Unauthorized",
+        {},
+        BytesIO(b"bad token"),
+    )
+    monkeypatch.setattr(
+        ttyd_overlay, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error)
+    )
 
     with pytest.raises(RuntimeError, match="401 bad token"):
         post_overlay_event("http://127.0.0.1:8765", "secret", {})
 
 
-def test_main_can_send_overlay_without_starting_processes(monkeypatch, tmp_path: Path, capsys):
+def test_main_can_send_overlay_without_starting_processes(
+    monkeypatch, tmp_path: Path, capsys
+):
     """--no-startならtmux/ttyd起動を省いてoverlayだけ送る。"""
-    env_path = tmp_path / ".env"
-    env_path.write_text("ARGOS_DASHBOARD_TOKEN=secret\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+    certificate_path = tmp_path / "dashboard.crt"
+    write_yaml_from_environment(
+        {
+            "ARGOS_DASHBOARD_TOKEN": "secret",
+            "ARGOS_DASHBOARD_SSL": "true",
+            "ARGOS_DASHBOARD_SSL_CERT_PATH": str(certificate_path),
+        },
+        config_path,
+    )
     sent = []
     monkeypatch.delenv("ARGOS_DASHBOARD_TOKEN", raising=False)
-    monkeypatch.setattr(ttyd_overlay, "post_overlay_event", lambda url, token, payload: sent.append((url, token, payload)) or {"ok": True})
+    monkeypatch.setattr(
+        ttyd_overlay,
+        "post_overlay_event",
+        lambda url, token, payload, certificate: (
+            sent.append((url, token, payload, certificate)) or {"ok": True}
+        ),
+    )
 
-    result = main(["--env-file", str(env_path), "--no-start", "--target-slot", "right"])
+    result = main(
+        ["--config-file", str(config_path), "--no-start", "--target-slot", "right"]
+    )
 
     assert result == 0
-    assert sent[0][0] == "http://127.0.0.1:8765"
+    assert sent[0][0] == "https://127.0.0.1:8765"
     assert sent[0][1] == "secret"
     assert sent[0][2]["target_slot"] == "right"
+    assert sent[0][2]["url"] == "https://127.0.0.1:7681/"
+    assert sent[0][3] == certificate_path
     assert '"ok": true' in capsys.readouterr().out

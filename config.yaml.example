@@ -142,6 +142,9 @@ dashboard:
   enabled: true
   host: 127.0.0.1
   port: 8765
+  ssl: false
+  ssl_cert_path: ~/.config/argos/tls/dashboard.crt
+  ssl_key_path: ~/.config/argos/tls/dashboard.key
   token: ''
   view_key: ''
   screensaver_seconds: 1800

@@ -15,6 +15,7 @@ dashboard:
   host: 0.0.0.0
   port: 8765
   enabled: true
+  ssl: true
   camera_snapshot_path: /tmp/camera.jpg
 audio:
   state_path: ~/.local/state/argos/audio.json
@@ -57,6 +58,7 @@ agent:
     assert values["ARGOS_DASHBOARD_HOST"] == "0.0.0.0"
     assert values["ARGOS_DASHBOARD_PORT"] == "8765"
     assert values["ARGOS_DASHBOARD_ENABLED"] == "true"
+    assert values["ARGOS_DASHBOARD_SSL"] == "true"
     assert values["ARGOS_CAMERA_SNAPSHOT_PATH"] == "/tmp/camera.jpg"
     assert values["ARGOS_AUDIO_STATE_PATH"] == "~/.local/state/argos/audio.json"
     assert values["ARGOS_LISTEN_MODE"] == "vad"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import pwd
@@ -29,6 +30,7 @@ DEFAULT_OS_PACKAGES = (
     "fonts-ipafont-mincho",
     "git",
     "liblgpio-dev",
+    "openssl",
     "python3-dev",
     "swig",
     "tmux",
@@ -150,7 +152,7 @@ def build_install_plan(
     steps: list[InstallStep] = [
         InstallStep("check", str(project_dir), "ARGOS本体の作業ディレクトリを確認する"),
         InstallStep("sync", str(project_dir), "uv sync --extra faceでARGOS本体の仮想環境を作成する"),
-        InstallStep("config", str(project_dir / "config.yaml"), "既存.envを含む全設定をYAMLへ同期する"),
+        InstallStep("config", str(project_dir / "config.yaml"), "ARGOS本体とRunnerの共通設定を準備する"),
     ]
     if bootstrap:
         steps = [
@@ -196,7 +198,7 @@ def _service_steps(
             InstallStep(
                 "configure",
                 service.endpoint,
-                "外部サービスとしてURLだけを.envへ設定する",
+                "外部サービスとして接続先をconfig.yamlへ設定する",
                 service=service.name,
             )
         ]
@@ -278,11 +280,15 @@ def apply_plan(
         _bootstrap_host(plan, runner=runner)
         plan = _refresh_plan_uid(plan)
     _ensure_project(project_dir)
-    _copy_env_example(project_dir, runner=runner)
-    _ensure_core_env_defaults(project_dir / ".env")
+    _ensure_config_file(project_dir)
+    _ensure_core_config_defaults(project_dir / "config.yaml")
     if configure:
-        _merge_yaml_into_compat_env(project_dir)
-        configure_env(project_dir / ".env", runner=runner, input_func=input_func, output_func=output_func)
+        configure_config(
+            project_dir / "config.yaml",
+            runner=runner,
+            input_func=input_func,
+            output_func=output_func,
+        )
     if plan.bootstrap:
         # sudo uv run may have created a root-owned .venv before the installer starts.
         # Hand the project to the service user before syncing into that environment.
@@ -297,7 +303,6 @@ def apply_plan(
         _apply_service(service, plan, runner=runner)
     _ensure_tts_filter_shared_token(project_dir)
     _ensure_reminder_dashboard_token(project_dir)
-    _sync_config_yaml(project_dir, overwrite=configure)
     if plan.bootstrap:
         _ensure_project_owner(project_dir, plan.service_user, plan.service_group, runner=runner)
     if enable:
@@ -361,25 +366,51 @@ def _copy_env_example(
     _restrict_env_permissions(env_path)
 
 
-def configure_env(
-    env_path: Path,
+def _ensure_config_file(project_dir: Path) -> Path:
+    """共通設定を既存YAML、旧env、またはサンプルの順で準備する。"""
+    config_path = project_dir / "config.yaml"
+    if config_path.exists():
+        _restrict_config_permissions(config_path)
+        return config_path
+    env_path = project_dir / ".env"
+    if env_path.is_file():
+        write_yaml_from_environment(_read_env_values(env_path), config_path)
+        return config_path
+    example_path = project_dir / "config.yaml.example"
+    if not example_path.is_file():
+        raise FileNotFoundError(f"設定サンプルが見つかりません: {example_path}")
+    shutil.copyfile(example_path, config_path)
+    _restrict_config_permissions(config_path)
+    return config_path
+
+
+def configure_config(
+    config_path: Path,
     *,
     runner=subprocess.run,
     input_func: Callable[[str], str] = input,
     output_func: Callable[[str], None] = print,
 ) -> None:
-    """対話式に実機依存の.env設定を更新する。"""
-    values = _read_env_values(env_path)
+    """対話式に実機依存のconfig.yaml設定を更新する。"""
+    values = load_yaml_environment(config_path)
     _ensure_dashboard_token(values)
+    _ensure_agent_runner_token(values)
     output_func("ARGOS実機設定を行います。空入力なら現在値を維持します。")
 
     _ask_url(values, "STT_GATEWAY_URL", "STTゲートウェイURL", input_func=input_func)
+    _ask_text(
+        values,
+        "STT_GATEWAY_BEARER_TOKEN",
+        "STTゲートウェイ Bearerトークン",
+        input_func=getpass.getpass,
+    )
     _ask_url(values, "VOICEVOX_URL", "VOICEVOX URL", input_func=input_func)
     _ask_text(values, "VOICEVOX_BEARER_TOKEN", "VOICEVOX Bearerトークン", input_func=input_func)
     _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
+    _ask_bool(values, "ARGOS_DASHBOARD_SSL", "ダッシュボードHTTPSを有効にする", input_func=input_func)
     slot_template = _prepare_unified_slots_for_configure(values)
     _ask_agent_slots(values, input_func=input_func, output_func=output_func)
     _restore_unified_slots_after_configure(values, slot_template)
@@ -387,7 +418,7 @@ def configure_env(
     _ask_audio_device(values, "AUDIO_INPUT_DEVICES", "入力マイク", ["arecord", "-L"], runner=runner, input_func=input_func, output_func=output_func)
     _ask_audio_device(values, "AUDIO_OUTPUT_DEVICE", "出力デバイス", ["aplay", "-L"], runner=runner, input_func=input_func, output_func=output_func)
 
-    _write_env_values(env_path, values)
+    write_yaml_from_environment(values, config_path)
 
 
 def _prepare_unified_slots_for_configure(values: dict[str, str]) -> list[dict[str, Any]] | None:
@@ -445,14 +476,14 @@ def _restore_unified_slots_after_configure(
         values.pop(f"ARGOS_AGENT_SLOT_{index}", None)
 
 
-def _ensure_core_env_defaults(env_path: Path) -> None:
-    """既存.envに不足しているARGOS本体の必須既定値を補完する。"""
-    values = _read_env_values(env_path)
+def _ensure_core_config_defaults(config_path: Path) -> None:
+    """共通設定に不足しているAPI認証トークンを補完する。"""
+    values = load_yaml_environment(config_path)
     changed = _ensure_dashboard_token(values)
     changed = _ensure_agent_runner_token(values) or changed
     if changed:
-        _write_env_values(env_path, values)
-    _restrict_env_permissions(env_path)
+        write_yaml_from_environment(values, config_path)
+    _restrict_config_permissions(config_path)
 
 
 def _ensure_dashboard_token(values: dict[str, str]) -> bool:
@@ -467,7 +498,7 @@ def _ensure_agent_runner_token(values: dict[str, str]) -> bool:
     """Agent Runner API用Bearerトークンが空なら生成する。
 
     トークンが空のままだとRunner APIは認証なしで全リクエストを受け付ける。
-    ARGOS本体とRunnerは同じ.envを読むため、生成するだけで両者に共有される。
+    ARGOS本体とRunnerは同じconfig.yamlを読むため、生成するだけで両者に共有される。
     """
     if values.get("ARGOS_AGENT_RUNNER_TOKEN", "").strip():
         return False
@@ -484,14 +515,23 @@ def _restrict_env_permissions(env_path: Path) -> None:
         pass
 
 
+def _restrict_config_permissions(config_path: Path) -> None:
+    """Bearerトークンを含む共通設定を所有者だけが読めるようにする。"""
+    try:
+        config_path.chmod(0o600)
+    except OSError:
+        # bootstrap途中では所有者が異なる場合があるため、後続のchown処理へ委ねる
+        pass
+
+
 def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
     """ARGOS本体とtts-filter APIのBearerトークンを同じ値に揃える。"""
-    app_env = project_dir / ".env"
+    config_path = project_dir / "config.yaml"
     filter_env = project_dir / "services" / "tts-filter" / ".env"
-    if not app_env.exists() or not filter_env.exists():
+    if not config_path.exists() or not filter_env.exists():
         return False
 
-    app_values = _read_env_values(app_env)
+    app_values = load_yaml_environment(config_path)
     filter_values = _read_env_values(filter_env)
     app_token = app_values.get("TTS_FILTER_BEARER_TOKEN", "").strip()
     filter_token = filter_values.get("TTS_FILTER_BEARER_TOKEN", "").strip()
@@ -500,25 +540,25 @@ def _ensure_tts_filter_shared_token(project_dir: Path) -> bool:
     changed = False
     if app_token != token:
         app_values["TTS_FILTER_BEARER_TOKEN"] = token
-        _write_env_values(app_env, app_values)
+        write_yaml_from_environment(app_values, config_path)
         changed = True
     if filter_token != token:
         filter_values["TTS_FILTER_BEARER_TOKEN"] = token
         _write_env_values(filter_env, filter_values)
         changed = True
-    _restrict_env_permissions(app_env)
+    _restrict_config_permissions(config_path)
     _restrict_env_permissions(filter_env)
     return changed
 
 
 def _ensure_reminder_dashboard_token(project_dir: Path) -> bool:
     """ARGOS本体とargos-reminderのダッシュボードBearerトークンを揃える。"""
-    app_env = project_dir / ".env"
+    config_path = project_dir / "config.yaml"
     reminder_env = project_dir / "services" / "argos-reminder" / ".env"
-    if not app_env.exists() or not reminder_env.exists():
+    if not config_path.exists() or not reminder_env.exists():
         return False
 
-    app_values = _read_env_values(app_env)
+    app_values = load_yaml_environment(config_path)
     reminder_values = _read_env_values(reminder_env)
     app_token = app_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
     reminder_token = reminder_values.get("ARGOS_DASHBOARD_TOKEN", "").strip()
@@ -527,13 +567,13 @@ def _ensure_reminder_dashboard_token(project_dir: Path) -> bool:
     changed = False
     if app_token != token:
         app_values["ARGOS_DASHBOARD_TOKEN"] = token
-        _write_env_values(app_env, app_values)
+        write_yaml_from_environment(app_values, config_path)
         changed = True
     if reminder_token != token:
         reminder_values["ARGOS_DASHBOARD_TOKEN"] = token
         _write_env_values(reminder_env, reminder_values)
         changed = True
-    _restrict_env_permissions(app_env)
+    _restrict_config_permissions(config_path)
     _restrict_env_permissions(reminder_env)
     return changed
 
@@ -584,26 +624,6 @@ def _write_env_values(path: Path, values: dict[str, str]) -> None:
     for key in sorted(set(values) - written):
         output.append(f"{key}={values[key]}")
     path.write_text("\n".join(output) + "\n", encoding="utf-8")
-
-
-def _merge_yaml_into_compat_env(project_dir: Path) -> None:
-    """対話設定前にYAMLを互換.envへ反映する。"""
-    config_path = project_dir / "config.yaml"
-    env_path = project_dir / ".env"
-    if not config_path.exists():
-        return
-    values = _read_env_values(env_path) if env_path.exists() else {}
-    values.update(load_yaml_environment(config_path))
-    _write_env_values(env_path, values)
-
-
-def _sync_config_yaml(project_dir: Path, *, overwrite: bool = False) -> None:
-    """互換.envの全設定を階層化したconfig.yamlへ初回移行する。"""
-    env_path = project_dir / ".env"
-    config_path = project_dir / "config.yaml"
-    if not env_path.exists() or (config_path.exists() and not overwrite):
-        return
-    write_yaml_from_environment(_read_env_values(env_path), config_path)
 
 
 def migrate_config(project_dir: Path) -> Path:
@@ -722,7 +742,7 @@ def _parse_agent_provider_list(raw: str) -> list[str]:
 
 
 def _current_agent_providers(values: dict[str, str]) -> list[str]:
-    """現在の.envから利用中providerの一覧を返す。"""
+    """現在の共通設定から利用中providerの一覧を返す。"""
     slots = _read_agent_slot_values(values)
     if slots:
         return _unique([slot["provider"] for slot in slots if slot.get("provider")])

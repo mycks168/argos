@@ -13,7 +13,7 @@ uv run ./update_limits.py
 
 生成先:
 
-- `codex.json`: Codexの5時間枠、週次枠、credits
+- `codex.json`: Codexの5時間枠、週次枠、表示される場合はcredits
 - `hermes.json`: Codexと同じ値をHermes枠として表示
 - `antigravity.json`: `agy` のGeminiモデルグループ
 - `claude.json`: `claude` の現在セッション枠と週次枠
@@ -44,6 +44,7 @@ uv run ./codex_status.py
 
 > [!NOTE]
 > 最新のCodexなど5時間制限（5h limit）が存在しないモデルの場合、`five_hour` はダミーデータとして `{"usage_pct": 0, "reset": "N/A"}` が返されます。
+> Credits欄が表示されない契約・モデルでは、`credits`を省略して週次枠の取得を完了します。ダッシュボードのクレジット表示は空になります。
 
 ### agyの使用状況取得
 

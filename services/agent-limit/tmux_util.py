@@ -2,24 +2,25 @@
 
 import subprocess
 import time
+from collections.abc import Callable
 
 
-def tmux(*args):
+def tmux(*args: str) -> subprocess.CompletedProcess[str]:
     """tmuxコマンドを実行し、結果を返す。"""
     return subprocess.run(["tmux", *args], capture_output=True, text=True, check=True)
 
 
-def capture(session):
+def capture(session: str) -> str:
     """セッションのペイン内容をプレーンテキストで取得する。"""
     return tmux("capture-pane", "-t", session, "-p").stdout
 
 
-def send_keys(session, *keys):
+def send_keys(session: str, *keys: str) -> None:
     """セッションにキー入力を送る。"""
     tmux("send-keys", "-t", session, *keys)
 
 
-def session_exists(session):
+def session_exists(session: str) -> bool:
     """セッションが存在するかを確認する。"""
     result = subprocess.run(
         ["tmux", "has-session", "-t", session], capture_output=True
@@ -27,7 +28,12 @@ def session_exists(session):
     return result.returncode == 0
 
 
-def wait_for(session, predicate, timeout=30, interval=0.5):
+def wait_for(
+    session: str,
+    predicate: Callable[[str], bool],
+    timeout: float = 30,
+    interval: float = 0.5,
+) -> str:
     """ペイン内容がpredicateを満たすまで待ち、満たした時点の内容を返す。"""
     deadline = time.monotonic() + timeout
     while True:
@@ -41,7 +47,7 @@ def wait_for(session, predicate, timeout=30, interval=0.5):
         time.sleep(interval)
 
 
-def cleanup(session):
+def cleanup(session: str) -> None:
     """ESC -> /exit で正常終了させ、残っていればkillする。"""
     if not session_exists(session):
         return

@@ -675,6 +675,9 @@ def test_load_dashboard_settings(monkeypatch):
     monkeypatch.setenv("ARGOS_DASHBOARD_PORT", "9876")
     monkeypatch.setenv("ARGOS_DASHBOARD_TOKEN", "secret")
     monkeypatch.setenv("ARGOS_DASHBOARD_VIEW_KEY", "viewkey")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL", "true")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL_CERT_PATH", "/tmp/dashboard.crt")
+    monkeypatch.setenv("ARGOS_DASHBOARD_SSL_KEY_PATH", "/tmp/dashboard.key")
     monkeypatch.setenv("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "12.5")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "small")
     monkeypatch.setenv("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "sp")
@@ -689,6 +692,9 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.dashboard_port == 9876
     assert settings.dashboard_token == "secret"
     assert settings.dashboard_view_key == "viewkey"
+    assert settings.dashboard_ssl is True
+    assert settings.dashboard_ssl_cert_path == "/tmp/dashboard.crt"
+    assert settings.dashboard_ssl_key_path == "/tmp/dashboard.key"
     assert settings.dashboard_screensaver_seconds == 12.5
     assert settings.dashboard_default_font_size == "small"
     assert settings.dashboard_default_layout == "sp"

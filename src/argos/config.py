@@ -8,12 +8,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from dotenv import load_dotenv
-
 from argos.yaml_config import apply_yaml_environment
 
 _PROCESS_ENVIRONMENT = set(os.environ)
-load_dotenv()
 apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
 
 
@@ -181,6 +178,9 @@ class Settings:
     claude_model: str = ""
     # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
     dashboard_view_key: str = ""
+    dashboard_ssl: bool = False
+    dashboard_ssl_cert_path: str = "~/.config/argos/tls/dashboard.crt"
+    dashboard_ssl_key_path: str = "~/.config/argos/tls/dashboard.key"
     antigravity_model: str = ""
     antigravity_skip_permissions: bool = True
     antigravity_sandbox: bool = False
@@ -525,7 +525,7 @@ def _load_audio_input_devices() -> tuple[str, ...]:
 
 
 def load_settings() -> Settings:
-    """環境変数と .env から設定を構築する。"""
+    """環境変数とconfig.yamlから設定を構築する。"""
     extra_args = tuple(arg for arg in os.environ.get("ARGOS_CODEX_EXTRA_ARGS", "").split() if arg)
     antigravity_extra_args = tuple(arg for arg in os.environ.get("ARGOS_ANTIGRAVITY_EXTRA_ARGS", "").split() if arg)
     hermes_extra_args = tuple(arg for arg in os.environ.get("ARGOS_HERMES_EXTRA_ARGS", "").split() if arg)
@@ -622,6 +622,15 @@ def load_settings() -> Settings:
         dashboard_port=int(os.environ.get("ARGOS_DASHBOARD_PORT", "8765")),
         dashboard_token=os.environ.get("ARGOS_DASHBOARD_TOKEN", ""),
         dashboard_view_key=os.environ.get("ARGOS_DASHBOARD_VIEW_KEY", ""),
+        dashboard_ssl=_bool_env("ARGOS_DASHBOARD_SSL", False),
+        dashboard_ssl_cert_path=os.environ.get(
+            "ARGOS_DASHBOARD_SSL_CERT_PATH",
+            "~/.config/argos/tls/dashboard.crt",
+        ),
+        dashboard_ssl_key_path=os.environ.get(
+            "ARGOS_DASHBOARD_SSL_KEY_PATH",
+            "~/.config/argos/tls/dashboard.key",
+        ),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),

@@ -77,7 +77,7 @@ cd /opt/argos
 sudo env "PATH=$PATH" uv run argos-install --bootstrap --configure --apply
 ```
 
-`--configure` は STT ゲートウェイ、VOICEVOX、マイク、スピーカー、会話スロットなどを対話で `config.yaml` へ書き込みます。
+`--configure` は STT GatewayとBearerトークン、ダッシュボードHTTPS、VOICEVOX、マイク、スピーカー、会話スロットなどを対話で `config.yaml` へ書き込みます。ARGOS本体とAgent Runnerはこのファイルを共通利用します。
 
 ### 既存環境へ入れる
 
@@ -100,7 +100,7 @@ systemctl status argos.service
 journalctl -u argos.service -f
 ```
 
-ブラウザで `http://<ホスト>:8765/` を開くとダッシュボードが表示されます。
+ブラウザで `http://<ホスト>:8765/` を開くとダッシュボードが表示されます。`dashboard.ssl: true` の場合は `https://` を使い、初回に自己署名証明書の警告を承認します。
 
 ## 更新する
 
