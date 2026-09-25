@@ -1,9 +1,12 @@
 import json
+import subprocess
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
+from argos import installer
 from argos.installer import (
     DEFAULT_OS_PACKAGES,
     KIOSK_OS_PACKAGES,
@@ -837,6 +840,8 @@ def test_configure_config_updates_urls_tokens_ssl_and_audio_devices(tmp_path, mo
             "http://gps.local:8080/gps",
             "y",
             "y",
+            "1",
+            "y",
             "y",
             "",
             "-",
@@ -877,6 +882,8 @@ def test_configure_config_updates_urls_tokens_ssl_and_audio_devices(tmp_path, mo
     assert values["OSRM_URL"] == "http://router.local:5000"
     assert values["ARGOS_REMOTE_LOCATION_URL"] == "http://gps.local:8080/gps"
     assert values["ARGOS_WAKEWORD_ENABLED"] == "true"
+    assert values["ARGOS_WINDOW_LAYOUT_ANDROID_APP"] == "maps"
+    assert values["ARGOS_WINDOW_LAYOUT_STYLE"] == "overlay"
     assert values["ARGOS_AGENT_RUNNER_URL"] == "http://127.0.0.1:28765"
     assert values["ARGOS_DASHBOARD_SSL"] == "true"
     assert values["ARGOS_PTT_GPIO"] == ""
@@ -915,6 +922,7 @@ def test_configure_config_sets_agent_slots_from_selected_providers(tmp_path, mon
     )
     answers = iter(
         [
+            "",
             "",
             "",
             "",
@@ -1080,3 +1088,199 @@ def test_ensure_reminder_dashboard_token_generates_shared_token(tmp_path):
     reminder_values = dict(line.split("=", 1) for line in reminder_env.read_text(encoding="utf-8").splitlines() if "=" in line)
     assert app_values["ARGOS_DASHBOARD_TOKEN"]
     assert app_values["ARGOS_DASHBOARD_TOKEN"] == reminder_values["ARGOS_DASHBOARD_TOKEN"]
+
+
+def _window_layout_plan(tmp_path):
+    """画面配置サービスを含む計画を作る。"""
+    services = [service for service in load_manifest() if service.name in ("argos-dashboard-kiosk", "argos-window-layout")]
+    return build_install_plan(
+        services,
+        project_dir=tmp_path,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos",
+        service_group="argos",
+        service_home=tmp_path / "home",
+    )
+
+
+def test_window_layout_service_is_opt_in():
+    """画面配置サービスは任意扱いで、既定では有効化されない。"""
+    service = next(item for item in load_manifest() if item.name == "argos-window-layout")
+    assert (service.kind, service.bundle, service.enabled_by_default) == ("user", "optional", False)
+
+
+def test_window_layout_unit_is_generic_and_follows_kiosk():
+    """unitに端末固有の名前を含めず、キオスクの再起動へ追従する。"""
+    text = (Path(__file__).resolve().parents[1] / "systemd/argos-window-layout.service").read_text(encoding="utf-8")
+    assert "PartOf=argos-dashboard-kiosk.service" in text
+    assert "waydroid-" not in text
+    assert "window_layout boot" in text
+
+
+def test_apply_plan_installs_window_layout_unit_without_enabling(tmp_path):
+    """質問なしのインストールでは、unitを置くだけで有効化も無効化もしない。"""
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='argos'\nversion='0.1.0'\n", encoding="utf-8")
+    (tmp_path / "config.yaml.example").write_text("runtime:\n  dry_run: true\n", encoding="utf-8")
+    (tmp_path / "systemd").mkdir()
+    (tmp_path / "systemd/argos-window-layout.service").write_text("ExecStart=@PROJECT_DIR@/.venv/bin/python\n", encoding="utf-8")
+    (tmp_path / "systemd/argos-dashboard-kiosk.service").write_text("Description=kiosk\n", encoding="utf-8")
+    commands = []
+    apply_plan(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command))
+    assert (tmp_path / "user-units/argos-window-layout.service").exists()
+    assert not any("argos-window-layout.service" in command for command in commands)
+
+
+@pytest.mark.parametrize("answer, action", [("maps", "enable"), ("", "disable")])
+def test_window_layout_choice_switches_service(tmp_path, monkeypatch, answer, action):
+    """回答に応じて配置復元サービスを有効化または無効化する。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": answer}, config_path)
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: None)
+    commands, messages = [], []
+    installer._apply_window_layout_choice(
+        _window_layout_plan(tmp_path),
+        config_path,
+        runner=lambda command, **kwargs: commands.append(command),
+        output_func=messages.append,
+    )
+    assert commands[-1][-3:] == [action, "--now", "argos-window-layout.service"]
+    assert bool(messages) == bool(answer)
+
+
+def test_window_layout_choice_ignored_without_service(tmp_path):
+    """マニフェストに含まれない構成では何もしない。"""
+    plan = build_install_plan(
+        [service for service in load_manifest() if service.name == "argos"],
+        project_dir=tmp_path,
+        system_unit_dir=tmp_path / "s",
+        user_unit_dir=tmp_path / "u",
+        service_user="argos",
+        service_group="argos",
+    )
+    commands = []
+    installer._apply_window_layout_choice(plan, tmp_path / "config.yaml", runner=lambda command, **kwargs: commands.append(command))
+    assert commands == []
+
+
+TOUCH_CONFIG = """<?xml version="1.0"?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+	<!-- 保持するコメント -->
+	<touch deviceName="ILITEK" mapToOutput="HDMI-A-1" mouseEmulation="yes"/>
+</openbox_config>
+"""
+
+
+def _labwc_config(tmp_path, text):
+    """サービスユーザーのrc.xmlを作って返す。"""
+    config = tmp_path / "home/.config/labwc/rc.xml"
+    config.parent.mkdir(parents=True)
+    config.write_text(text, encoding="utf-8")
+    return config
+
+
+def test_enable_multitouch_flips_emulation_with_backup(tmp_path):
+    """mouseEmulationがyesなら、バックアップを残してnoへ変え、labwcへ再読み込みを通知する。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    commands, messages = [], []
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=messages.append)
+    text = config.read_text(encoding="utf-8")
+    assert 'mouseEmulation="no"' in text and 'mouseEmulation="yes"' not in text
+    assert "<!-- 保持するコメント -->" in text and 'deviceName="ILITEK"' in text
+    assert config.with_name("rc.xml.before-argos-touch").read_text(encoding="utf-8") == TOUCH_CONFIG
+    assert commands == [["pkill", "-HUP", "-u", "argos", "-x", "labwc"]]
+    assert messages and "before-argos-touch" in messages[0]
+
+
+def test_enable_multitouch_keeps_first_backup(tmp_path):
+    """既存のバックアップは上書きしない。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    backup = config.with_name("rc.xml.before-argos-touch")
+    backup.write_text("最初の設定", encoding="utf-8")
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert backup.read_text(encoding="utf-8") == "最初の設定"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        TOUCH_CONFIG.replace('"yes"', '"no"'),
+        '<openbox_config><touch deviceName="x"/></openbox_config>',
+        "<openbox_config><keyboard/></openbox_config>",
+    ],
+)
+def test_enable_multitouch_leaves_other_configs(tmp_path, text):
+    """yesが明示されていない設定は変更せず、バックアップも作らない。"""
+    config = _labwc_config(tmp_path, text)
+    commands = []
+    installer._enable_multitouch(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None)
+    assert config.read_text(encoding="utf-8") == text
+    assert not config.with_name("rc.xml.before-argos-touch").exists()
+    assert commands == []
+
+
+def test_enable_multitouch_without_config_or_broken_xml(tmp_path):
+    """rc.xmlがない端末は何もせず、壊れたXMLは変更せず警告する。"""
+    plan = _window_layout_plan(tmp_path)
+    installer._enable_multitouch(plan, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    config = _labwc_config(tmp_path, "<openbox_config><touch")
+    messages = []
+    installer._enable_multitouch(plan, runner=lambda command, **kwargs: None, output_func=messages.append)
+    assert config.read_text(encoding="utf-8") == "<openbox_config><touch"
+    assert messages and "解析できない" in messages[0]
+
+
+def test_window_layout_choice_yes_enables_multitouch_only(tmp_path, monkeypatch):
+    """画面分割にyと答えたときだけタッチ設定を変え、nでは変えない。"""
+    config = _labwc_config(tmp_path, TOUCH_CONFIG)
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    plan = _window_layout_plan(tmp_path)
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": ""}, config_path)
+    installer._apply_window_layout_choice(plan, config_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert config.read_text(encoding="utf-8") == TOUCH_CONFIG
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": "maps"}, config_path)
+    installer._apply_window_layout_choice(plan, config_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert 'mouseEmulation="no"' in config.read_text(encoding="utf-8")
+
+
+def test_window_layout_choice_disable_failure_does_not_stop_install(tmp_path):
+    """画面分割を使わない端末での無効化に失敗しても、インストールは続ける。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": ""}, config_path)
+    messages = []
+
+    def fail(command, **kwargs):
+        """ユーザーのsystemdに接続できない状態を模擬する。"""
+        raise subprocess.CalledProcessError(1, command)
+
+    installer._apply_window_layout_choice(_window_layout_plan(tmp_path), config_path, runner=fail, output_func=messages.append)
+    assert messages and "無効化できませんでした" in messages[0]
+
+
+@pytest.mark.parametrize(
+    "answer, current, expected",
+    [("1", "", "overlay"), ("overlay", "split", "overlay"), ("2", "overlay", "split"), ("SPLIT", "", "split"), ("", "overlay", "overlay"), ("x", "overlay", "overlay"), ("", "", "")],
+)
+def test_ask_layout_style(answer, current, expected):
+    """表示方式は番号か名前で選べ、空入力や不明な入力なら現在値を保つ。"""
+    values = {installer.WINDOW_LAYOUT_STYLE_KEY: current} if current else {}
+    installer._ask_layout_style(values, input_func=lambda prompt: answer)
+    assert values.get(installer.WINDOW_LAYOUT_STYLE_KEY, "") == expected
+
+
+@pytest.mark.parametrize("layout_answer, asked", [("y", 1), ("n", 0), ("", 0)])
+def test_configure_asks_style_only_when_layout_is_used(tmp_path, monkeypatch, layout_answer, asked):
+    """表示方式の質問は、Waydroidと並べて使うと答えたときだけ出す。"""
+    monkeypatch.setattr("argos.installer.getpass.getpass", lambda _prompt: "")
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_DASHBOARD_TOKEN": "token", "AUDIO_INPUT_DEVICES": "default", "AUDIO_OUTPUT_DEVICE": "default"}, config_path)
+    prompts = []
+
+    def answer(prompt):
+        """質問文を記録し、画面配置の質問だけに答える。"""
+        prompts.append(prompt)
+        return layout_answer if "並べて使う" in prompt else ""
+
+    installer.configure_config(config_path, runner=lambda command, **kwargs: SimpleNamespace(returncode=1, stdout=""), input_func=answer, output_func=lambda message: None)
+    assert sum("表示方式" in prompt for prompt in prompts) == asked

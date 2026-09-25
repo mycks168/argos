@@ -1,0 +1,21 @@
+[Unit]
+Description=ARGOS window layout (Waydroid split, labwc only)
+After=argos-dashboard-kiosk.service
+PartOf=argos-dashboard-kiosk.service
+# 起動直後の失敗は自動で再試行し、1時間に5回で諦める。
+StartLimitIntervalSec=3600
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/.venv/bin/python -m argos.tools.window_layout boot
+TimeoutStartSec=720
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

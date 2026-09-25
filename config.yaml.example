@@ -150,6 +150,21 @@ dashboard:
   screensaver_seconds: 1800
   default_font_size: medium
   camera_snapshot_path: /tmp/argos/camera-latest.jpg
+window_layout:
+  # Waydroidのアプリと並べて表示する（labwc専用）。確認済みはmaps（Googleマップ）のみ。空なら使わない。
+  android_app: ''
+  # 最初に使う表示方式。overlay=ダッシュボードの中央ペインへ重ねる、split=左右に分割。空はsplit。
+  style: ''
+  # 左右分割でAndroidが使う幅の割合（20〜80）。空は50。
+  split_ratio: ''
+  # 分割時に窓が使えない上部の高さ（パネルの高さ）。空は36。パネル(wf-panel-pi)がない端末では使われない。
+  panel_height: ''
+  # Androidの解像度を変えて再起動するとき、止めて再開するユーザーサービス（カンマ区切り）。例: GPS中継
+  restart_services: ''
+  # 表示方式に合わせて開くダッシュボードのレイアウト。auto=分割はsp・overlayは通常。standard/sp/gridなら常にそれを使う。
+  dashboard_layout: ''
+  # overlayに入るとき、中央にある会話欄を右のペインへ自動で移す。falseなら移さない。空はtrue。
+  swap_conversation: ''
 greeting:
   enabled: true
   state_path: ~/.local/state/argos/greeting-state.json

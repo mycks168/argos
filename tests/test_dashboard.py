@@ -1,5 +1,6 @@
 import json
 import os
+from http.client import HTTPConnection
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -253,6 +254,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "previousMessages = \"\";" in html
         assert "previousNotifications = \"\";" in html
         assert "renderSlots(state);" in html
+        # オーバーレイ表示中も、各スロットに置かれている標準ビューだけを隠す（入れ替え後の反対側を隠さない）。
+        assert "viewIn(slotContainerCenter)" in html and "viewIn(slotContainerRight)" in html
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html
@@ -1098,5 +1101,43 @@ def test_dashboard_without_view_key_stays_open():
             assert response.headers.get("Set-Cookie") is None
         status, _ = _read_json(base_url + "/api/state")
         assert status == 200
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize(
+    "path, cookie, layout",
+    [
+        ("/?layout=sp", "", "sp"),
+        ("/?layout=standard", "argos_layout=sp", "standard"),
+        ("/?layout=SP", "", "sp"),
+        ("/?layout=foo", "argos_layout=sp", "sp"),
+        ("/?layout=", "", "standard"),
+        ("/", "argos_layout=sp", "sp"),
+    ],
+)
+def test_dashboard_root_layout_query_overrides_cookie(path, cookie, layout):
+    """?layout=で指定したレイアウトがCookieより優先される。不明な値は無視してCookieと既定値に従う。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        request = Request(f"http://{server.address[0]}:{server.address[1]}{path}", headers={"Cookie": cookie} if cookie else {})
+        with urlopen(request, timeout=2) as response:
+            html = response.read().decode("utf-8")
+        assert f'data-layout="{layout}"' in html
+    finally:
+        server.stop()
+
+
+def test_dashboard_root_layout_query_grid_redirects():
+    """?layout=gridはGrid表示へ転送する。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        connection = HTTPConnection(*server.address, timeout=2)
+        connection.request("GET", "/?layout=grid")
+        response = connection.getresponse()
+        assert response.status == 303 and response.getheader("Location") == "/grid"
+        connection.close()
     finally:
         server.stop()

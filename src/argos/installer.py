@@ -7,10 +7,12 @@ import getpass
 import json
 import os
 import pwd
+import re
 import secrets
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -18,6 +20,9 @@ from typing import Any, Callable
 from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 
 
+WINDOW_LAYOUT_SERVICE = "argos-window-layout"
+WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
+WINDOW_LAYOUT_STYLE_KEY = "ARGOS_WINDOW_LAYOUT_STYLE"
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -313,6 +318,8 @@ def apply_plan(
         _reload_systemd(plan, runner=runner)
         for service in plan.services:
             _enable_service(service, plan, runner=runner)
+        if configure:
+            _apply_window_layout_choice(plan, project_dir / "config.yaml", runner=runner, output_func=output_func)
         if restart_services:
             for service in plan.services:
                 _restart_service(service, plan, runner=runner)
@@ -409,6 +416,9 @@ def configure_config(
     _ask_url(values, "OSRM_URL", "OSRM URL", input_func=input_func)
     _ask_url(values, "ARGOS_REMOTE_LOCATION_URL", "GPS API URL", input_func=input_func)
     _ask_bool(values, "ARGOS_WAKEWORD_ENABLED", "ウェイクワードを有効にする", input_func=input_func)
+    _ask_bool(values, WINDOW_LAYOUT_KEY, "Waydroidと画面を並べて使う（Googleマップ、labwc専用）", true_value="maps", false_value="", input_func=input_func)
+    if values.get(WINDOW_LAYOUT_KEY):
+        _ask_layout_style(values, input_func=input_func)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
     _ask_bool(values, "ARGOS_DASHBOARD_SSL", "ダッシュボードHTTPSを有効にする", input_func=input_func)
     slot_template = _prepare_unified_slots_for_configure(values)
@@ -674,6 +684,15 @@ def _ask_bool(
         values[key] = true_value
     elif answer in {"n", "no", "0", "false"}:
         values[key] = false_value
+
+
+def _ask_layout_style(values: dict[str, str], *, input_func: Callable[[str], str]) -> None:
+    """画面配置の表示方式（overlay/split）を、番号または名前で選ぶ。空入力や不明な入力なら現在値を維持する。"""
+    current = values.get(WINDOW_LAYOUT_STYLE_KEY, "") or "split"
+    answer = input_func(f"表示方式 1=ダッシュボードに重ねる(overlay) 2=左右に分割(split) [{current}]: ").strip().lower()
+    choice = {"1": "overlay", "overlay": "overlay", "2": "split", "split": "split"}.get(answer)
+    if choice:
+        values[WINDOW_LAYOUT_STYLE_KEY] = choice
 
 
 def _ask_agent_slots(
@@ -1115,6 +1134,63 @@ def _enable_service(service: BundledService, plan: InstallPlan, *, runner=subpro
         _run_user_systemctl(plan, ["enable", "--now", Path(service.unit).name], runner=runner)
     else:
         runner(["systemctl", "enable", "--now", Path(service.unit).name], check=True)
+
+
+def _apply_window_layout_choice(
+    plan: InstallPlan,
+    config_path: Path,
+    *,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """画面分割の回答に合わせて、配置復元サービスを有効化または無効化する。
+
+    既定では有効化しない任意サービスのため、対話設定で回答した場合だけ切り替える。
+    """
+    if not any(service.name == WINDOW_LAYOUT_SERVICE for service in plan.services):
+        return
+    unit = f"{WINDOW_LAYOUT_SERVICE}.service"
+    if load_yaml_environment(config_path).get(WINDOW_LAYOUT_KEY, "").strip():
+        for tool in ("waydroid", "labwc"):
+            if not shutil.which(tool):
+                output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
+        _run_user_systemctl(plan, ["enable", "--now", unit], runner=runner)
+        _enable_multitouch(plan, runner=runner, output_func=output_func)
+    else:
+        # 画面分割を使わない端末でも毎回通る後始末なので、失敗してもインストールは止めない。
+        try:
+            _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
+        except subprocess.CalledProcessError as exc:
+            output_func(f"警告: {unit}を無効化できませんでした。必要なら手動で確認してください: {exc}")
+
+
+def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print) -> None:
+    """labwcのタッチをマウス変換から外し、Androidでピンチ操作できるようにする。
+
+    labwcの既定は変換なしなので、rc.xmlに明示的なmouseEmulation="yes"がある場合だけ
+    "no"へ変える。変更前にバックアップを残し、コメントなど他の記述は保つ。
+    """
+    config = Path(plan.service_home) / ".config/labwc/rc.xml"
+    if not config.is_file():
+        return
+    text = config.read_text(encoding="utf-8")
+    try:
+        touches = [node for node in ET.fromstring(text).iter() if str(node.tag).rpartition("}")[2] == "touch"]
+    except ET.ParseError:
+        output_func(f"警告: {config}を解析できないため、タッチ設定は変更しません")
+        return
+    if not any(node.get("mouseEmulation") == "yes" for node in touches):
+        return
+    backup = config.with_name(config.name + ".before-argos-touch")
+    if not backup.exists():
+        shutil.copy2(config, backup)
+        if os.geteuid() == 0:
+            shutil.chown(backup, plan.service_user, plan.service_group)
+    pattern = re.compile(r"""(<touch\b[^>]*?\bmouseEmulation\s*=\s*)(["'])yes\2""")
+    config.write_text(pattern.sub(r"\1\2no\2", text), encoding="utf-8")
+    # labwcはSIGHUPで設定を再読み込みする。起動していなければ次回起動時に反映される。
+    runner(["pkill", "-HUP", "-u", plan.service_user, "-x", "labwc"], check=False)
+    output_func(f"タッチをマウス変換から外しました（ピンチ操作用）。元の設定: {backup}")
 
 
 def _restart_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:
