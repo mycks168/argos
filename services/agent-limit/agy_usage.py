@@ -16,9 +16,12 @@ from typing import Any
 from tmux_util import cleanup, send_keys, tmux, wait_for
 
 _LIMIT_RE = (
-    r"{label}(?:\s+Remaining)?\s*\n\s*\[[^\]]*\]\s*([\d.]+)%\s*\n\s*"
-    r"(?:(\d+)% remaining(?:\s*·\s*Refreshes in\s*(?:(\d+)h)?\s*(?:(\d+)m)?)?"
-    r"|Quota available)"
+    r"{label}(?:\s+Remaining)?\s*\n\s*\[[^\]]*\]\s*(?P<pct>[\d.]+)%\s*\n\s*"
+    r"(?:"
+    r"Quota available"
+    r"|(?:(?:\d+)%\s+remaining\s*(?:·\s*)?)?"
+    r"(?:Refreshes\s+in\s*(?:(?P<hours>\d+)h)?\s*(?:(?P<minutes>\d+)m)?)?"
+    r")"
 )
 
 
@@ -29,10 +32,10 @@ def _parse_limit(block: str, label: str, now: datetime) -> dict[str, Any]:
     if not m:
         raise ValueError(f"{label}を解析できませんでした:\n{block}")
 
-    bar_pct = float(m.group(1))
+    bar_pct = float(m.group("pct"))
     usage_pct = round(100 - bar_pct, 2)
 
-    hours_str, minutes_str = m.group(3), m.group(4)
+    hours_str, minutes_str = m.group("hours"), m.group("minutes")
     if hours_str is None and minutes_str is None:
         reset = None
     else:

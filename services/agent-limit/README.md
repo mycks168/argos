@@ -71,6 +71,9 @@ uv run ./agy_usage.py
 - `usage_pct`: 使用率(%)。クォータが100%残っている場合は`0.0`
 - `reset`: リセット予定日時(`MM/DD HH:MM`形式)。クォータが満タンの場合は`null`
 
+> [!NOTE]
+> Antigravity CLIのバージョンにより、「X% remaining」の残量表記が省略されリフレッシュ時刻のみ表示される形式や、リフレッシュ時間が分単位のみ（例: `Refreshes in 41m`）となる形式にも対応しています。
+
 ### claudeの使用状況取得
 
 ```sh
