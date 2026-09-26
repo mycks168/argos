@@ -29,6 +29,8 @@ class Harness:
     def __init__(self, tmp_path, **overrides):
         """生成・再生・状態を偽物にした読み上げ部品を作る。"""
         self.played = []
+        self.texts = []
+        self.results = []
         self.synthesized = []
         self.now = 0.0
         self.muted = False
@@ -39,7 +41,7 @@ class Harness:
         arguments = dict(
             enabled=True,
             synthesize=self._synthesize,
-            play=self.played.append,
+            play=self._play,
             store=self.store,
             speakers=lambda: {1, 2},
             current_speaker=lambda: 1,
@@ -52,6 +54,12 @@ class Harness:
         )
         arguments.update(overrides)
         self.speaker = NoticeSpeaker(**arguments)
+
+    def _play(self, wav, text=""):
+        """再生を記録する。resultsに指定があれば、その結果（中断ならFalse）を返す。"""
+        self.played.append(wav)
+        self.texts.append(text)
+        return self.results.pop(0) if self.results else None
 
     def _synthesize(self, text, speaker):
         """呼び出しを記録し、失敗を指定できる音声合成。"""
@@ -177,6 +185,44 @@ def test_waits_while_busy_then_speaks(tmp_path):
     assert len(h.played) == 1 and h.now == pytest.approx(0.6)
 
 
+def test_completion_waits_past_timeout_and_reads_no_body(tmp_path):
+    """完了通知は30秒を超えても会話を待ち、本文を読まない。"""
+    h = Harness(tmp_path)
+    h.busy = [True] * 200
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS", text="読まない応答本文"))
+    h.speak_next()
+    assert h.now == pytest.approx(40)
+    assert h.synthesized == [("Claudeの応答が終わったよ。", 1)]
+    assert len(h.played) == 1
+
+
+@pytest.mark.parametrize("cancel", [None, "muted", "locked", "stop"])
+def test_completion_rechecks_after_synthesis(tmp_path, cancel):
+    """合成中に始まった発話も待ち、ミュート・ロック・停止なら再生しない。"""
+    h = Harness(tmp_path)
+
+    def synthesize(text, speaker):
+        """音声の合成中に別の発話が始まった状態を作る。"""
+        h.busy = [True] * 200
+        return voice(speaker, text)
+
+    def sleep(seconds):
+        """待機中の状態変更を再現する。"""
+        h._sleep(seconds)
+        if cancel == "stop":
+            h.speaker._stop.set()
+        elif cancel:
+            setattr(h, cancel, True)
+
+    h.speaker._synthesize = synthesize
+    h.speaker._sleep = sleep
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS"))
+    h.speak_next()
+    assert len(h.played) == (1 if cancel is None else 0)
+    if cancel is None:
+        assert h.now == pytest.approx(40)
+
+
 def test_wait_is_bounded(tmp_path):
     """いつまでも終わらないときは、待ち時間の上限で読み上げる。"""
     h = Harness(tmp_path, busy_wait_seconds=1.0)
@@ -239,7 +285,7 @@ def test_worker_thread_speaks_and_stops(tmp_path):
     """スレッドが、順番待ちの通知を読み上げ、停止で終わる。"""
     h = Harness(tmp_path, clock=time.monotonic, sleep=time.sleep)
     spoken = threading.Event()
-    h.speaker._play = lambda wav: (h.played.append(wav), spoken.set())
+    h.speaker._play = lambda wav, text="": (h.played.append(wav), spoken.set())
     h.speaker.start()
     first = h.speaker._thread
     h.speaker.start()
@@ -256,7 +302,7 @@ def test_worker_survives_speech_error(tmp_path):
     calls = []
     done = threading.Event()
 
-    def play(wav):
+    def play(wav, text=""):
         """1回目は失敗し、2回目で完了を知らせる。"""
         calls.append(wav)
         if len(calls) == 1:
@@ -295,3 +341,87 @@ def test_warm_treats_invalid_audio_as_failure_and_retries(tmp_path):
     h = Harness(tmp_path, synthesize=lambda text, speaker: b"not-a-wav", warm_retry_seconds=300.0)
     assert h.speaker.warm() is False and h.speaker._warmed is False
     assert not list((tmp_path / "phrases").glob("*.wav")) if (tmp_path / "phrases").exists() else True
+
+
+def test_playback_receives_the_spoken_text_for_echo_defense(tmp_path):
+    """再生には、読み上げる文も渡す（ウェイクワードを含むかの判定に使うため）。警告音には空の文を渡す。"""
+    h = Harness(tmp_path)
+    h.speaker.submit(notice(title="会議"))
+    h.speak_next()
+    h.fail_synthesis = True
+    h.speaker.submit(notice(title="別件"))
+    h.speak_next()
+    assert h.texts[0].startswith("Slackから通知だよ。会議。") and h.texts[1].startswith("Slackから通知だよ。別件。")
+
+
+def test_interrupted_playback_is_spoken_again_when_quiet(tmp_path):
+    """利用者の発話などで再生を中断されたら、静かになってから、もう一度読み上げる。"""
+    h = Harness(tmp_path)
+    h.results = [False, None]
+    h.speaker.submit(notice(title="会議"))
+    h.speak_next()
+    assert len(h.played) == 1 and h.speaker._queue.qsize() == 1
+    h.busy = [True, True]
+    h.speak_next()
+    assert len(h.played) == 2 and h.speaker._queue.qsize() == 0 and h.speaker._retries == {}
+
+
+def test_interrupted_playback_is_retried_only_a_few_times(tmp_path):
+    """中断され続けても、読み上げ直すのは最大回数まで。"""
+    h = Harness(tmp_path, max_retries=2)
+    h.results = [False, False, False, False]
+    h.speaker.submit(notice(title="会議"))
+    for _ in range(3):
+        h.speak_next()
+    assert len(h.played) == 3 and h.speaker._queue.qsize() == 0 and h.speaker._retries == {}
+
+
+def test_retry_is_dropped_when_queue_is_full(tmp_path):
+    """順番待ちがいっぱいなら、読み上げ直しは、あきらめる。"""
+    h = Harness(tmp_path, max_queue=1)
+    h.results = [False]
+    h.speaker.submit(notice(title="会議"))
+    plan = h.speaker._queue.get_nowait()
+    h.speaker.submit(notice(title="別件"))
+    h.speaker._speak(plan)
+    assert h.speaker._queue.qsize() == 1 and h.speaker._retries == {}
+
+
+def test_completion_waits_for_whole_conversation_including_thinking(tmp_path):
+    """完了通知は、考え中を含む会話が終わるまで待つ。通常の通知は、考え中では待たない。"""
+    conversation = [True] * 5
+    h = Harness(tmp_path, is_conversation_active=lambda: conversation.pop(0) if conversation else False)
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS"))
+    h.speak_next()
+    assert len(h.played) == 1 and h.now == pytest.approx(1.0)
+    h2 = Harness(tmp_path, is_conversation_active=lambda: True)
+    h2.speaker.submit(notice(title="会議"))
+    h2.speak_next()
+    assert len(h2.played) == 1 and h2.now == 0.0
+
+
+def test_completion_gives_up_after_idle_limit_without_interrupting(tmp_path):
+    """会話が上限を超えて終わらないときは、割り込まずに読み上げをやめる（通知欄には残る）。"""
+    h = Harness(tmp_path, idle_wait_seconds=10.0)
+    h.busy = [True] * 1000
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS"))
+    h.speak_next()
+    assert h.played == [] and 10.0 <= h.now < 10.5
+    assert h.speaker._retries == {}
+
+
+def test_wait_returns_false_when_stopped_during_wait(tmp_path):
+    """待っている間に停止されたら、読み上げない。"""
+    h = Harness(tmp_path)
+    h.busy = [True] * 50
+    original = h._sleep
+
+    def stop_then_sleep(seconds):
+        """待ちの間に停止を指示する。"""
+        h.speaker._stop.set()
+        original(seconds)
+
+    h.speaker._sleep = stop_then_sleep
+    h.speaker.submit(notice())
+    h.speak_next()
+    assert h.played == []
