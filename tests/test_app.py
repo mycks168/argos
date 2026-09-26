@@ -2144,3 +2144,51 @@ def test_tts_cache_integration(monkeypatch):
         wav_data_2 = app._speech._synthesize_tts(text)
         assert wav_data_2 == wav_data_1
         assert len(app._voicevox.calls) == 1
+
+
+class FakeYieldAudio(FakeAudio):
+    """保留・再開の呼び出しを記録する再生装置。"""
+
+    def __init__(self, *args, **kwargs):
+        """保留の記録を初期化する。"""
+        super().__init__(*args, **kwargs)
+        self.events = []
+        self.max_hold = None
+
+    def hold(self):
+        """保留を記録する。"""
+        self.events.append("hold")
+
+    def release(self):
+        """再開を記録する。"""
+        self.events.append("release")
+
+    def set_max_hold_seconds(self, seconds):
+        """上限秒数を記録する。"""
+        self.max_hold = seconds
+
+
+def test_app_yields_speech_to_configured_apps(monkeypatch):
+    """設定したアプリの再生を検知したら、ARGOSの発話を保留・再開する仕組みを組み込む。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.AudioPlayer", FakeYieldAudio)
+    settings = Settings(
+        **{**_settings().__dict__, "dry_run": False, "audio_yield_to_apps": ("Waydroid",), "audio_yield_max_hold_seconds": 12.0}
+    )
+
+    app = ArgosApp(settings)
+
+    assert app._audio_priority is not None
+    assert app._audio.max_hold == 12.0
+    app._audio_priority.handle({"id": 1, "info": {"props": {"media.class": "Stream/Output/Audio", "application.name": "Waydroid"}, "state": "running"}})
+    app._audio_priority.handle({"id": 1, "info": None})
+    app._audio_priority.stop()
+    assert app._audio.events == ["hold", "release"]
+
+
+def test_app_does_not_watch_by_default_or_in_dry_run(monkeypatch):
+    """既定と、dry-run(テキスト入力)では、他アプリの監視を組み込まない。"""
+    _patch_app(monkeypatch)
+    assert ArgosApp(_settings())._audio_priority is None
+    dry = Settings(**{**_settings().__dict__, "audio_yield_to_apps": ("Waydroid",)})
+    assert ArgosApp(dry)._audio_priority is None

@@ -38,6 +38,7 @@ from argos.hardware.audio import (
     check_audio_level,
     cleanup_stale_recordings,
 )
+from argos.hardware.audio_priority import PriorityStreamWatcher
 from argos.hardware.button import ButtonPtt
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
@@ -231,6 +232,16 @@ class ArgosApp:
         saved_audio_state = self._audio_state.load()
         initial_volume = saved_audio_state.volume if saved_audio_state.volume is not None else settings.audio_output_volume
         self._audio = AudioPlayer(settings.audio_output_device, settings.audio_output_card, initial_volume)
+        # ナビ(Waydroid)など他アプリの音声が鳴っている間は、ARGOSの発話を保留して重ならないようにする。
+        self._audio_priority: PriorityStreamWatcher | None = None
+        if settings.audio_yield_to_apps and not settings.dry_run:
+            self._audio.set_max_hold_seconds(settings.audio_yield_max_hold_seconds)
+            self._audio_priority = PriorityStreamWatcher(
+                settings.audio_yield_to_apps,
+                self._audio.hold,
+                self._audio.release,
+                release_delay=settings.audio_yield_release_seconds,
+            )
         self._lcd = self._create_lcd_display(settings)
         self._dashboard_state = DashboardState(max_messages=settings.conversation_history_max_messages)
         self._conversation_store = ConversationStore(
@@ -385,6 +396,8 @@ class ArgosApp:
         log.info("ARGOS 起動: provider=%s 現在のエージェントスロット=%s", self._settings.agent_provider, self._agent.current_name)
         if self._dashboard_server is not None:
             self._dashboard_server.start()
+        if self._audio_priority is not None:
+            self._audio_priority.start()
         self._run_startup_sequence()
         self._auth_coord.try_face_auth("起動時", self._status.current_generation())
         self._set_ready_or_locked()
@@ -1637,6 +1650,8 @@ class ArgosApp:
             self._wakeword_listener.stop()
         if self._audio_input_stream is not None:
             self._audio_input_stream.stop()
+        if self._audio_priority is not None:
+            self._audio_priority.stop()
         self._cancel_active_audio()
         self._auth_coord.stop_warning()
         if self._dashboard_server is not None:

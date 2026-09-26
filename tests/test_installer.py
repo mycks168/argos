@@ -1284,3 +1284,23 @@ def test_configure_asks_style_only_when_layout_is_used(tmp_path, monkeypatch, la
 
     installer.configure_config(config_path, runner=lambda command, **kwargs: SimpleNamespace(returncode=1, stdout=""), input_func=answer, output_func=lambda message: None)
     assert sum("表示方式" in prompt for prompt in prompts) == asked
+
+
+@pytest.mark.parametrize(
+    "layout, before, after",
+    [
+        ("maps", "", "Waydroid"),
+        ("maps", "Waydroid", "Waydroid"),
+        ("maps", "waydroid", "waydroid"),
+        ("maps", "Other", "Other,Waydroid"),
+        ("", "Waydroid", ""),
+        ("", "Other,Waydroid", "Other"),
+        ("", "Other", "Other"),
+        ("", "", ""),
+    ],
+)
+def test_sync_waydroid_audio_priority(layout, before, after):
+    """Waydroidと並べて使うときだけ、ARGOSの発話をWaydroidの音声に譲る設定にする。他のアプリ名は保つ。"""
+    values = {installer.WINDOW_LAYOUT_KEY: layout, installer.YIELD_TO_APPS_KEY: before}
+    installer._sync_waydroid_audio_priority(values)
+    assert values[installer.YIELD_TO_APPS_KEY] == after

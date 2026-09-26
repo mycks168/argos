@@ -9,6 +9,13 @@ audio:
   state_path: ~/.local/state/argos/audio-state.json
   listen_mode: wakeword
   silence_rms_threshold: 200
+  # 再生中はARGOSの発話を一時停止する他アプリの名前(PipeWireのapplication.name)。空なら監視しない。
+  # Waydroidのナビ音声と重ならないようにするときは、Waydroidを指定する。
+  yield_to_apps: []
+  # 他アプリの再生が止まってから、発話を再開するまでの待ち時間(秒)。案内が続けて鳴るときの割り込みを防ぐ。
+  yield_release_seconds: 0.6
+  # 他アプリが鳴らし続けても、発話が止まりきらないよう、保留する最長の秒数。
+  yield_max_hold_seconds: 20
 ptt:
   gpio: ''
 network:

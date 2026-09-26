@@ -48,6 +48,7 @@ SECTION_PREFIXES = {
 
 LIST_MAPPINGS = {
     ("audio", "input_devices"): ("AUDIO_INPUT_DEVICES", ";"),
+    ("audio", "yield_to_apps"): ("AUDIO_YIELD_TO_APPS", ","),
     ("wakeword", "aliases"): ("ARGOS_WAKEWORD_ALIASES", ","),
     ("agent", "progress_start_phrases"): ("ARGOS_AGENT_PROGRESS_START_PHRASES", ";"),
     ("agent", "progress_wait_phrases"): ("ARGOS_AGENT_PROGRESS_WAIT_PHRASES", ";"),

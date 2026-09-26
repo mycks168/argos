@@ -252,6 +252,10 @@ class Settings:
     remote_location_timeout_seconds: float = 2.0
     remote_location_token: str = ""
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
+    # 再生中はARGOSの発話を保留する、他アプリの名前(PipeWireのapplication.name)。空なら監視しない。
+    audio_yield_to_apps: tuple[str, ...] = ()
+    audio_yield_release_seconds: float = 0.6
+    audio_yield_max_hold_seconds: float = 20.0
     agent_runner_url: str = ""
     agent_runner_token: str = ""
     agent_runner_host: str = "127.0.0.1"
@@ -599,6 +603,9 @@ def load_settings() -> Settings:
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
         audio_state_path=os.environ.get("ARGOS_AUDIO_STATE_PATH", "~/.local/state/argos/audio-state.json"),
+        audio_yield_to_apps=_split_aliases("AUDIO_YIELD_TO_APPS", ()),
+        audio_yield_release_seconds=float(os.environ.get("AUDIO_YIELD_RELEASE_SECONDS", "0.6")),
+        audio_yield_max_hold_seconds=float(os.environ.get("AUDIO_YIELD_MAX_HOLD_SECONDS", "20")),
         agent_runner_url=os.environ.get("ARGOS_AGENT_RUNNER_URL", ""),
         agent_runner_token=os.environ.get("ARGOS_AGENT_RUNNER_TOKEN", ""),
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
