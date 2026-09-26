@@ -242,6 +242,13 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    # SP表示で、新しい通知が来たときに通知欄を自動で開いておく秒数。0以下なら自動で開かない。
+    dashboard_sp_notice_seconds: float = 8.0
+    # 通知を声でも知らせる。運転中など、画面を見られないとき向け。
+    notice_speak_enabled: bool = True
+    notice_speak_max_chars: int = 60
+    notice_speak_interval_seconds: float = 60.0
+    notice_phrase_dir: str = "~/.local/state/argos/notice-phrases"
     dashboard_default_font_size: str = "medium"
     dashboard_default_layout: str = "standard"
     dashboard_upload_dir: str = "/tmp/argos/uploads"
@@ -639,6 +646,11 @@ def load_settings() -> Settings:
             "~/.config/argos/tls/dashboard.key",
         ),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        dashboard_sp_notice_seconds=float(os.environ.get("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "8")),
+        notice_speak_enabled=_bool_env("ARGOS_NOTICE_SPEAK", True),
+        notice_speak_max_chars=int(os.environ.get("ARGOS_NOTICE_SPEAK_MAX_CHARS", "60")),
+        notice_speak_interval_seconds=float(os.environ.get("ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "60")),
+        notice_phrase_dir=os.environ.get("ARGOS_NOTICE_PHRASE_DIR", "~/.local/state/argos/notice-phrases"),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),

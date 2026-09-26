@@ -27,6 +27,7 @@ from argos.config import (
     resolve_agent_slot_model,
 )
 from argos.core.auth_coordinator import AuthCoordinator
+from argos.core.notice_speaker import BUSY_STATUS_CODES, NoticeSpeaker
 from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
@@ -57,6 +58,7 @@ from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
+from argos.services.notice_speech import PhraseStore
 from argos.services.stt.whisper import FasterWhisperClient
 from argos.services.tts.cache import TTSCacheManager
 from argos.services.tts.filter import TtsFilterClient
@@ -309,6 +311,21 @@ class ArgosApp:
             shutdown=self._shutdown,
             muted=initial_muted,
         )
+        # 通知を声でも知らせる。運転中など、画面を見られないときに、気づけるようにする。
+        self._notice_speaker = NoticeSpeaker(
+            enabled=settings.notice_speak_enabled and not settings.dry_run,
+            synthesize=self._speech.synthesize_for_notice,
+            play=self._speech.play_notice_audio,
+            store=PhraseStore(Path(settings.notice_phrase_dir).expanduser()),
+            speakers=self._speech.known_speaker_ids,
+            current_speaker=self._speech.current_speaker_id,
+            is_muted=self._speech.is_muted,
+            is_busy=self._is_speech_busy,
+            is_locked=self._is_auth_locked,
+            max_chars=settings.notice_speak_max_chars,
+            min_interval=settings.notice_speak_interval_seconds,
+        )
+        self._dashboard_state.add_notification_listener(self._notice_speaker.submit)
         self._auth_coord = AuthCoordinator(
             settings=settings,
             auth=self._auth,
@@ -374,6 +391,7 @@ class ArgosApp:
             ),
             camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
+            sp_notice_seconds=settings.dashboard_sp_notice_seconds,
             default_font_size=settings.dashboard_default_font_size,
             default_layout=settings.dashboard_default_layout,
             location_provider=settings.location_provider,
@@ -398,6 +416,7 @@ class ArgosApp:
             self._dashboard_server.start()
         if self._audio_priority is not None:
             self._audio_priority.start()
+        self._notice_speaker.start()
         self._run_startup_sequence()
         self._auth_coord.try_face_auth("起動時", self._status.current_generation())
         self._set_ready_or_locked()
@@ -1428,13 +1447,24 @@ class ArgosApp:
             log.warning("処理済み録音ファイルを削除できませんでした: %s: %s", wav_path, exc)
 
     def _transcribe_wav(self, wav_path: str) -> str:
-        """stt-gatewayを優先し、未設定または失敗時はfaster-whisperで文字起こしする。"""
+        """stt-gatewayを優先し、未設定または失敗時はfaster-whisperで文字起こしする。
+
+        faster-whisperが未導入なら、試さずに飛ばし、使えない理由をまとめたエラーにする
+        （呼び出し元がエラー通知を出し、読み上げる）。
+        """
+        gateway_error: Exception | None = None
         if self._settings.stt_gateway_url.strip():
             try:
                 return self._stt.transcribe(wav_path)
             except Exception as exc:
-                log.exception("stt-gatewayに失敗しました。faster-whisperへフォールバックします")
-                self._report_error("stt-gateway", exc)
+                gateway_error = exc
+                log.exception("stt-gatewayに失敗しました")
+        if not getattr(self._local_stt, "available", True):
+            reason = f"stt-gatewayに失敗しました({gateway_error})" if gateway_error else "stt-gatewayが未設定です"
+            raise RuntimeError(f"{reason}。ローカルのfaster-whisperも未導入のため、音声を認識できません。") from gateway_error
+        if gateway_error is not None:
+            log.info("faster-whisperへフォールバックします")
+            self._report_error("stt-gateway", gateway_error)
         return self._local_stt.transcribe(wav_path)
 
     def _handle_text(self, text: str) -> None:
@@ -1639,6 +1669,11 @@ class ArgosApp:
         """本人確認が必要なロック状態ならTrueを返す。"""
         return self._auth_coord.is_locked()
 
+    def _is_speech_busy(self) -> bool:
+        """発話・録音・文字起こしの最中なら、通知の読み上げを待たせるためTrueを返す。"""
+        playing = bool(getattr(self._audio, "is_playing", False))
+        return playing or self._dashboard_state.status_code() in BUSY_STATUS_CODES
+
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""
         log.info("終了シグナルを受信しました: %s", signum)
@@ -1652,6 +1687,7 @@ class ArgosApp:
             self._audio_input_stream.stop()
         if self._audio_priority is not None:
             self._audio_priority.stop()
+        self._notice_speaker.stop()
         self._cancel_active_audio()
         self._auth_coord.stop_warning()
         if self._dashboard_server is not None:

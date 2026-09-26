@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 from io import BytesIO
 from typing import Any
 
@@ -16,6 +17,11 @@ class KokoroClient:
         self._repo_id = repo_id
         self._sample_rate = sample_rate
         self._pipeline: Any | None = None
+
+    @property
+    def available(self) -> bool:
+        """Kokoro が導入済みで使えればTrueを返す。未導入なら、試さずに飛ばすための判定。"""
+        return self._pipeline is not None or importlib.util.find_spec("kokoro") is not None
 
     def synthesize(self, text: str) -> bytes:
         """Kokoro の日本語パイプラインで WAV を返す。"""

@@ -1141,3 +1141,87 @@ def test_dashboard_root_layout_query_grid_redirects():
         connection.close()
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("seconds, expected", [(None, "8.0"), (12.5, "12.5"), (0, "0")])
+def test_dashboard_injects_sp_notice_seconds(seconds, expected):
+    """SP表示で通知欄を自動で開く秒数を、設定値のまま画面へ埋め込む（未指定は8秒、0は無効）。"""
+    kwargs = {} if seconds is None else {"sp_notice_seconds": seconds}
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", **kwargs)
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert f"seconds: Number({expected})" in html
+    assert "__ARGOS_" not in html
+
+
+def test_dashboard_sp_notice_popup_is_wired_only_for_sp_layout():
+    """通知欄の自動表示は、SP表示のときだけ呼び出し、利用者の操作で自動では閉じなくする。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/static/sp_notice_popup.js", timeout=2) as response:
+            assert response.headers["Content-Type"].startswith(("text/javascript", "application/javascript"))
+            script = response.read().decode("utf-8")
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert "class NoticePopup" in script and "function shouldPopup" in script
+    assert '<script src="/static/sp_notice_popup.js"></script>' in html
+    # 一覧の描画が済んでから開く（描画より前に例外が出ても、一覧が更新されないままにならないように）。
+    assert html.index("previousNotifications = nextNotifications;") < html.index("spNoticePopup.update(state.notifications);")
+    assert 'if (dashboardLayout === "sp") {\n        spNoticePopup.update(state.notifications);' in html
+    assert "spNoticePopup.takeOver();" in html
+    assert 'document.getElementById("slot-right").addEventListener(eventName' in html
+    # バッジは大きく、動きを減らす設定では止める。
+    assert "min-width: 28px" in html and "sp-notification-pulse" in html
+    assert "prefers-reduced-motion: reduce" in html
+
+
+def test_notification_listener_receives_external_and_error_notifications():
+    """通知が追加されたら、登録した関数が、追加された通知のコピーを受け取る。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "3時から", source="Slack", priority="normal")
+    error_id = state.add_error_notification("文字起こし", "失敗")
+    received[0]["title"] = "書き換えても本体に影響しない"
+
+    assert [item["id"] for item in received] == [notification_id, error_id]
+    assert received[1]["priority"] == "high" and received[1]["title"] == "文字起こし エラー"
+    assert state.snapshot()["notifications"][0]["title"] == "会議"
+
+
+def test_duplicate_error_notification_is_not_announced_twice():
+    """直前と同じ内容のエラーは、追加されないので、受け取る関数も呼ばれない。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    state.add_error_notification("音声合成", "同じ")
+    state.add_error_notification("音声合成", "同じ")
+
+    assert len(received) == 1
+
+
+def test_notification_listener_error_does_not_break_adding():
+    """受け取る関数が例外を出しても、通知は追加され、ほかの関数も呼ばれる。"""
+    state = DashboardState()
+    received = []
+
+    def broken(_notice):
+        """失敗する受け取り先。"""
+        raise RuntimeError("失敗")
+
+    state.add_notification_listener(broken)
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "本文")
+
+    assert [item["id"] for item in received] == [notification_id]
+    assert len(state.snapshot()["notifications"]) == 1

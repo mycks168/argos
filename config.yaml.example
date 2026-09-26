@@ -16,6 +16,17 @@ audio:
   yield_release_seconds: 0.6
   # 他アプリが鳴らし続けても、発話が止まりきらないよう、保留する最長の秒数。
   yield_max_hold_seconds: 20
+notice:
+  # 通知を声でも知らせる。運転中など、画面を見られないとき向け。
+  # 対象は、外部から届いた通知と、優先度が高い通知（決まった言葉があるエラー）。ARGOS自身の通常の通知は読まない。
+  # ロック中（本人確認前）は、通知の中身を読まず、エラーだけ決まった言葉で知らせる。
+  speak: true
+  # 読み上げる本文の最大文字数。
+  speak_max_chars: 60
+  # 同じ内容を続けて読み上げない間隔(秒)。
+  speak_interval_seconds: 60
+  # 音声合成が使えないときに再生する、エラーの決まった言葉の保存先。
+  phrase_dir: ~/.local/state/argos/notice-phrases
 ptt:
   gpio: ''
 network:
@@ -155,6 +166,9 @@ dashboard:
   token: ''
   view_key: ''
   screensaver_seconds: 1800
+  # SP表示で、新しい通知が来たときに通知欄を自動で開いておく秒数。0以下なら自動で開かない。
+  # ARGOS自身の通常の通知は対象外で、外部からの通知と優先度が高い通知が対象。
+  sp_notice_seconds: 8
   default_font_size: medium
   camera_snapshot_path: /tmp/argos/camera-latest.jpg
 window_layout:

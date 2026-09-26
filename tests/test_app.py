@@ -1,5 +1,6 @@
 import json
 import logging
+import tempfile
 from contextlib import contextmanager
 
 import pytest
@@ -70,6 +71,8 @@ def _settings():
         audio_output_card="",
         audio_output_volume=90,
         audio_state_path="",
+        # 実機の通知の保存音声を、テストの偽の音声で汚さない。
+        notice_phrase_dir=tempfile.mkdtemp(prefix="argos-test-phrases-"),
         audio_sample_rate=16000,
         lcd_enabled=False,
         lcd_width=76,
@@ -2192,3 +2195,179 @@ def test_app_does_not_watch_by_default_or_in_dry_run(monkeypatch):
     assert ArgosApp(_settings())._audio_priority is None
     dry = Settings(**{**_settings().__dict__, "audio_yield_to_apps": ("Waydroid",)})
     assert ArgosApp(dry)._audio_priority is None
+
+
+class UnavailableLocalStt:
+    """ローカルの文字起こしが未導入の状態を模した代役。"""
+
+    available = False
+
+    def __init__(self, *args):
+        """引数を受け取るだけ。"""
+
+    def transcribe(self, wav):
+        """呼ばれたら失敗する（試さずに飛ばすはず）。"""
+        raise AssertionError("未導入のローカル文字起こしを呼んではいけません")
+
+
+class UnavailableKokoro:
+    """Kokoroが未導入の状態を模した代役。"""
+
+    available = False
+
+    def __init__(self, *args):
+        """引数を受け取るだけ。"""
+
+    def synthesize(self, text):
+        """呼ばれたら失敗する（試さずに飛ばすはず）。"""
+        raise AssertionError("未導入のKokoroを呼んではいけません")
+
+
+def _failing(message):
+    """指定の文言で失敗する関数を返す。"""
+
+    def fail(*args, **kwargs):
+        """失敗する。"""
+        raise RuntimeError(message)
+
+    return fail
+
+
+def _titles(app):
+    """ダッシュボードの通知の題名を、古い順に返す。"""
+    return [notice["title"] for notice in app._dashboard_state.snapshot()["notifications"]]
+
+
+def test_tts_reports_one_clear_error_when_kokoro_is_not_installed(monkeypatch):
+    """VOICEVOXが失敗し、Kokoroも未導入なら、試さずに、1つのエラーにまとめる。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.KokoroClient", UnavailableKokoro)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._voicevox.synthesize = _failing("接続できません")
+
+    with pytest.raises(RuntimeError, match="Kokoroも未導入"):
+        app._speech._synthesize_tts("返答")
+
+    notices = app._dashboard_state.snapshot()["notifications"]
+    assert [notice["title"] for notice in notices] == ["音声合成 エラー"]
+    assert notices[0]["priority"] == "high" and "接続できません" in notices[0]["text"]
+
+
+def test_tts_without_voicevox_and_kokoro_reports_unconfigured(monkeypatch):
+    """VOICEVOXが未設定でKokoroも未導入なら、その旨を1つのエラーにする。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.KokoroClient", UnavailableKokoro)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False, "voicevox_url": ""}))
+
+    with pytest.raises(RuntimeError):
+        app._speech._synthesize_tts("返答")
+
+    assert "VOICEVOXが未設定" in app._dashboard_state.snapshot()["notifications"][0]["text"]
+
+
+def test_tts_reports_kokoro_failure_as_synthesis_error(monkeypatch):
+    """Kokoroが入っていて失敗したときは、音声合成のエラーとして知らせる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False, "voicevox_url": ""}))
+    app._kokoro.synthesize = _failing("生成に失敗")
+
+    with pytest.raises(RuntimeError, match="生成に失敗"):
+        app._speech._synthesize_tts("返答")
+
+    assert _titles(app) == ["音声合成 エラー"]
+
+
+def test_notice_synthesis_does_not_report_errors_or_loop(monkeypatch):
+    """通知の読み上げ用の合成は、失敗してもエラー通知を出さない（通知が通知を呼ぶ循環を防ぐ）。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.KokoroClient", UnavailableKokoro)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._voicevox.synthesize = _failing("接続できません")
+
+    with pytest.raises(RuntimeError):
+        app._speech.synthesize_for_notice("声", 3)
+
+    assert _titles(app) == []
+
+
+def test_notice_synthesis_uses_the_given_speaker(monkeypatch):
+    """通知の読み上げ用の合成は、指定した話者IDで作る。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+
+    app._speech.synthesize_for_notice("声", 7)
+
+    assert app._voicevox.calls[-1] == ("声", 7)
+    assert isinstance(app._speech.current_speaker_id(), int)
+    assert app._speech.known_speaker_ids() >= {app._settings.voicevox_speaker}
+
+
+def test_transcribe_skips_missing_local_and_raises_one_clear_error(monkeypatch):
+    """stt-gatewayが失敗し、faster-whisperが未導入なら、試さずに、理由をまとめたエラーにする。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.FasterWhisperClient", UnavailableLocalStt)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False, "stt_gateway_url": "http://stt"}))
+    app._stt.transcribe = _failing("接続できません")
+
+    with pytest.raises(RuntimeError, match="faster-whisperも未導入"):
+        app._transcribe_wav("a.wav")
+
+    assert _titles(app) == []
+
+
+def test_transcribe_without_gateway_and_local_reports_unconfigured(monkeypatch):
+    """stt-gatewayが未設定でローカルも未導入なら、その旨を知らせる。"""
+    _patch_app(monkeypatch)
+    monkeypatch.setattr("argos.core.app.FasterWhisperClient", UnavailableLocalStt)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False, "stt_gateway_url": ""}))
+
+    with pytest.raises(RuntimeError, match="stt-gatewayが未設定"):
+        app._transcribe_wav("a.wav")
+
+
+def test_transcribe_falls_back_to_local_and_reports_gateway_error(monkeypatch):
+    """ローカルが使えるなら、stt-gatewayの失敗を知らせて、ローカルで続ける。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False, "stt_gateway_url": "http://stt"}))
+    app._stt.transcribe = _failing("接続できません")
+
+    assert app._transcribe_wav("a.wav") == "ローカル認識"
+    assert _titles(app) == ["stt-gateway エラー"]
+
+
+def test_notice_speaker_is_registered_and_gets_notifications(monkeypatch):
+    """ダッシュボードに通知が追加されたら、読み上げの順番待ちに入る（対象外は入らない）。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    assert app._notice_speaker.enabled
+
+    app._dashboard_state.add_notification("音声入力", "開始", source="ARGOS")
+    assert app._notice_speaker._queue.qsize() == 0
+    app._dashboard_state.add_notification("会議", "3時から", source="Slack")
+    app._dashboard_state.add_error_notification("文字起こし", "生のエラー文")
+    app._dashboard_state.add_error_notification("VOICEVOX", "代替で続く失敗")
+
+    texts = [plan.text for plan in list(app._notice_speaker._queue.queue)]
+    assert len(texts) == 2 and texts[0].startswith("Slackから通知だよ。") and texts[1] == "音声を認識できなかったよ。"
+
+
+def test_notice_speaker_is_disabled_in_dry_run_and_by_setting(monkeypatch):
+    """dry-runと、設定で無効にしたときは、読み上げない。"""
+    _patch_app(monkeypatch)
+    assert ArgosApp(_settings())._notice_speaker.enabled is False
+    off = Settings(**{**_settings().__dict__, "dry_run": False, "notice_speak_enabled": False})
+    app = ArgosApp(off)
+    app._dashboard_state.add_notification("会議", "3時から", source="Slack")
+    assert app._notice_speaker.enabled is False and app._notice_speaker._queue.qsize() == 0
+
+
+def test_speech_busy_reflects_playback_and_status(monkeypatch):
+    """再生中、または発話・録音・文字起こしの状態のあいだは、通知の読み上げを待たせる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    assert app._is_speech_busy() is False
+    app._audio.playing = True
+    assert app._is_speech_busy() is True
+    app._audio.playing = False
+    app._dashboard_state.set_status("listening", "録音中")
+    assert app._is_speech_busy() is True

@@ -112,6 +112,7 @@ class DashboardServer:
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
+        sp_notice_seconds: float = 8.0,
         default_font_size: str = "medium",
         default_layout: str = "standard",
         location_provider: str = "local",
@@ -139,6 +140,7 @@ class DashboardServer:
         self._upload_max_bytes = upload_max_bytes
         self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
+        self._sp_notice_seconds = sp_notice_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
         self._default_layout = _normalize_layout(default_layout)
         self._location_provider = location_provider
@@ -186,6 +188,7 @@ class DashboardServer:
             self._event_handler,
             self._terminal_handler,
             self._config_path,
+            sp_notice_seconds=self._sp_notice_seconds,
         )
         context: ssl.SSLContext | None = None
         if self._tls.is_enabled:
@@ -236,6 +239,7 @@ def _create_handler(
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     terminal_handler: Any | None = None,
     config_path: Path = Path("config.yaml"),
+    sp_notice_seconds: float = 8.0,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -512,6 +516,7 @@ def _create_handler(
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_SP_NOTICE_SECONDS__", json.dumps(sp_notice_seconds))
             html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
             html_text = html_text.replace("__ARGOS_DASHBOARD_LAYOUT__", json.dumps(layout))
             html = html_text.encode("utf-8")
