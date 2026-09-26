@@ -725,3 +725,11 @@ def test_audio_yield_defaults_to_disabled(monkeypatch):
 
     assert settings.audio_yield_to_apps == ()
     assert (settings.audio_yield_release_seconds, settings.audio_yield_max_hold_seconds) == (0.6, 20.0)
+
+
+def test_load_dashboard_sp_notice_seconds(monkeypatch):
+    """SP表示で通知欄を自動で開く秒数を読み込む。未設定は8秒。"""
+    monkeypatch.delenv("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", raising=False)
+    assert load_settings().dashboard_sp_notice_seconds == 8.0
+    monkeypatch.setenv("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "15")
+    assert load_settings().dashboard_sp_notice_seconds == 15.0

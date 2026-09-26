@@ -982,18 +982,27 @@
     }
     .sp-notification-count {
       position: absolute;
-      top: 2px;
-      right: 2px;
-      min-width: 17px;
-      height: 17px;
-      padding: 0 4px;
-      border-radius: 8px;
+      top: -7px;
+      right: -7px;
+      min-width: 28px;
+      height: 28px;
+      padding: 0 7px;
+      border-radius: 14px;
       background: #e63946;
+      box-shadow: 0 0 0 3px #0b1117, 0 0 14px rgba(230, 57, 70, 0.8);
       color: #fff;
-      font-size: 10px;
+      font-size: 17px;
       font-weight: 800;
-      line-height: 17px;
+      line-height: 28px;
       text-align: center;
+      animation: sp-notification-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes sp-notification-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.18); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .sp-notification-count { animation: none; }
     }
     .sp-notification-count[hidden] { display: none; }
     body[data-layout="sp"] .dashboard {
@@ -1254,6 +1263,7 @@
 
   <script src="/static/browser_audio.js"></script>
   <script src="/static/message_text.js"></script>
+  <script src="/static/sp_notice_popup.js"></script>
   <script>
     const messages = document.getElementById("messages");
     const textComposer = document.getElementById("text-composer");
@@ -1354,6 +1364,13 @@
     });
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
     let latestNotifications = [];
+    // SP表示では、新しい通知が来たら通知欄を数秒だけ自動で開く。バッジだけでは小さくて気づけないため。
+    const spNoticePopup = new ArgosSpNoticePopup.NoticePopup({
+      seconds: Number(__ARGOS_DASHBOARD_SP_NOTICE_SECONDS__),
+      isOpen: () => document.body.classList.contains("sp-right-open"),
+      open: () => setSpDrawer("right"),
+      close: () => setSpDrawer(""),
+    });
     
     // スロットごとの表示キャッシュ
     let prevSlotsState = {
@@ -1689,6 +1706,12 @@
           ${item.image_url ? `<img class="notice-image" src="${escapeHtml(item.image_url)}" alt="">` : ""}
         </article>`).join("") : `<div class="empty">新しい通知はありません</div>`;
         previousNotifications = nextNotifications;
+      }
+      // 一覧の描画が済んでから、新しい通知があれば通知欄を自動で開く。
+      if (dashboardLayout === "sp") {
+        spNoticePopup.update(state.notifications);
+        // 通知欄を開いている間に届いた通知は、見えているので既読にする。
+        if (document.body.classList.contains("sp-right-open")) markSpNotificationsSeen();
       }
     }
     function extractPercent(str) {
@@ -2197,8 +2220,18 @@
       spStatusButton.setAttribute("aria-expanded", isPinned ? "true" : "false");
       localStorage.setItem(spPinnedStorageKey, isPinned ? "true" : "false");
     });
-    spNotificationsButton.addEventListener("click", () => setSpDrawer("right"));
-    spDrawerBackdrop.addEventListener("click", () => setSpDrawer(""));
+    // 利用者が通知欄を操作したら、自動では閉じずに開いたままにする。
+    spNotificationsButton.addEventListener("click", () => {
+      spNoticePopup.takeOver();
+      setSpDrawer("right");
+    });
+    spDrawerBackdrop.addEventListener("click", () => {
+      spNoticePopup.takeOver();
+      setSpDrawer("");
+    });
+    ["pointerdown", "touchstart", "wheel"].forEach(eventName => {
+      document.getElementById("slot-right").addEventListener(eventName, () => spNoticePopup.takeOver(), {passive: true});
+    });
 
     if (layoutSwitchStandard) {
       layoutSwitchStandard.addEventListener("click", () => {

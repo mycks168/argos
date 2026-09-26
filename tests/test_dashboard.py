@@ -1141,3 +1141,42 @@ def test_dashboard_root_layout_query_grid_redirects():
         connection.close()
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize("seconds, expected", [(None, "8.0"), (12.5, "12.5"), (0, "0")])
+def test_dashboard_injects_sp_notice_seconds(seconds, expected):
+    """SP表示で通知欄を自動で開く秒数を、設定値のまま画面へ埋め込む（未指定は8秒、0は無効）。"""
+    kwargs = {} if seconds is None else {"sp_notice_seconds": seconds}
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", **kwargs)
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert f"seconds: Number({expected})" in html
+    assert "__ARGOS_" not in html
+
+
+def test_dashboard_sp_notice_popup_is_wired_only_for_sp_layout():
+    """通知欄の自動表示は、SP表示のときだけ呼び出し、利用者の操作で自動では閉じなくする。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/static/sp_notice_popup.js", timeout=2) as response:
+            assert response.headers["Content-Type"].startswith(("text/javascript", "application/javascript"))
+            script = response.read().decode("utf-8")
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert "class NoticePopup" in script and "function shouldPopup" in script
+    assert '<script src="/static/sp_notice_popup.js"></script>' in html
+    # 一覧の描画が済んでから開く（描画より前に例外が出ても、一覧が更新されないままにならないように）。
+    assert html.index("previousNotifications = nextNotifications;") < html.index("spNoticePopup.update(state.notifications);")
+    assert 'if (dashboardLayout === "sp") {\n        spNoticePopup.update(state.notifications);' in html
+    assert "spNoticePopup.takeOver();" in html
+    assert 'document.getElementById("slot-right").addEventListener(eventName' in html
+    # バッジは大きく、動きを減らす設定では止める。
+    assert "min-width: 28px" in html and "sp-notification-pulse" in html
+    assert "prefers-reduced-motion: reduce" in html

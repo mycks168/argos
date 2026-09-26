@@ -188,3 +188,11 @@ def test_audio_yield_settings_round_trip(tmp_path):
     rewritten = tmp_path / "rewritten.yaml"
     write_yaml_from_environment(values, rewritten)
     assert yaml.safe_load(rewritten.read_text(encoding="utf-8"))["audio"]["yield_to_apps"] == ["Waydroid", "Other"]
+
+
+def test_dashboard_sp_notice_seconds_from_yaml(tmp_path):
+    """dashboard.sp_notice_seconds が既存の設定名へ変換される。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("dashboard:\n  sp_notice_seconds: 12\n", encoding="utf-8")
+
+    assert load_yaml_environment(path)["ARGOS_DASHBOARD_SP_NOTICE_SECONDS"] == "12"
