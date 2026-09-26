@@ -31,6 +31,13 @@ test("ARGOSの通常の通知は対象外、外部と優先度が高いものは
   assert.equal(shouldPopup(null), true);
 });
 
+test("別のスロットの応答完了は、ARGOS自身の通知でも対象", () => {
+  assert.equal(shouldPopup({source: "ARGOS", priority: "normal", title: "Claude 応答完了"}), true);
+  assert.equal(shouldPopup({source: "ARGOS", priority: "normal", title: "Codex 端末応答完了"}), true);
+  assert.equal(shouldPopup({source: "ARGOS", priority: "normal", title: "応答完了のお知らせ"}), false);
+  assert.equal(shouldPopup({source: "Slack", priority: "normal", title: "応答完了"}), true);
+});
+
 test("最初の一覧では開かず、新しい通知が来たら開く", () => {
   const panel = createPanel();
   assert.equal(panel.popup.update([notice("1"), notice("2")]), 0);

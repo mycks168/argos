@@ -4,12 +4,14 @@
   /**
    * 通知を自動で見せる対象か判定する。
    * ARGOS自身の通常の通知（音声入力の開始やミュートなど）は頻繁に出るので対象外にする。
-   * 外部から来た通知と、優先度が高いもの（内部エラーを含む）は対象にする。
+   * 外部から来た通知と、優先度が高いもの（内部エラーを含む）、別のスロットの応答完了は対象にする。
    */
   function shouldPopup(notice) {
     const source = String(notice?.source ?? "").trim().toUpperCase();
     const priority = String(notice?.priority ?? "normal").trim().toLowerCase();
-    return !(source === "ARGOS" && priority !== "high");
+    // 別のスロットで応答が終わった通知は、ARGOS自身の通知でも見せる（そのスロットの応答は、切り替えるまで声に出ないため）。
+    const responseReady = source === "ARGOS" && String(notice?.title ?? "").trim().endsWith("応答完了");
+    return !(source === "ARGOS" && priority !== "high") || responseReady;
   }
 
   /**

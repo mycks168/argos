@@ -147,3 +147,35 @@ def test_error_tone_is_a_short_valid_wav():
         assert 0.3 < wav_file.getnframes() / 16000 < 0.7
         samples = wav_file.readframes(wav_file.getnframes())
     assert any(samples)
+
+
+@pytest.mark.parametrize(
+    "title, spoken",
+    [("Claude 応答完了", "Claudeの応答が終わったよ。"), ("Codex 端末応答完了", "Codex 端末の応答が終わったよ。"), ("応答完了", "応答が終わったよ。")],
+)
+def test_response_ready_of_another_slot_is_spoken(title, spoken):
+    """別のスロットで応答が終わったことは、ARGOS自身の通知でも、声で知らせる。"""
+    plan = build_plan({"id": "n1", "title": title, "text": "スロットを切り替えると読み上げます。", "source": "ARGOS", "priority": "normal"})
+    assert plan == SpeechPlan(key="response:n1", text=spoken, is_error=False)
+    assert should_speak({"title": title, "source": "ARGOS", "priority": "normal"}) is True
+
+
+def test_response_ready_is_announced_every_time():
+    """応答完了は、続けて届いても、通知ごとに別のkeyになり、読み上げが抑制されない。"""
+    first = build_plan({"id": "a", "title": "Claude 応答完了", "source": "ARGOS"})
+    second = build_plan({"id": "b", "title": "Claude 応答完了", "source": "ARGOS"})
+    assert first.key != second.key
+    assert build_plan({"title": "Claude 応答完了", "source": "ARGOS", "created_at": "t1"}).key == "response:t1"
+    assert build_plan({"title": "Claude 応答完了", "source": "ARGOS"}).key == "response:Claude 応答完了"
+
+
+@pytest.mark.parametrize("title", ["音声入力", "ミュート", "応答完了のお知らせ", "Claude 応答完了しました"])
+def test_other_argos_notices_with_similar_titles_stay_silent(title):
+    """応答完了で終わらない、ARGOS自身の通知は、読み上げない。"""
+    assert build_plan({"title": title, "source": "ARGOS", "priority": "normal"}) is None
+
+
+def test_response_ready_from_other_source_is_a_normal_notice():
+    """発信元がARGOS以外なら、題名が応答完了でも、通常の外部通知として読む。"""
+    plan = build_plan({"title": "応答完了", "text": "本文", "source": "Slack", "priority": "normal"})
+    assert plan.is_error is False and plan.text.startswith("Slackから通知だよ。")
