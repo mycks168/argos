@@ -2351,6 +2351,16 @@ def test_notice_speaker_is_registered_and_gets_notifications(monkeypatch):
     assert len(texts) == 2 and texts[0].startswith("Slackから通知だよ。") and texts[1] == "音声を認識できなかったよ。"
 
 
+def test_response_ready_notice_of_another_slot_is_spoken(monkeypatch):
+    """別のスロットで応答が終わった通知（ARGOS自身の通知）は、声でも知らせる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+
+    app._dashboard_state.add_notification("Claude 応答完了", "スロットを切り替えると読み上げます。", source="ARGOS")
+
+    assert [plan.text for plan in list(app._notice_speaker._queue.queue)] == ["Claudeの応答が終わったよ。"]
+
+
 def test_notice_speaker_is_disabled_in_dry_run_and_by_setting(monkeypatch):
     """dry-runと、設定で無効にしたときは、読み上げない。"""
     _patch_app(monkeypatch)

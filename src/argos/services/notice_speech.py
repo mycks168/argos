@@ -28,6 +28,8 @@ ERROR_PHRASES: dict[str, str] = {
 }
 
 ERROR_TITLE_SUFFIX = "エラー"
+# 別のスロットで応答が終わったときの通知の題名の末尾（例: 「Claude 応答完了」「Codex 端末応答完了」）。
+RESPONSE_READY_SUFFIX = "応答完了"
 _URL_PATTERN = re.compile(r"https?://\S+")
 
 
@@ -40,16 +42,26 @@ class SpeechPlan:
     is_error: bool
 
 
+def is_response_ready(notice: dict[str, Any]) -> bool:
+    """別のスロットで応答が終わったことを知らせる、ARGOS自身の通知か判定する。
+
+    そのスロットの応答は、切り替えるまで声に出ないので、終わったことは声でも知らせる。
+    """
+    return str(notice.get("source", "")).strip().upper() == "ARGOS" and str(notice.get("title", "")).strip().endswith(
+        RESPONSE_READY_SUFFIX
+    )
+
+
 def should_speak(notice: dict[str, Any]) -> bool:
     """読み上げる対象の通知か判定する。
 
     ダッシュボードで通知欄を自動で開く対象と同じ基準にする。ARGOS自身の通常の通知
     （音声入力の開始、ミュートなど）は頻繁に出るので読まない。外部の通知と、優先度が
-    高い通知は対象。
+    高い通知は対象。ARGOS自身の通知でも、別のスロットの応答完了は対象にする。
     """
     source = str(notice.get("source", "")).strip().upper()
     priority = str(notice.get("priority", "normal")).strip().lower()
-    return not (source == "ARGOS" and priority != "high")
+    return not (source == "ARGOS" and priority != "high") or is_response_ready(notice)
 
 
 def _is_error(notice: dict[str, Any]) -> bool:
@@ -71,6 +83,11 @@ def build_plan(notice: dict[str, Any], max_chars: int = 60) -> SpeechPlan | None
         return None
     source = str(notice.get("source", "")).strip()
     title = str(notice.get("title", "")).strip()
+    if is_response_ready(notice):
+        # 題名は「<スロット名> 応答完了」。毎回知らせるので、通知ごとに別のkeyにする。
+        slot = title.removesuffix(RESPONSE_READY_SUFFIX).strip()
+        unique = str(notice.get("id") or notice.get("created_at") or title)
+        return SpeechPlan(key=f"response:{unique}", text=f"{slot}の応答が終わったよ。" if slot else "応答が終わったよ。", is_error=False)
     if _is_error(notice):
         # 題名は「<発信元> エラー」。決まった言葉がある発信元だけ読み上げる。
         phrase = ERROR_PHRASES.get(source)

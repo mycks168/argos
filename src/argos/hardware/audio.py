@@ -464,6 +464,10 @@ class AudioPlayer:
         self._hold_lock = threading.Lock()
         self._hold_timer: threading.Timer | None = None
         self._max_hold_seconds = 20.0
+        # 複数のスレッド（応答・状態案内・通知）が同時に再生しようとしても、声が混ざらないよう順番に再生する。
+        # cancel()のたびに世代を進め、順番待ちの間に中断された再生は、鳴らさずに捨てる。
+        self._play_lock = threading.Lock()
+        self._cancel_epoch = 0
 
     @property
     def volume(self) -> int:
@@ -539,7 +543,20 @@ class AudioPlayer:
         self._playable.wait()
 
     def play_wav(self, wav_data: bytes) -> None:
-        """WAV データを同期的に再生する。"""
+        """WAV データを同期的に再生する。
+
+        すでに別の音声を再生中なら、終わるまで待ってから再生する（声を重ねない）。
+        待っている間にcancel()が呼ばれたら、再生せずに戻る。
+        """
+        epoch = self._cancel_epoch
+        with self._play_lock:
+            if epoch != self._cancel_epoch:
+                log.info("順番待ちの間に中断されたため、音声を再生しません")
+                return
+            self._play_wav_locked(wav_data)
+
+    def _play_wav_locked(self, wav_data: bytes) -> None:
+        """再生の順番を得たあとの、実際の再生処理。"""
         self._wait_until_playable()
         self._set_volume_once()
         if self._play_wav_streaming(wav_data):
@@ -558,7 +575,8 @@ class AudioPlayer:
             self._proc = None
 
     def cancel(self) -> None:
-        """再生中の aplay を停止する。"""
+        """再生中の aplay を停止し、順番待ちの再生も取り消す。"""
+        self._cancel_epoch += 1
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
