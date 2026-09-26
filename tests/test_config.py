@@ -733,3 +733,20 @@ def test_load_dashboard_sp_notice_seconds(monkeypatch):
     assert load_settings().dashboard_sp_notice_seconds == 8.0
     monkeypatch.setenv("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "15")
     assert load_settings().dashboard_sp_notice_seconds == 15.0
+
+
+def test_load_notice_speech_settings(monkeypatch):
+    """通知の読み上げの設定を読み込む。既定は、有効・60文字・60秒間隔。"""
+    for name in ("ARGOS_NOTICE_SPEAK", "ARGOS_NOTICE_SPEAK_MAX_CHARS", "ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "ARGOS_NOTICE_PHRASE_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert (settings.notice_speak_enabled, settings.notice_speak_max_chars, settings.notice_speak_interval_seconds) == (True, 60, 60.0)
+    assert settings.notice_phrase_dir == "~/.local/state/argos/notice-phrases"
+
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK", "false")
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK_MAX_CHARS", "30")
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("ARGOS_NOTICE_PHRASE_DIR", "/tmp/phrases")
+    settings = load_settings()
+    assert (settings.notice_speak_enabled, settings.notice_speak_max_chars, settings.notice_speak_interval_seconds) == (False, 30, 10.0)
+    assert settings.notice_phrase_dir == "/tmp/phrases"

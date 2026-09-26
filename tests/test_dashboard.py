@@ -1180,3 +1180,48 @@ def test_dashboard_sp_notice_popup_is_wired_only_for_sp_layout():
     # バッジは大きく、動きを減らす設定では止める。
     assert "min-width: 28px" in html and "sp-notification-pulse" in html
     assert "prefers-reduced-motion: reduce" in html
+
+
+def test_notification_listener_receives_external_and_error_notifications():
+    """通知が追加されたら、登録した関数が、追加された通知のコピーを受け取る。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "3時から", source="Slack", priority="normal")
+    error_id = state.add_error_notification("文字起こし", "失敗")
+    received[0]["title"] = "書き換えても本体に影響しない"
+
+    assert [item["id"] for item in received] == [notification_id, error_id]
+    assert received[1]["priority"] == "high" and received[1]["title"] == "文字起こし エラー"
+    assert state.snapshot()["notifications"][0]["title"] == "会議"
+
+
+def test_duplicate_error_notification_is_not_announced_twice():
+    """直前と同じ内容のエラーは、追加されないので、受け取る関数も呼ばれない。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    state.add_error_notification("音声合成", "同じ")
+    state.add_error_notification("音声合成", "同じ")
+
+    assert len(received) == 1
+
+
+def test_notification_listener_error_does_not_break_adding():
+    """受け取る関数が例外を出しても、通知は追加され、ほかの関数も呼ばれる。"""
+    state = DashboardState()
+    received = []
+
+    def broken(_notice):
+        """失敗する受け取り先。"""
+        raise RuntimeError("失敗")
+
+    state.add_notification_listener(broken)
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "本文")
+
+    assert [item["id"] for item in received] == [notification_id]
+    assert len(state.snapshot()["notifications"]) == 1

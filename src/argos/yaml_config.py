@@ -43,6 +43,7 @@ SECTION_PREFIXES = {
     "kokoro": "ARGOS_KOKORO_",
     "whisper": "ARGOS_WHISPER_",
     "acknowledgement": "ARGOS_ACKNOWLEDGEMENT_",
+    "notice": "ARGOS_NOTICE_",
     "window_layout": "ARGOS_WINDOW_LAYOUT_",
 }
 

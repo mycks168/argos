@@ -71,7 +71,7 @@ location:
 }
 ```
 
-`STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。
+`STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。faster-whisper が未導入（`uv sync --extra whisper` をしていない）なら、試さずに飛ばし、stt-gateway の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`文字起こし` エラー）にする。フォールバックが使えないのに、`stt-gateway` エラーと `faster-whisper が未導入です` エラーを2つ並べない。
 文字起こし結果が空文字だった場合は発話をエージェントへ送らず、ログに録音ファイルパスとRMSを出し、ダッシュボード通知に「音声を認識できませんでした。」を表示する。
 
 faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_WHISPER_COMPUTE_TYPE` で調整する。既定モデルは `small`。faster-whisper を使う環境では `uv sync --extra whisper` を実行する。
@@ -113,7 +113,7 @@ VOICEVOX Engine は次の順で呼び出す。
 
 `VOICEVOX_ACCEPT_OPUS=true` のときは、`synthesis` のリクエストに `Accept: audio/opus` を付ける。素の VOICEVOX Engine は Opus 非対応のため、これは Opus 対応ラッパーを前提とする（ラッパーが `Accept` を見て Ogg Opus を返す）。レスポンスの `Content-Type` に `opus` を含む場合は ffmpeg で WAV へデコードしてから再生へ渡す。WAV が返った場合はそのまま再生するため、既定（`false`）や非対応エンジンでもフォールバックが効く。
 
-`VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
+`VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。Kokoro が未導入（`uv sync --extra kokoro` をしていない）なら、試さずに飛ばし、VOICEVOX の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`音声合成` エラー）にする。この場合は声を作れないので、下の「通知の読み上げ」の保存音声か警告音で知らせる。
 
 Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_ID`、`ARGOS_KOKORO_SAMPLE_RATE` で調整する。Kokoro を使う環境では `uv sync --extra kokoro` を実行し、必要に応じて `uv run python -m unidic download` で日本語辞書を用意する。
 
@@ -507,6 +507,11 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
   - 音量: ARGOSのTTSは従来`aplay`でHDMIへ直出し＝PipeWire音量をバイパスして大音量だったが、`ec_sink`経由にするとTTS音量がPipeWireの既定sink音量に従う。そのため既定sink音量を100%に固定し、音量調整はARGOS内部のvolume設定で行う
   - 導入手順: `scripts/setup-echo-cancel.sh` が (1) PipeWire永続ドロップイン（既定入出力に追従する`ec-source`/`ec-sink`ノード）、(2) `/etc/asound.conf`のブリッジPCM`ec_source`/`ec_sink`（sudo要）、(3) WirePlumberドロップイン（サスペンド無効化＋HDMI headroom増）、(4) 既定sink音量100%固定 を書き込む。`default`は変更しないため通常運用には影響しない。依存が不足していれば案内して中断し、`--install-deps`で`pipewire-alsa`と`libspa-0.2-modules`をapt導入できる。反映（`systemctl --user restart pipewire pipewire-pulse wireplumber`）後は`aplay -D ec_sink ...`で疎通確認してから、`config.yaml`の`audio.output_device: ec_sink`、`audio.input_devices: [ec_source]`、`wakeword.bargein_enabled: true`を設定する。デバイス名は環境で変わるためPipeWireの既定デバイスに紐付けて移植性を確保しており、Raspberry Pi OS / Ubuntu 共通。これらの設定はファイルとして永続するため再起動後も有効。車載やデスクトップUbuntuなど環境が変わる場合は同条件でエコー抑制を再計測する
   - 元に戻す: `scripts/setup-echo-cancel.sh --revert` でPipeWireドロップイン、`/etc/asound.conf`のARGOSブロック、WirePlumberドロップインを削除する（`default`や既存`config.yaml`、既定sink音量には触れない）。反映は `systemctl --user restart pipewire pipewire-pulse wireplumber`。`config.yaml`側で入出力デバイスや`wakeword.bargein_enabled`を変更していた場合はそちらも戻す
+- 通知の読み上げ: 運転中など画面を見られないときのため、通知を声でも知らせる（`notice.speak`、`ARGOS_NOTICE_SPEAK`、既定は有効。dry-runでは無効）。`DashboardState.add_notification_listener` に登録した `NoticeSpeaker`（`argos.core.notice_speaker`）が、追加された通知を順番に読み上げる。
+  - 対象: ダッシュボードのSP表示で通知欄を自動で開く対象と同じ基準（`argos.services.notice_speech.should_speak`）。外部の通知と優先度が高い通知が対象で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は読まない。
+  - 内容: 外部の通知は「<発信元>から通知だよ。<題名>。<本文>」の形で、URLと改行を除き、本文は `notice.speak_max_chars`（既定60文字）で切る。内部エラーは、生のエラー文を読まず、決まった言葉（`ERROR_PHRASES`: `音声合成`=「声を作れなかったよ。」、`音声認識`・`文字起こし`=「音声を認識できなかったよ。」、`音声再生`=「音声を再生できなかったよ。」）だけを読む。VOICEVOX・stt-gatewayの失敗（代替で続く）と、エージェントの失敗（別に読み上げる）は、二重に知らせないため読まない。
+  - 重ならない: 発話中・再生中・録音中・文字起こし中は終わるまで待つ（最大30秒）。ミュート中は読まない。ロック中（本人確認前）は、通知の中身を読まず、決まった言葉のエラーだけ読む。同じ内容は `notice.speak_interval_seconds`（既定60秒）以内に続けて読まない。順番待ちは最大5件で、あふれたら古いものを捨てる。ナビなど他アプリの音声が鳴っている間は、`audio.yield_to_apps` の仕組みで待つ。
+  - 音声合成が使えないとき: エラーの決まった言葉は、音声合成が使えるうちに、話者ごとに作って `notice.phrase_dir`（既定 `~/.local/state/argos/notice-phrases`）へ保存しておく（音声合成が使えない間は、5分おきに再挑戦する）。使えないときは、その保存音声を再生する。保存もなければ、下がる2音の警告音（`build_error_tone`）で知らせる。この保存先は、一般の音声キャッシュ（`tts_cache`。総量が上限を超えたら古い順に削除する）とは別で、上限や有効期限による自動削除がなく、利用者がディレクトリを消さない限り残る。エラーが長く起きなくても消えない。再生できない音声（壊れたファイル、WAVでないデータ、フレームが0のもの）は、保存もせず、保存済みでも未保存として扱い、音声合成が使えるときに作り直して置き換える。通常の通知も、声を作れなければ警告音にする。読み上げ用の合成の失敗は、エラー通知にしない（通知が通知を呼ぶ循環を防ぐ）。
 - 他アプリの音声への譲り合い: `audio.yield_to_apps`（`AUDIO_YIELD_TO_APPS`、カンマ区切り）にアプリ名（PipeWireの`application.name`。例: Waydroid）を指定すると、そのアプリの再生ストリーム（`Stream/Output/Audio`）が動いている間、ARGOSの発話を一時停止する。PipeWireのイベント（`pw-dump -m`）を監視スレッド（`argos.hardware.audio_priority.PriorityStreamWatcher`）で読み、動き始めたら`AudioPlayer.hold()`（再生中の`aplay`へSIGSTOPし、次の音声の再生は再開まで待つ）、止まって`AUDIO_YIELD_RELEASE_SECONDS`（既定0.6秒）たったら`AudioPlayer.release()`（SIGCONTで続きから再生）を呼ぶ。他アプリが止まらなくても、保留は`AUDIO_YIELD_MAX_HOLD_SECONDS`（既定20秒）で打ち切る。既定は空で監視しない。`pw-dump`がない環境やdry-runでは監視を組み込まない。保留中の`cancel()`は、停止中のプロセスへ先にSIGCONTを送ってから終了する。
 - 応答の読み上げが終わったら、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけ「追いかけ受付窓」を開き、ウェイクワードを言い直さなくても続けて話せるようにする。窓の中で発話（RMSが `SILENCE_RMS_THRESHOLD` 以上）を検知したら、ウェイクワード無しでそのまま録音・処理する。追いかけ受付の録音は呼びかけを含まないため、STTの呼びかけ必須判定（`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD`）と先頭呼びかけ除去はスキップする
 - 追いかけ受付は本人確認済みのときだけ開く。ロック中は従来どおりウェイクワードと本人確認を求める。窓を開いている間はダッシュボード状態を `followup`（継続受付中）にして画面を起こしたままにし、無音のまま窓が締め切られたら待機表示へ戻す。窓の中で発話に応答したら、その応答のあとに再び窓を開き、会話が続く限り連続で受け付ける。PTT押下時は窓を閉じる。自己音声対策のクールダウンは追いかけ受付には適用しない

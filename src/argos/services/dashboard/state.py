@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import uuid
 from collections import deque
+from collections.abc import Callable
 from copy import deepcopy
 from datetime import datetime
 from typing import Any
 
 from argos.services.response_text import strip_citations
+
+log = logging.getLogger(__name__)
 
 
 def _now_iso() -> str:
@@ -31,6 +35,8 @@ class DashboardState:
         }
         self._message_slots: dict[str, str] = {}
         self._notifications: deque[dict[str, Any]] = deque(maxlen=max_notifications)
+        # 通知が追加されたときに呼ぶ関数（読み上げなど）。ロックの外で呼ぶ。
+        self._notification_listeners: list[Callable[[dict[str, Any]], None]] = []
         self._subscribers: set[queue.Queue[int]] = set()
         self._revision = 0
         self._status = {"code": "ready", "label": "待機中", "updated_at": _now_iso()}
@@ -400,7 +406,24 @@ class DashboardState:
             if display == "center":
                 self._center_alert = {"active": True, **notice, "updated_at": _now_iso()}
             self._publish_locked()
+            announced = dict(notice)
+        self._notify_listeners(announced)
         return notification_id
+
+    def add_notification_listener(self, listener: Callable[[dict[str, Any]], None]) -> None:
+        """通知が追加されたときに呼ばれる関数を登録する。"""
+        with self._lock:
+            self._notification_listeners.append(listener)
+
+    def _notify_listeners(self, notice: dict[str, Any]) -> None:
+        """登録済みの関数へ、追加された通知を渡す。関数の例外で通知の追加は失敗させない。"""
+        with self._lock:
+            listeners = list(self._notification_listeners)
+        for listener in listeners:
+            try:
+                listener(dict(notice))
+            except Exception:  # noqa: BLE001 - 読み上げなどの失敗で、通知の追加を失敗させない
+                log.exception("通知の追加を受け取る処理に失敗しました")
 
     def clear_center_alert(self) -> None:
         """画面中央の大きなアラート表示を消去する。"""
@@ -417,21 +440,22 @@ class DashboardState:
                 if latest["title"] == title and latest["text"] == text and latest["priority"] == "high":
                     return str(latest["id"])
             notification_id = uuid.uuid4().hex
-            self._notifications.append(
-                {
-                    "id": notification_id,
-                    "title": title,
-                    "text": text,
-                    "source": source,
-                    "priority": "high",
-                    "image_url": "",
-                    "link_url": "",
-                    "display": "toast",
-                    "duration_seconds": 0.0,
-                    "created_at": _now_iso(),
-                }
-            )
+            notice = {
+                "id": notification_id,
+                "title": title,
+                "text": text,
+                "source": source,
+                "priority": "high",
+                "image_url": "",
+                "link_url": "",
+                "display": "toast",
+                "duration_seconds": 0.0,
+                "created_at": _now_iso(),
+            }
+            self._notifications.append(notice)
             self._publish_locked()
+            announced = dict(notice)
+        self._notify_listeners(announced)
         return notification_id
 
     def clear_notifications(self) -> None:
