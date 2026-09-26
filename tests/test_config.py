@@ -545,7 +545,10 @@ def test_load_agent_progress_settings(monkeypatch):
 
 def test_load_agent_progress_settings_falls_back_to_codex_env(monkeypatch):
     """旧 ARGOS_CODEX_PROGRESS_* も後方互換で読み込む。"""
+    # 新しい名前が設定されていると旧名より優先される。実機のconfig.yamlが読み込まれていても、
+    # 結果が変わらないよう、新しい名前を消してから確かめる。
     monkeypatch.delenv("ARGOS_AGENT_PROGRESS_VOICE", raising=False)
+    monkeypatch.delenv("ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS", raising=False)
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "9")
 
