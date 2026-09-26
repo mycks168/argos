@@ -617,3 +617,25 @@ def test_audio_player_cancel_when_idle_does_not_block_next_playback(monkeypatch)
     player.cancel()
     player.play_wav(b"voice")
     assert len(procs) == 1 and procs[0].input == b"voice"
+
+
+def test_audio_player_play_wav_reports_completion(monkeypatch):
+    """最後まで再生できたらTrue、順番待ちの間や再生中に中断されたらFalseを返す。"""
+    proc = FakeProc()
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: proc)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    assert player.play_wav(b"voice") is True
+
+    # 再生の途中でcancel()された（世代が進んだ）場合。
+    original = proc.communicate
+
+    def cancel_while_playing(input=None, timeout=None):
+        """再生中に、利用者の発話などで中断された状態を作る。"""
+        player.cancel()
+        return original(input=input, timeout=timeout)
+
+    proc.communicate = cancel_while_playing
+    assert player.play_wav(b"voice") is False
+    proc.communicate = original
+    assert player.play_wav(b"voice") is True

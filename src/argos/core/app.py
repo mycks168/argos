@@ -27,7 +27,7 @@ from argos.config import (
     resolve_agent_slot_model,
 )
 from argos.core.auth_coordinator import AuthCoordinator
-from argos.core.notice_speaker import BUSY_STATUS_CODES, NoticeSpeaker
+from argos.core.notice_speaker import BUSY_STATUS_CODES, CONVERSATION_STATUS_CODES, NoticeSpeaker
 from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
@@ -321,6 +321,7 @@ class ArgosApp:
             current_speaker=self._speech.current_speaker_id,
             is_muted=self._speech.is_muted,
             is_busy=self._is_speech_busy,
+            is_conversation_active=self._is_conversation_active,
             is_locked=self._is_auth_locked,
             max_chars=settings.notice_speak_max_chars,
             min_interval=settings.notice_speak_interval_seconds,
@@ -1670,9 +1671,17 @@ class ArgosApp:
         return self._auth_coord.is_locked()
 
     def _is_speech_busy(self) -> bool:
-        """発話・録音・文字起こしの最中なら、通知の読み上げを待たせるためTrueを返す。"""
+        """発話・録音・文字起こし・継続受付・本人確認の最中なら、通知の読み上げを待たせるためTrueを返す。
+
+        ARGOSが話している最中かは、画面の状態表示だけでなく、話す処理自身の数え上げでも確かめる
+        （別のスロットの処理が状態表示を書き換えても、応答の文と文のすき間に、割り込まないため）。
+        """
         playing = bool(getattr(self._audio, "is_playing", False))
-        return playing or self._dashboard_state.status_code() in BUSY_STATUS_CODES
+        return playing or self._speech.is_active() or self._dashboard_state.status_code() in BUSY_STATUS_CODES
+
+    def _is_conversation_active(self) -> bool:
+        """いまの会話が続いているか。エージェントが作業中（考え中）の無音の時間も含む。"""
+        return self._is_speech_busy() or self._dashboard_state.status_code() in CONVERSATION_STATUS_CODES
 
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""

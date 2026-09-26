@@ -542,18 +542,20 @@ class AudioPlayer:
         """保留中なら再開まで待つ。上限はhold()のタイマーが保証する。"""
         self._playable.wait()
 
-    def play_wav(self, wav_data: bytes) -> None:
-        """WAV データを同期的に再生する。
+    def play_wav(self, wav_data: bytes) -> bool:
+        """WAV データを同期的に再生し、最後まで再生できたらTrueを返す。
 
         すでに別の音声を再生中なら、終わるまで待ってから再生する（声を重ねない）。
-        待っている間にcancel()が呼ばれたら、再生せずに戻る。
+        順番待ちの間、または再生中にcancel()が呼ばれたら、再生せず（または途中で止まり）、
+        Falseを返す。
         """
         epoch = self._cancel_epoch
         with self._play_lock:
             if epoch != self._cancel_epoch:
                 log.info("順番待ちの間に中断されたため、音声を再生しません")
-                return
+                return False
             self._play_wav_locked(wav_data)
+            return epoch == self._cancel_epoch
 
     def _play_wav_locked(self, wav_data: bytes) -> None:
         """再生の順番を得たあとの、実際の再生処理。"""

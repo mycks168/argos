@@ -2381,3 +2381,100 @@ def test_speech_busy_reflects_playback_and_status(monkeypatch):
     app._audio.playing = False
     app._dashboard_state.set_status("listening", "録音中")
     assert app._is_speech_busy() is True
+
+
+def test_speech_activity_is_counted_while_a_response_is_being_spoken(monkeypatch):
+    """応答を読み上げている間は、画面の状態表示によらず、話している最中として数える。終わったら、例外でも戻る。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    assert app._speech.is_active() is False
+    seen = []
+
+    def deltas():
+        """読み上げの途中で、話している最中かを記録する。"""
+        seen.append(app._speech.is_active())
+        yield "返答。"
+        seen.append(app._speech.is_active())
+
+    app._speech.speak_response_stream(deltas())
+    assert seen == [True, True] and app._speech.is_active() is False
+
+    def broken():
+        """途中で失敗する応答。"""
+        yield "返答。"
+        raise RuntimeError("失敗")
+
+    with pytest.raises(RuntimeError):
+        app._speech.speak_response_stream(broken())
+    assert app._speech.is_active() is False
+
+
+def test_speech_activity_is_counted_while_a_status_is_being_spoken(monkeypatch):
+    """状態案内を読み上げている間も、話している最中として数える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    seen = []
+    app._audio.play_wav = lambda wav: seen.append(app._speech.is_active())
+
+    app._speech.speak_status("処理中だよ")
+
+    assert seen == [True] and app._speech.is_active() is False
+
+
+def test_notice_audio_uses_echo_defense_and_reports_interruption(monkeypatch):
+    """通知の声も、自分の声をマイクが拾わない対策（ウェイクワードの抑止と、終了後の一定時間の抑制）を行う。中断はFalseで知らせる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    flags = []
+
+    def play(wav):
+        """再生中の、ウェイクワード抑止の状態を記録する。"""
+        flags.append(app._speech.is_speaking_wakeword())
+        return False if wav == b"cut" else None
+
+    app._audio.play_wav = play
+    assert app._speech.is_tts_cooldown_active() is False
+
+    assert app._speech.play_notice_audio(b"voice", "アルゴスから通知だよ。") is True
+    assert flags == [True] and app._speech.is_speaking_wakeword() is False
+    assert app._speech.play_notice_audio(b"voice", "Slackから通知だよ。") is True
+    assert flags[-1] is False
+    assert app._speech.play_notice_audio(b"cut", "") is False
+    assert app._speech.is_tts_cooldown_active() is True
+
+
+@pytest.mark.parametrize("status", ["speaking", "listening", "auth_listening", "authenticating", "transcribing", "followup"])
+def test_notice_waits_while_user_or_argos_is_talking(monkeypatch, status):
+    """録音・文字起こし・継続受付・本人確認・発話の最中は、通知の読み上げを待たせる（考え中は待たせない）。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._dashboard_state.set_status(status, "状態")
+    assert app._is_speech_busy() is True and app._is_conversation_active() is True
+
+
+def test_completion_notice_also_waits_while_the_agent_is_thinking(monkeypatch):
+    """完了通知は、いまの会話が終わるまで待つため、エージェントが考え中の無音の間も待つ。通常の通知は待たない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._dashboard_state.set_status("thinking", "考え中")
+    assert app._is_speech_busy() is False and app._is_conversation_active() is True
+    app._dashboard_state.set_status("ready", "待機中")
+    assert app._is_speech_busy() is False and app._is_conversation_active() is False
+
+
+def test_notice_waits_while_a_response_is_spoken_even_if_status_shows_ready(monkeypatch):
+    """別スロットの処理が状態表示を「待機中」に戻しても、応答の読み上げ中は、通知を待たせる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._dashboard_state.set_status("ready", "待機中")
+    with app._speech._speaking_activity():
+        assert app._is_speech_busy() is True and app._is_conversation_active() is True
+    assert app._is_speech_busy() is False
+
+
+def test_notice_speaker_is_wired_with_conversation_and_echo_aware_playback(monkeypatch):
+    """通知の読み上げは、会話の状態と、自分の声への対策つきの再生を使う。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    assert app._notice_speaker._is_conversation_active == app._is_conversation_active
+    assert app._notice_speaker._play == app._speech.play_notice_audio
