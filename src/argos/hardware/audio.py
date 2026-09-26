@@ -458,6 +458,12 @@ class AudioPlayer:
         self._volume_lock = threading.Lock()
         self._volume_set = False
         self._proc: subprocess.Popen | None = None
+        # 他アプリの音声(ナビ案内など)を優先するための保留。Eventがセット中は再生してよい。
+        self._playable = threading.Event()
+        self._playable.set()
+        self._hold_lock = threading.Lock()
+        self._hold_timer: threading.Timer | None = None
+        self._max_hold_seconds = 20.0
 
     @property
     def volume(self) -> int:
@@ -480,8 +486,61 @@ class AudioPlayer:
         self._volume_set = True
         return applied
 
+    @property
+    def is_held(self) -> bool:
+        """他アプリの音声を優先して、再生を保留中ならTrueを返す。"""
+        return not self._playable.is_set()
+
+    def set_max_hold_seconds(self, seconds: float) -> None:
+        """保留の上限秒数を設定する。上限を過ぎたら、他アプリの再生中でも再開する。"""
+        self._max_hold_seconds = max(1.0, float(seconds))
+
+    def hold(self) -> None:
+        """再生を保留する。再生中の aplay は一時停止し、次の音声は再開まで始めない。
+
+        他アプリが鳴らし続けても発話が永久に止まらないよう、上限秒数で自動的に再開する。
+        """
+        with self._hold_lock:
+            if not self._playable.is_set():
+                return
+            self._playable.clear()
+            self._signal_proc(signal.SIGSTOP)
+            timer = threading.Timer(self._max_hold_seconds, self._release_after_limit)
+            timer.daemon = True
+            self._hold_timer = timer
+            timer.start()
+
+    def release(self) -> None:
+        """保留を解除し、一時停止していた再生を続ける。"""
+        with self._hold_lock:
+            timer, self._hold_timer = self._hold_timer, None
+            if timer is not None:
+                timer.cancel()
+            self._playable.set()
+            self._signal_proc(signal.SIGCONT)
+
+    def _release_after_limit(self) -> None:
+        """保留が上限秒数を超えたときに、発話を再開する。"""
+        log.warning("音声の保留が上限(%.0f秒)を超えたため、再開します", self._max_hold_seconds)
+        self.release()
+
+    def _signal_proc(self, sig: int) -> None:
+        """再生中の aplay があればシグナルを送る。終了済みなら何もしない。"""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.kill(proc.pid, sig)
+        except (OSError, AttributeError):
+            pass
+
+    def _wait_until_playable(self) -> None:
+        """保留中なら再開まで待つ。上限はhold()のタイマーが保証する。"""
+        self._playable.wait()
+
     def play_wav(self, wav_data: bytes) -> None:
         """WAV データを同期的に再生する。"""
+        self._wait_until_playable()
         self._set_volume_once()
         if self._play_wav_streaming(wav_data):
             return
@@ -503,6 +562,8 @@ class AudioPlayer:
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
+        # 一時停止中のプロセスはSIGTERMを受け取れないため、先に再開させる。
+        self._signal_proc(signal.SIGCONT)
         proc.terminate()
         try:
             proc.wait(timeout=1)
@@ -577,6 +638,7 @@ class AudioPlayer:
                     frames = source.readframes(2048)
                     if not frames:
                         break
+                    self._wait_until_playable()
                     current_volume = self.volume
                     proc.stdin.write(self._scale_pcm16_ramp(frames, previous_volume, current_volume, params.nchannels))
                     previous_volume = current_volume

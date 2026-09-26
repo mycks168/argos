@@ -701,3 +701,27 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.location_provider == "remote"
     assert settings.remote_location_url == "http://example.test/gps"
     assert settings.remote_location_timeout_seconds == 1.5
+
+
+def test_load_audio_yield_settings(monkeypatch):
+    """他アプリの再生中に発話を保留する設定を読み込む。"""
+    monkeypatch.setenv("AUDIO_YIELD_TO_APPS", "Waydroid, Other App")
+    monkeypatch.setenv("AUDIO_YIELD_RELEASE_SECONDS", "1.5")
+    monkeypatch.setenv("AUDIO_YIELD_MAX_HOLD_SECONDS", "30")
+
+    settings = load_settings()
+
+    assert settings.audio_yield_to_apps == ("Waydroid", "Other App")
+    assert settings.audio_yield_release_seconds == 1.5
+    assert settings.audio_yield_max_hold_seconds == 30.0
+
+
+def test_audio_yield_defaults_to_disabled(monkeypatch):
+    """既定では他アプリの監視をしない。"""
+    for name in ("AUDIO_YIELD_TO_APPS", "AUDIO_YIELD_RELEASE_SECONDS", "AUDIO_YIELD_MAX_HOLD_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = load_settings()
+
+    assert settings.audio_yield_to_apps == ()
+    assert (settings.audio_yield_release_seconds, settings.audio_yield_max_hold_seconds) == (0.6, 20.0)

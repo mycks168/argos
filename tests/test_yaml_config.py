@@ -174,3 +174,17 @@ def test_invalid_yaml_reports_configuration_error(tmp_path):
 
     with pytest.raises(ValueError, match="config.yaml"):
         load_yaml_environment(path)
+
+
+def test_audio_yield_settings_round_trip(tmp_path):
+    """他アプリの再生中に発話を保留する設定を、YAMLと環境変数名の間で往復できる。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("audio:\n  yield_to_apps:\n    - Waydroid\n    - Other\n  yield_release_seconds: 0.8\n", encoding="utf-8")
+
+    values = load_yaml_environment(path)
+
+    assert values["AUDIO_YIELD_TO_APPS"] == "Waydroid,Other"
+    assert values["AUDIO_YIELD_RELEASE_SECONDS"] == "0.8"
+    rewritten = tmp_path / "rewritten.yaml"
+    write_yaml_from_environment(values, rewritten)
+    assert yaml.safe_load(rewritten.read_text(encoding="utf-8"))["audio"]["yield_to_apps"] == ["Waydroid", "Other"]

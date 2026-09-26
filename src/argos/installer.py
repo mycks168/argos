@@ -23,6 +23,8 @@ from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 WINDOW_LAYOUT_SERVICE = "argos-window-layout"
 WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 WINDOW_LAYOUT_STYLE_KEY = "ARGOS_WINDOW_LAYOUT_STYLE"
+YIELD_TO_APPS_KEY = "AUDIO_YIELD_TO_APPS"
+WAYDROID_APP_NAME = "Waydroid"
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -419,6 +421,7 @@ def configure_config(
     _ask_bool(values, WINDOW_LAYOUT_KEY, "Waydroidと画面を並べて使う（Googleマップ、labwc専用）", true_value="maps", false_value="", input_func=input_func)
     if values.get(WINDOW_LAYOUT_KEY):
         _ask_layout_style(values, input_func=input_func)
+    _sync_waydroid_audio_priority(values)
     _ask_bool(values, "ARGOS_AGENT_RUNNER_URL", "Agent Runnerを使う", true_value="http://127.0.0.1:28765", false_value="", input_func=input_func)
     _ask_bool(values, "ARGOS_DASHBOARD_SSL", "ダッシュボードHTTPSを有効にする", input_func=input_func)
     slot_template = _prepare_unified_slots_for_configure(values)
@@ -684,6 +687,21 @@ def _ask_bool(
         values[key] = true_value
     elif answer in {"n", "no", "0", "false"}:
         values[key] = false_value
+
+
+def _sync_waydroid_audio_priority(values: dict[str, str]) -> None:
+    """Waydroidと並べて使うときは、ナビ音声と重ならないようARGOSの発話を保留する設定にする。
+
+    並べて使わない設定に変えたときは、この設定が入れたWaydroidだけを外し、
+    利用者が別に指定したアプリ名は残す。
+    """
+    apps = [name.strip() for name in values.get(YIELD_TO_APPS_KEY, "").split(",") if name.strip()]
+    if values.get(WINDOW_LAYOUT_KEY):
+        if WAYDROID_APP_NAME.lower() not in (name.lower() for name in apps):
+            apps.append(WAYDROID_APP_NAME)
+    else:
+        apps = [name for name in apps if name.lower() != WAYDROID_APP_NAME.lower()]
+    values[YIELD_TO_APPS_KEY] = ",".join(apps)
 
 
 def _ask_layout_style(values: dict[str, str], *, input_func: Callable[[str], str]) -> None:
