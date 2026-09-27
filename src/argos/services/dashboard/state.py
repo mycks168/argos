@@ -381,12 +381,16 @@ class DashboardState:
         link_url: str = "",
         display: str = "toast",
         duration_seconds: float = 0.0,
+        speech_title: str = "",
+        speech_text: str = "",
     ) -> str:
         """外部通知を追加し、通知IDを返す。
 
         display が ``center`` の場合は、右パネルの通知履歴に加えて画面中央の
         大きなアラート表示（center_alert）も更新する。duration_seconds は
         中央アラートの自動消去秒数で、0以下ならタップで閉じるまで残す。
+        speech_title と speech_text は読み上げ用の題名と本文（要約など）で、指定がなければ
+        title と text を読み上げる。
         """
         notification_id = uuid.uuid4().hex
         with self._lock:
@@ -402,6 +406,10 @@ class DashboardState:
                 "duration_seconds": duration_seconds,
                 "created_at": _now_iso(),
             }
+            if speech_title:
+                notice["speech_title"] = speech_title
+            if speech_text:
+                notice["speech_text"] = speech_text
             self._notifications.append(notice)
             if display == "center":
                 self._center_alert = {"active": True, **notice, "updated_at": _now_iso()}

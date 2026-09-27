@@ -92,15 +92,19 @@ def build_plan(notice: dict[str, Any], max_chars: int = 60) -> SpeechPlan | None
         # 題名は「<発信元> エラー」。決まった言葉がある発信元だけ読み上げる。
         phrase = ERROR_PHRASES.get(source)
         return SpeechPlan(key=f"error:{source}", text=phrase, is_error=True) if phrase else None
-    body = _shorten(str(notice.get("text", "")), max_chars)
-    heading = _shorten(title, max_chars)
+    # 読み上げ用の題名・本文（Androidの通知の要約など）があれば、画面の表示用よりそちらを優先する。
+    speech_text = str(notice.get("speech_text", "")).strip()
+    body = _shorten(speech_text or str(notice.get("text", "")), max_chars)
+    heading = _shorten(str(notice.get("speech_title", "")).strip() or title, max_chars)
     if not heading and not body:
         # 読み上げる中身がない通知は、「通知だよ」だけにならないよう、読み上げない。
         return None
     parts = [f"{source}から通知だよ。" if source else "通知だよ。", f"{heading}。" if heading else ""]
     if body:
         parts.append(body if body.endswith(("。", "！", "？")) else f"{body}。")
-    return SpeechPlan(key=f"notice:{source}:{title}", text="".join(parts), is_error=False)
+    # 読み上げ用の本文がある通知は、同じ会話の別のメッセージを読み飛ばさないよう、本文もkeyに含める。
+    key = f"notice:{source}:{title}:{speech_text}" if speech_text else f"notice:{source}:{title}"
+    return SpeechPlan(key=key, text="".join(parts), is_error=False)
 
 
 def is_valid_wav(data: bytes | None) -> bool:

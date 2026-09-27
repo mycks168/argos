@@ -1225,3 +1225,14 @@ def test_notification_listener_error_does_not_break_adding():
 
     assert [item["id"] for item in received] == [notification_id]
     assert len(state.snapshot()["notifications"]) == 1
+
+
+def test_add_notification_keeps_speech_fields_only_when_given():
+    """読み上げ用の題名と本文は、指定したときだけ通知に含める。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+    state.add_notification("通知", "本文")
+    state.add_notification("#雑談", "長い本文", source="Slack", speech_title="雑談", speech_text="要約")
+    assert "speech_text" not in received[0] and "speech_title" not in received[0]
+    assert received[1]["speech_title"] == "雑談" and received[1]["speech_text"] == "要約"

@@ -249,6 +249,17 @@ class Settings:
     notice_speak_max_chars: int = 60
     notice_speak_interval_seconds: float = 60.0
     notice_phrase_dir: str = "~/.local/state/argos/notice-phrases"
+    # Android(Waydroid)のアプリ通知を、ARGOSの通知として知らせる。
+    android_notice_enabled: bool = False
+    android_notice_interval_seconds: float = 5.0
+    # 対象アプリとミュートの条件（YAMLの配列をJSONにしたもの）。
+    android_notice_apps_json: str = ""
+    android_notice_mute_json: str = ""
+    # この文字数を超える本文は、Ollamaで要約して読み上げる。URLが空なら要約しない。
+    android_notice_summarize_min_chars: int = 40
+    android_notice_ollama_url: str = ""
+    android_notice_ollama_model: str = "gemma4:e4b"
+    android_notice_summary_timeout_seconds: float = 15.0
     dashboard_default_font_size: str = "medium"
     dashboard_default_layout: str = "standard"
     dashboard_upload_dir: str = "/tmp/argos/uploads"
@@ -651,6 +662,16 @@ def load_settings() -> Settings:
         notice_speak_max_chars=int(os.environ.get("ARGOS_NOTICE_SPEAK_MAX_CHARS", "60")),
         notice_speak_interval_seconds=float(os.environ.get("ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "60")),
         notice_phrase_dir=os.environ.get("ARGOS_NOTICE_PHRASE_DIR", "~/.local/state/argos/notice-phrases"),
+        android_notice_enabled=_bool_env("ARGOS_NOTICE_ANDROID_ENABLED", False),
+        android_notice_interval_seconds=float(os.environ.get("ARGOS_NOTICE_ANDROID_INTERVAL_SECONDS", "5")),
+        android_notice_apps_json=os.environ.get("ARGOS_NOTICE_ANDROID_APPS_JSON", ""),
+        android_notice_mute_json=os.environ.get("ARGOS_NOTICE_ANDROID_MUTE_JSON", ""),
+        android_notice_summarize_min_chars=int(os.environ.get("ARGOS_NOTICE_ANDROID_SUMMARIZE_MIN_CHARS", "40")),
+        android_notice_ollama_url=os.environ.get("ARGOS_NOTICE_ANDROID_OLLAMA_URL", ""),
+        android_notice_ollama_model=os.environ.get("ARGOS_NOTICE_ANDROID_OLLAMA_MODEL", "gemma4:e4b"),
+        android_notice_summary_timeout_seconds=float(
+            os.environ.get("ARGOS_NOTICE_ANDROID_SUMMARY_TIMEOUT_SECONDS", "15")
+        ),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),

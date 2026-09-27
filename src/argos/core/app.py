@@ -17,7 +17,7 @@ from collections.abc import Callable, Generator, Iterable, Iterator
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, cast
+from typing import Any, Protocol, cast
 
 from argos.config import (
     DEFAULT_AGENT_PROGRESS_START_PHRASES,
@@ -26,6 +26,7 @@ from argos.config import (
     Settings,
     resolve_agent_slot_model,
 )
+from argos.core.android_notice_watcher import AndroidNoticeWatcher
 from argos.core.auth_coordinator import AuthCoordinator
 from argos.core.notice_speaker import BUSY_STATUS_CODES, CONVERSATION_STATUS_CODES, NoticeSpeaker
 from argos.core.periodic_monitor import PeriodicMonitor
@@ -47,6 +48,8 @@ from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.agent.runner_client import RunnerSlotBusyError
 from argos.services.agent_usage import AgentUsageProvider
+from argos.services.android_notice.rules import parse_apps, parse_mute_rules
+from argos.services.android_notice.summarizer import OllamaSummarizer
 from argos.services.audio_state import AudioStateStore
 from argos.services.auth import AuthGate
 from argos.services.conversation_store import ConversationStore
@@ -327,6 +330,7 @@ class ArgosApp:
             min_interval=settings.notice_speak_interval_seconds,
         )
         self._dashboard_state.add_notification_listener(self._notice_speaker.submit)
+        self._android_notice = _build_android_notice_watcher(settings, self._post_android_notice)
         self._auth_coord = AuthCoordinator(
             settings=settings,
             auth=self._auth,
@@ -418,6 +422,7 @@ class ArgosApp:
         if self._audio_priority is not None:
             self._audio_priority.start()
         self._notice_speaker.start()
+        self._android_notice.start()
         self._run_startup_sequence()
         self._auth_coord.try_face_auth("起動時", self._status.current_generation())
         self._set_ready_or_locked()
@@ -1666,6 +1671,10 @@ class ArgosApp:
         finally:
             self._status.finish(token)
 
+    def _post_android_notice(self, notice: dict[str, Any]) -> None:
+        """Androidのアプリ通知を、外部の通知として通知欄へ出す（読み上げは通知の読み上げに任せる）。"""
+        self._dashboard_state.add_notification(**notice)
+
     def _is_auth_locked(self) -> bool:
         """本人確認が必要なロック状態ならTrueを返す。"""
         return self._auth_coord.is_locked()
@@ -1696,6 +1705,7 @@ class ArgosApp:
             self._audio_input_stream.stop()
         if self._audio_priority is not None:
             self._audio_priority.stop()
+        self._android_notice.stop()
         self._notice_speaker.stop()
         self._cancel_active_audio()
         self._auth_coord.stop_warning()
@@ -1755,6 +1765,29 @@ class _TerminalGateway:
             slot_name=slot_name,
             slot_provider=slot_provider,
         )
+
+
+def _build_android_notice_watcher(
+    settings: Settings, post: Callable[[dict[str, Any]], None]
+) -> AndroidNoticeWatcher:
+    """設定から、Androidのアプリ通知の見張りを作る。OllamaのURLがなければ要約しない。"""
+    summarizer = None
+    if settings.android_notice_ollama_url:
+        summarizer = OllamaSummarizer(
+            url=settings.android_notice_ollama_url,
+            model=settings.android_notice_ollama_model,
+            max_chars=settings.android_notice_summarize_min_chars,
+            timeout=settings.android_notice_summary_timeout_seconds,
+        ).summarize
+    return AndroidNoticeWatcher(
+        enabled=settings.android_notice_enabled and not settings.dry_run,
+        apps=parse_apps(settings.android_notice_apps_json),
+        mute_rules=parse_mute_rules(settings.android_notice_mute_json),
+        post=post,
+        summarize=summarizer,
+        summarize_min_chars=settings.android_notice_summarize_min_chars,
+        interval_seconds=settings.android_notice_interval_seconds,
+    )
 
 
 def _app_slot_key(name: str, provider: str) -> str:

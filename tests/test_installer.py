@@ -1355,3 +1355,48 @@ def test_watchdog_disable_failure_does_not_skip_the_rest(tmp_path):
     installer._apply_window_layout_choice(_watchdog_plan(tmp_path), config_path, runner=runner, output_func=messages.append)
     assert seen == ["argos-waydroid-watchdog.service", "argos-window-layout.service"]
     assert len(messages) == 1 and "argos-waydroid-watchdog.service" in messages[0]
+
+
+def test_quiet_lxc_sudoers_is_checked_then_installed():
+    """lxc-attachの記録を残さない設定は、visudoで確認してから、root所有の0440で置く。"""
+    commands, contents = [], []
+
+    def runner(command, **kwargs):
+        """実行したコマンドと、確認した一時ファイルの中身を記録する。"""
+        commands.append(command)
+        if command[:3] == ["sudo", "visudo", "-cf"]:
+            contents.append(Path(command[3]).read_text(encoding="utf-8"))
+
+    installer._install_quiet_lxc_sudoers(runner=runner, output_func=lambda message: None)
+    assert commands[0][:3] == ["sudo", "visudo", "-cf"]
+    assert commands[1][:8] == ["sudo", "install", "-m", "0440", "-o", "root", "-g", "root"]
+    assert commands[1][-1] == "/etc/sudoers.d/argos-lxc-attach"
+    assert "Defaults!/usr/bin/lxc-attach !log_allowed, !pam_session" in contents[0]
+    assert not Path(commands[0][3]).exists()
+
+
+def test_quiet_lxc_sudoers_failure_only_warns():
+    """visudoの確認に失敗したら、置かずに警告だけ出す。"""
+    commands, messages = [], []
+
+    def runner(command, **kwargs):
+        """visudoの確認を失敗させる。"""
+        commands.append(command)
+        raise subprocess.CalledProcessError(1, command)
+
+    installer._install_quiet_lxc_sudoers(runner=runner, output_func=messages.append)
+    assert len(commands) == 1
+    assert messages and "argos-lxc-attach" in messages[0]
+
+
+@pytest.mark.parametrize("answer, expected", [("maps", True), ("", False)])
+def test_quiet_lxc_sudoers_follows_window_layout_choice(tmp_path, monkeypatch, answer, expected):
+    """Waydroidと並べて使うと答えたときだけ、lxc-attachの記録を残さない設定を置く。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": answer}, config_path)
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    commands = []
+    installer._apply_window_layout_choice(
+        _watchdog_plan(tmp_path), config_path, runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None
+    )
+    assert any(command[:2] == ["sudo", "visudo"] for command in commands) is expected

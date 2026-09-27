@@ -136,6 +136,7 @@ SECTION_LABELS = {
     "agents": "AIプロバイダー",
     "audio": "マイク・スピーカー",
     "ptt": "PTTボタン",
+    "notice": "通知",
     "tts": "読み上げ前処理",
     "network": "ネットワーク",
     "dashboard": "ダッシュボード",
@@ -283,6 +284,14 @@ DESCRIPTION_BY_KEY = {
     "conversation_history.max_messages": "スロットごとに保持する最大メッセージ数です。",
     "conversation_memory.enabled": "過去会話の要約を新しいAIセッションへ引き継ぎます。",
     "conversation_memory.path": "会話要約の保存先です。",
+    "notice.android.enabled": "Android（Waydroid）のアプリの通知を、ARGOSの通知欄に出して読み上げます。",
+    "notice.android.interval_seconds": "Androidの通知を確認する間隔（秒）です。",
+    "notice.android.apps": "知らせる対象のアプリです。packageにAndroidのパッケージ名、nameに読み上げる名前をJSONで指定します。",
+    "notice.android.mute": "読まない通知の条件です。app・conversation・sender・textをJSONで指定し、すべて当てはまれば読みません。",
+    "notice.android.summarize_min_chars": "この文字数を超える本文は、Ollamaで要約して読み上げます。",
+    "notice.android.ollama_url": "要約に使うLAN内のOllamaのURLです。空なら要約せず、先頭だけ読みます。",
+    "notice.android.ollama_model": "要約に使うOllamaのモデル名です。",
+    "notice.android.summary_timeout_seconds": "要約を待つ最長の秒数です。超えたら先頭だけ読みます。",
 }
 
 SECRET_SUFFIXES = ("token", "bearer_token", "view_key", "keyword_hash")
