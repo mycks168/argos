@@ -36,6 +36,22 @@ def is_container_frozen() -> bool:
     return any(line.split()[:2] == ["Container:", "FROZEN"] for line in res.stdout.splitlines())
 
 
+def unfreeze_command() -> list[str]:
+    """凍結を解除するコマンドを返す。
+
+    Android全体を1つのウィンドウで見せている(active_appsがWaydroid)ときに、`waydroid app launch` を使うと、
+    アプリごとのウィンドウ表示へ切り替わってしまうため、`waydroid show-full-ui` を使う。
+    """
+    try:
+        result = subprocess.run(["waydroid", "prop", "get", "waydroid.active_apps"], capture_output=True, text=True, timeout=10.0, check=False)
+        active = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
+    except (subprocess.TimeoutExpired, OSError):
+        active = ""
+    if active == "Waydroid":
+        return ["waydroid", "show-full-ui"]
+    return ["waydroid", "app", "launch", GOOGLE_MAPS_PACKAGE]
+
+
 def ensure_unfrozen() -> bool:
     """凍結中のWaydroidコンテナを解除する。
 
@@ -49,7 +65,7 @@ def ensure_unfrozen() -> bool:
         return True
     try:
         subprocess.run(
-            ["waydroid", "app", "launch", GOOGLE_MAPS_PACKAGE],
+            unfreeze_command(),
             capture_output=True,
             text=True,
             timeout=30.0,

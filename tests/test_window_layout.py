@@ -58,7 +58,7 @@ def desktop(tmp_path, monkeypatch):
     monkeypatch.setenv("ARGOS_CONFIG_FILE", str(tmp_path / "config.yaml"))
     monkeypatch.setenv(layout.APP_SETTING, "maps")
     # 他のテストが環境変数へ取り込んだ設定に左右されないよう、配置の設定は毎回消す。
-    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING):
+    for name in (layout.VIEW_SETTING, layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(layout.shutil, "which", lambda tool: f"/usr/bin/{tool}")
     monkeypatch.setattr(layout.subprocess, "check_output", lambda *args, **kwargs: "123\n")
@@ -681,7 +681,7 @@ def _config(tmp_path, monkeypatch, text=""):
     config = tmp_path / "config.yaml"
     config.write_text(text)
     monkeypatch.setenv("ARGOS_CONFIG_FILE", str(config))
-    for name in (layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING, "ARGOS_DASHBOARD_PORT", "ARGOS_DASHBOARD_TOKEN", "ARGOS_DASHBOARD_VIEW_KEY", "ARGOS_DASHBOARD_SSL", "ARGOS_DASHBOARD_SSL_CERT_PATH"):
+    for name in (layout.VIEW_SETTING, layout.STYLE_SETTING, layout.RATIO_SETTING, layout.PANEL_HEIGHT_SETTING, layout.RESTART_SERVICES_SETTING, layout.DASHBOARD_LAYOUT_SETTING, layout.SWAP_SETTING, "ARGOS_DASHBOARD_PORT", "ARGOS_DASHBOARD_TOKEN", "ARGOS_DASHBOARD_VIEW_KEY", "ARGOS_DASHBOARD_SSL", "ARGOS_DASHBOARD_SSL_CERT_PATH"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -1131,3 +1131,66 @@ def test_dashboard_call_https_requires_certificate(tmp_path, monkeypatch):
     monkeypatch.setattr(layout.urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("接続しないはず"))
     with pytest.raises(RuntimeError, match="証明書"):
         layout.dashboard_call("/api/state")
+
+
+@pytest.mark.parametrize("value, view", [("", "app"), ("app", "app"), ("FULL", "full"), ("full", "full")])
+def test_android_view_setting(monkeypatch, value, view):
+    """Androidの見せ方は、app（アプリごとのウィンドウ）とfull（Android全体で1つ）から選ぶ。未設定はapp。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, value)
+    assert layout.android_view() == view
+
+
+def test_android_view_rejects_unknown_value(monkeypatch):
+    """不明な値は、黙って無視せず、エラーにする。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, "multi")
+    with pytest.raises(RuntimeError, match="app/full"):
+        layout.android_view()
+
+
+def test_android_id_depends_on_view(monkeypatch):
+    """appならアプリごとのapp_id、fullなら、アプリによらず、Android全体の1つのapp_idになる。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, "app")
+    assert layout.android_id(PACKAGE) == f"waydroid.{PACKAGE}"
+    monkeypatch.setenv(layout.VIEW_SETTING, "full")
+    assert layout.android_id(PACKAGE) == "Waydroid"
+
+
+def test_binding_targets_the_full_ui_window(monkeypatch):
+    """full表示のときは、labwcの操作の対象も、Android全体のウィンドウになる。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, "full")
+    root = ET.fromstring("<openbox_config><keyboard/></openbox_config>")
+    result = layout.build_binding(root, {"mode": "split", "ratio": 53, "side": "right", "android_app": PACKAGE}, 1920, 440, (), top=36)
+    identifiers = [node.get("identifier") for node in result.iter() if str(node.tag).endswith("query")]
+    assert "Waydroid" in identifiers and f"waydroid.{PACKAGE}" not in identifiers
+
+
+def test_ensure_android_full_view_shows_full_ui_and_starts_the_app(android, monkeypatch):
+    """full表示では、アプリ起動ではなく、Android全体のウィンドウを出し、出たあとでアプリを前面に出す。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, "full")
+    android.update(window=False, appear_after=1)
+    started = []
+    original = layout.subprocess.run
+
+    def run(command, **kwargs):
+        """起動コマンドの種類を記録し、full表示ではウィンドウが現れる状態にする。"""
+        if command[:2] == ["waydroid", "show-full-ui"]:
+            android["window"] = True
+            started.append("show-full-ui")
+            return SimpleNamespace(returncode=0)
+        if command[:2] == ["waydroid", "app"]:
+            started.append("app-launch")
+        if command[: len(layout.LXC_ATTACH)] == layout.LXC_ATTACH:
+            started.append(command[len(layout.LXC_ATTACH) :][:1] + [command[-1]])
+            return SimpleNamespace(returncode=0)
+        return original(command, **kwargs)
+
+    monkeypatch.setattr(layout.subprocess, "run", run)
+    layout.ensure_android(PACKAGE)
+    assert started == ["show-full-ui", ["am", PACKAGE]]
+
+
+def test_ensure_android_full_view_skips_when_window_is_shown(android, monkeypatch):
+    """full表示で、ウィンドウがあり、凍結もしていなければ、何も起動しない。"""
+    monkeypatch.setenv(layout.VIEW_SETTING, "full")
+    layout.ensure_android(PACKAGE)
+    assert android["launches"] == 0

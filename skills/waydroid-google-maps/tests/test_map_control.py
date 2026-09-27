@@ -287,10 +287,10 @@ def test_ensure_unfrozen_noop_when_running() -> None:
 
 def test_ensure_unfrozen_launches_to_unfreeze() -> None:
     """凍結中はwaydroid app launchで解除し、解除後の状態を返す。"""
-    outputs = [STATUS_FROZEN, "", STATUS_RUNNING]
+    outputs = [STATUS_FROZEN, "", "", STATUS_RUNNING]  # 状態・active_apps・起動・状態
     with patch("subprocess.run", side_effect=lambda cmd, **kw: MagicMock(stdout=outputs.pop(0))) as mock_run:
         assert map_control.ensure_unfrozen() is True
-        assert mock_run.call_args_list[1][0][0] == ["waydroid", "app", "launch", "com.google.android.apps.maps"]
+        assert mock_run.call_args_list[2][0][0] == ["waydroid", "app", "launch", "com.google.android.apps.maps"]
 
 
 def test_ensure_unfrozen_reports_failure() -> None:
@@ -324,3 +324,24 @@ def test_run_waydroid_intent_unfreezes_first_frozen() -> None:
     ):
         assert map_control.run_waydroid_intent("geo:0,0?z=14") is True
     assert order == ["unfreeze", "intent"]
+
+
+@pytest.mark.parametrize(
+    "active, expected",
+    [
+        ("com.google.android.apps.maps\n", ["waydroid", "app", "launch", "com.google.android.apps.maps"]),
+        ("Waydroid\n", ["waydroid", "show-full-ui"]),
+        ("", ["waydroid", "app", "launch", "com.google.android.apps.maps"]),
+        ("[2026-09-27] log line\nWaydroid\n", ["waydroid", "show-full-ui"]),
+    ],
+)
+def test_unfreeze_command_keeps_full_ui_mode(active, expected) -> None:
+    """Android全体を1つのウィンドウで見せているときは、アプリごとの表示へ切り替わらないよう、show-full-uiで解凍する。"""
+    with patch("subprocess.run", return_value=MagicMock(stdout=active)):
+        assert map_control.unfreeze_command() == expected
+
+
+def test_unfreeze_command_falls_back_when_prop_unavailable() -> None:
+    """active_appsを取得できなくても、従来どおり、アプリ起動で解凍する。"""
+    with patch("subprocess.run", side_effect=OSError("waydroidがありません")):
+        assert map_control.unfreeze_command()[:3] == ["waydroid", "app", "launch"]

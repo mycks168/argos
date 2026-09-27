@@ -29,6 +29,11 @@ AUTO_DASHBOARD_LAYOUT = {"split": "sp", "pane": "standard"}
 KIOSK_UNIT = "argos-dashboard-kiosk.service"
 LOCK_WAIT_SECONDS = 300
 SWAP_SETTING = "ARGOS_WINDOW_LAYOUT_SWAP_CONVERSATION"
+VIEW_SETTING = "ARGOS_WINDOW_LAYOUT_ANDROID_VIEW"
+# Androidの見せ方。app=アプリごとに別のウィンドウ、full=Android全体を1つのウィンドウにして、中でアプリを切り替える。
+ANDROID_VIEWS = ("app", "full")
+FULL_UI_APP_ID = "Waydroid"
+LXC_ATTACH = ["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--"]
 # 表示方式の名前と、対応するモード。overlayはダッシュボードの中央ペインへ重ねる。
 STYLE_MODES = {"overlay": "pane", "split": "split"}
 
@@ -152,9 +157,17 @@ def parse_pane(value, width, height):
     return [x, y, w, h]
 
 
+def android_view():
+    """Androidの見せ方(app/full)を返す。未設定はapp。不明な値は、黙って無視せず、エラーにする。"""
+    view = setting(VIEW_SETTING).lower() or "app"
+    if view not in ANDROID_VIEWS:
+        raise RuntimeError(f"android_viewはapp/fullで指定してください: {view}")
+    return view
+
+
 def android_id(package):
-    """Waydroidがウィンドウへ付けるapp_idを返す。"""
-    return f"waydroid.{package}"
+    """Waydroidがウィンドウへ付けるapp_idを返す。fullなら、アプリによらず、Android全体で1つのウィンドウ。"""
+    return FULL_UI_APP_ID if android_view() == "full" else f"waydroid.{package}"
 
 
 def window_exists(match, *extra):
@@ -180,20 +193,38 @@ def wait_window(match, seconds):
     return window_exists(match)
 
 
-def ensure_android(package, attempts=3, wait=15):
-    """凍結の解除とAndroidアプリのウィンドウ表示を保証する。
+def start_android_app(package):
+    """Androidの中で、指定アプリを前面に出す。full表示のとき、再起動後にホーム画面のままにならないように使う。"""
+    subprocess.run(
+        [*LXC_ATTACH, "am", "start", "-a", "android.intent.action.MAIN", "-c", "android.intent.category.LAUNCHER", "-p", package],
+        check=False,
+        capture_output=True,
+        timeout=20,
+    )
 
-    `waydroid app launch` は内部で凍結を解除してから起動する。起動成功でも
-    ホーム画面だけが出る場合があるため、ウィンドウの出現まで確認して再試行する。
+
+def ensure_android(package, attempts=3, wait=15):
+    """凍結の解除とAndroidのウィンドウ表示を保証する。
+
+    app表示: `waydroid app launch` が、内部で凍結を解除してから、アプリを起動する。
+    full表示: `waydroid show-full-ui` が、Android全体のウィンドウを出す。ウィンドウを新しく出したときは、
+    アプリもAndroidの中で前面に出す。
+    どちらも、起動成功でもホーム画面だけが出る場合があるため、ウィンドウの出現まで確認して再試行する。
     """
     match = "app_id:" + android_id(package)
+    full = android_view() == "full"
     for _ in range(attempts):
         if not container_frozen() and window_exists(match):
             return
-        subprocess.run(["waydroid", "app", "launch", package], check=True, timeout=60)
+        if full:
+            subprocess.run(["waydroid", "show-full-ui"], check=True, timeout=60)
+        else:
+            subprocess.run(["waydroid", "app", "launch", package], check=True, timeout=60)
         if wait_window(match, wait):
+            if full:
+                start_android_app(package)
             return
-    raise RuntimeError(f"Androidアプリ {package} のウィンドウを表示できませんでした")
+    raise RuntimeError(f"Androidのウィンドウ({package})を表示できませんでした")
 
 
 def load_state(path):

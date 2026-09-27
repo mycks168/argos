@@ -72,11 +72,20 @@ uv run python -m argos.tools.window_layout boot
 uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
 ```
 
+#### Androidの見せ方（app／full）
+
+`window_layout.android_view` で、Androidの見せ方を選びます。
+
+- **`app`（既定）**: アプリごとに、別のウィンドウを出します（`waydroid app launch`）。ウィンドウの名前は `waydroid.<パッケージ名>` です。アプリが閉じるとウィンドウが消え、Waydroidが凍結するので、見張りが出し直します。別のアプリを起動すると、そのアプリが別のウィンドウで出ます（重なります）。
+- **`full`**: Android全体を、1つのウィンドウで出します（`waydroid show-full-ui`）。ウィンドウの名前は `Waydroid` の1つで、Androidの中で、スマホと同じように、アプリが切り替わります。ウィンドウは常にあるので、アプリが閉じてもウィンドウが消えず、凍結もしにくくなります。上のステータスバーと、下の戻る・ホームのボタンが、ウィンドウの中に出るため、アプリに使える高さは、その分、減ります。
+- **切り替え**: `config.yaml` に書いて、`window_layout show` などを実行します。`full` では、ウィンドウを出したあと、設定したアプリをAndroidの中で前面に出します。地図の操作スキルも、凍結の解除に `waydroid show-full-ui` を使い、`waydroid app launch` でアプリ表示へ戻ってしまうことを防ぎます。
+- **注意**: 音声の部品が壊れる問題（上の「音声の部品が壊れたときの自動復旧」）の原因が、ウィンドウの方式にあるという証拠は、ありません。`full` は、ウィンドウが消える・凍結する問題への対策で、試している段階です。
+
 #### 画面サイズと設定
 
 - **画面サイズ**: 指定がなければ、`wlr-randr --json` で有効な出力の現在のモードから、幅と高さを自動取得します。`--width` と `--height`（両方必要）で上書きできます。有効な画面が複数ある、拡大率が1.0でない、回転している構成は、未対応としてエラーにします。
 - **パネルの高さ**: 分割のとき、上のパネル（`wf-panel-pi`）の下から窓を置きます。高さは `window_layout.panel_height`（既定36）で、パネルがない端末では0です。
-- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`、`dashboard_layout`、`swap_conversation`。空の値は既定値になります。
+- **設定項目**（`config.yaml` の `window_layout`）: `android_app`（並べるアプリ）、`android_view`（app/full）、`style`（overlay/split）、`split_ratio`（分割の割合。既定50）、`panel_height`、`restart_services`、`dashboard_layout`、`swap_conversation`。空の値は既定値になります。
 
 #### ダッシュボードのレイアウトの自動切り替え
 
