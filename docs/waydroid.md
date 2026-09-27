@@ -290,7 +290,14 @@ Googleマップのピンチイン・ピンチアウトができない場合は�
 
 ## アプリの通知の読み上げ
 
-Slackなど、Androidアプリの通知を、ARGOSの通知欄に出して読み上げられます（`notice.android`）。ARGOSが5秒ごとに `dumpsys notification` でAndroidの通知の一覧を読み、新しいメッセージだけを知らせます。長い本文は、LAN内のOllamaで要約して読みます。Waydroidが止まっている間や凍結中は、通知が届かないので、読みません。設定と使い方は [利用者マニュアル](user_manual.md) の「Androidのアプリの通知」、仕組みは [基本設計](basic_design.md) を見てください。
+Slackなど、Androidアプリの通知を、ARGOSの通知欄に出して読み上げられます（`notice.android`）。ARGOSが5秒ごとに `dumpsys notification` でAndroidの通知の一覧を読み、新しいメッセージだけを知らせます。長い本文は、LAN内のOllamaで要約して読みます。Waydroidが止まっている間や凍結中は、通知が届かないので、読みません。
+
+確認のたびに `sudo lxc-attach` を実行します。GPS中継や見張りも同じで、そのままだとsudoの記録がjournal（SDカード）へ大量に書き込まれます。インストーラーでWaydroidを使うと答えると、`lxc-attach` の成功した実行を記録しない設定（`/etc/sudoers.d/argos-lxc-attach`）を置きます。手で入れる場合は、次のようにします。
+
+```bash
+echo 'Defaults!/usr/bin/lxc-attach !log_allowed, !pam_session' > /tmp/argos-lxc-attach
+sudo visudo -cf /tmp/argos-lxc-attach && sudo install -m 0440 -o root -g root /tmp/argos-lxc-attach /etc/sudoers.d/argos-lxc-attach
+```設定と使い方は [利用者マニュアル](user_manual.md) の「Androidのアプリの通知」、仕組みは [基本設計](basic_design.md) を見てください。
 
 ## 音声の部品が壊れたときの自動復旧（見張り）
 

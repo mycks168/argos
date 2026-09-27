@@ -26,6 +26,14 @@ WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 WINDOW_LAYOUT_STYLE_KEY = "ARGOS_WINDOW_LAYOUT_STYLE"
 YIELD_TO_APPS_KEY = "AUDIO_YIELD_TO_APPS"
 WAYDROID_APP_NAME = "Waydroid"
+# ARGOSはWaydroidへ lxc-attach を頻繁に送る（GPS中継は毎秒、見張りや通知の確認は数秒おき）。
+# そのたびにsudoの実行記録とセッションの記録がjournalに残り、SDカードへの書き込みが増えるので、
+# lxc-attachに限って、成功した実行の記録を残さない。拒否などの失敗は、これまでどおり記録される。
+QUIET_LXC_SUDOERS_PATH = Path("/etc/sudoers.d/argos-lxc-attach")
+QUIET_LXC_SUDOERS_CONTENT = (
+    "# ARGOS: Waydroidへ頻繁に送るlxc-attachの実行記録を残さない（SDカードへの書き込みを減らす）\n"
+    "Defaults!/usr/bin/lxc-attach !log_allowed, !pam_session\n"
+)
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -1174,6 +1182,7 @@ def _apply_window_layout_choice(
     if load_yaml_environment(config_path).get(WINDOW_LAYOUT_KEY, "").strip():
         if has_watchdog:
             _run_user_systemctl(plan, ["enable", "--now", watchdog], runner=runner)
+        _install_quiet_lxc_sudoers(runner=runner, output_func=output_func)
         for tool in ("waydroid", "labwc"):
             if not shutil.which(tool):
                 output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
@@ -1186,6 +1195,29 @@ def _apply_window_layout_choice(
                 _run_user_systemctl(plan, ["disable", "--now", name], runner=runner)
             except subprocess.CalledProcessError as exc:
                 output_func(f"警告: {name}を無効化できませんでした。必要なら手動で確認してください: {exc}")
+
+
+def _install_quiet_lxc_sudoers(
+    *,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
+    path: Path = QUIET_LXC_SUDOERS_PATH,
+) -> None:
+    """lxc-attachの成功した実行をsudoのログに残さない設定を置く。
+
+    書き方の誤りでsudoそのものが使えなくならないよう、visudoで確認してから置く。
+    失敗してもARGOSは動くので、警告だけ出してインストールは続ける。
+    """
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as fp:
+        fp.write(QUIET_LXC_SUDOERS_CONTENT)
+        temp_path = fp.name
+    try:
+        runner(["sudo", "visudo", "-cf", temp_path], check=True)
+        runner(["sudo", "install", "-m", "0440", "-o", "root", "-g", "root", temp_path, str(path)], check=True)
+    except (OSError, subprocess.CalledProcessError) as exc:
+        output_func(f"警告: {path}を置けませんでした。lxc-attachの実行記録がjournalに残ります: {exc}")
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
 
 
 def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print) -> None:
