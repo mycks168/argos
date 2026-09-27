@@ -92,6 +92,10 @@ uv run python skills/dashboard-overlay/scripts/send_overlay.py --type swap
 
 Googleマップの案内音声が鳴っている間、ARGOSの発話は自動で一時停止し、終わったら続きから再開する（`config.yaml` の `audio.yield_to_apps: [Waydroid]`。詳細は `docs/waydroid.md`）。エージェントが特別な操作をする必要はない。ARGOSが話している途中で止まるのは故障ではない。
 
+## Androidの見せ方（app／full）
+
+`config.yaml` の `window_layout.android_view` で、アプリごとに別のウィンドウ（`app`、既定）か、Android全体を1つのウィンドウにして中でアプリを切り替える（`full`）かを選ぶ。`full` のウィンドウ名は `Waydroid`。`full` のときに `waydroid app launch` を使うと、アプリごとの表示へ切り替わってしまうので、代わりに `waydroid show-full-ui` を使う。詳細は `docs/waydroid.md`。
+
 ## 音声の部品が壊れたとき
 
 Waydroidの音声サーバーが落ちると、地図が起動できなくなる。`argos-waydroid-watchdog` が自動で検知して、Waydroidを再起動し、画面配置を戻す（ナビは中断される。再開は手動）。記録は `~/.local/state/argos/waydroid-incidents/` にある。また、地図のウィンドウが（ナビの終了などで）消えたままなら、約30秒後に、出し直して、止まっていたGPS中継も戻す。地図が起動しないときは、まず `systemctl --user status argos-waydroid-watchdog` と、その記録を確認する。

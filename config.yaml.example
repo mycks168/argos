@@ -174,6 +174,8 @@ dashboard:
 window_layout:
   # Waydroidのアプリと並べて表示する（labwc専用）。確認済みはmaps（Googleマップ）のみ。空なら使わない。
   android_app: ''
+  # Androidの見せ方。app=アプリごとに別のウィンドウ（既定）、full=Android全体を1つのウィンドウにして、中でアプリを切り替える。
+  android_view: ''
   # 最初に使う表示方式。overlay=ダッシュボードの中央ペインへ重ねる、split=左右に分割。空はsplit。
   style: ''
   # 左右分割でAndroidが使う幅の割合（20〜80）。空は50。
