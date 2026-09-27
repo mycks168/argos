@@ -27,6 +27,28 @@ notice:
   speak_interval_seconds: 60
   # 音声合成が使えないときに再生する、エラーの決まった言葉の保存先。
   phrase_dir: ~/.local/state/argos/notice-phrases
+  # Android(Waydroid)のアプリの通知を、ARGOSの通知として知らせる（通知欄に出して、読み上げる）。
+  # アプリ専用の処理はなく、Androidの標準の項目（アプリ・会話・送信者・本文）だけで扱う。
+  android:
+    enabled: false
+    # 通知を確認する間隔(秒)。
+    interval_seconds: 5
+    # 対象のアプリ。packageはAndroidのパッケージ名、nameは読み上げと表示に使う名前。省略するとSlackだけ。
+    apps:
+      - package: com.Slack
+        name: Slack
+    # 読まない通知の条件。指定した項目がすべて当てはまれば読まない。
+    # appはパッケージ名かnameと完全一致。conversation（Slackのチャンネル名など）・sender・textは部分一致。
+    mute: []
+    #  - app: Slack
+    #    conversation: "#監視通知"
+    #  - sender: "(ボット)"
+    # この文字数を超える本文は、LAN内のOllamaで要約して読み上げる。ollama_urlが空なら要約せず先頭だけ読む。
+    summarize_min_chars: 40
+    ollama_url: ""
+    ollama_model: gemma4:e4b
+    # 要約を待つ最長の秒数。超えたら先頭だけ読む。
+    summary_timeout_seconds: 15
 ptt:
   gpio: ''
 network:

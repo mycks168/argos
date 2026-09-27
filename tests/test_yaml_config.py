@@ -208,3 +208,37 @@ def test_notice_speech_settings_from_yaml(tmp_path):
     assert values["ARGOS_NOTICE_SPEAK"] == "false"
     assert values["ARGOS_NOTICE_SPEAK_MAX_CHARS"] == "30"
     assert values["ARGOS_NOTICE_PHRASE_DIR"] == "/tmp/p"
+
+
+def test_android_notice_lists_are_passed_as_json(tmp_path):
+    """notice.androidのappsとmuteは、JSONにして渡し、旧env値からの変換でも配列に戻す。"""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+notice:
+  speak: true
+  android:
+    enabled: true
+    ollama_url: http://ollama.example:11434
+    apps:
+      - package: com.Slack
+        name: Slack
+    mute:
+      - conversation: "#監視通知"
+""",
+        encoding="utf-8",
+    )
+    values = load_yaml_environment(path)
+    assert values["ARGOS_NOTICE_SPEAK"] == "true"
+    assert values["ARGOS_NOTICE_ANDROID_ENABLED"] == "true"
+    assert values["ARGOS_NOTICE_ANDROID_OLLAMA_URL"] == "http://ollama.example:11434"
+    assert values["ARGOS_NOTICE_ANDROID_APPS_JSON"] == '[{"package": "com.Slack", "name": "Slack"}]'
+    assert values["ARGOS_NOTICE_ANDROID_MUTE_JSON"] == '[{"conversation": "#監視通知"}]'
+
+    output = tmp_path / "migrated.yaml"
+    write_yaml_from_environment(values, output)
+    data = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert data["notice"]["speak"] is True
+    assert data["notice"]["android"]["enabled"] is True
+    assert data["notice"]["android"]["apps"] == [{"package": "com.Slack", "name": "Slack"}]
+    assert data["notice"]["android"]["mute"] == [{"conversation": "#監視通知"}]

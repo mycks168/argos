@@ -288,6 +288,10 @@ Googleマップのピンチイン・ピンチアウトができない場合は�
 - 画面配置ツール（`window_layout`）は、実行時点の `rc.xml` を保存して復元するため、この設定を保ちます。
 - 位置のずれの改善や、走行中の操作性は、別途確認が必要です。
 
+## アプリの通知の読み上げ
+
+Slackなど、Androidアプリの通知を、ARGOSの通知欄に出して読み上げられます（`notice.android`）。ARGOSが5秒ごとに `dumpsys notification` でAndroidの通知の一覧を読み、新しいメッセージだけを知らせます。長い本文は、LAN内のOllamaで要約して読みます。Waydroidが止まっている間や凍結中は、通知が届かないので、読みません。設定と使い方は [利用者マニュアル](user_manual.md) の「Androidのアプリの通知」、仕組みは [基本設計](basic_design.md) を見てください。
+
 ## 音声の部品が壊れたときの自動復旧（見張り）
 
 2026-09-26と27の2日続けて、Androidの音声サーバー（`audioserver`）が、ホストのPulseを呼ぶ処理の待ちで5秒以上止まり、Androidの監視（TimeCheck）に強制終了されました。音声HAL（`android.hardware.audio.service`）も一緒に消えて自動では戻らず、地図は音声プレーヤーを解放できずに固まり、起動もできなくなりました（ホストのカーネルログに `Could not ctl.interface_start for 'android.hardware.audio@4.0::IDevicesFactory/default'` が毎秒出続けます）。Waydroidを再起動すると直ります。**固まる直接の原因は特定できていません**（時刻が近い定期処理・周期性は見つからず、CPUとメモリに余裕がある状態でも起きました）。GPS中継（毎秒 `lxc-attach` で位置を送る）、`audio.yield_to_apps` の監視、ARGOSとAndroidが同じHDMI出力を共用していることは、疑わしい点として残しています。

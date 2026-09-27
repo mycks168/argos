@@ -753,3 +753,21 @@ def test_load_notice_speech_settings(monkeypatch):
     settings = load_settings()
     assert (settings.notice_speak_enabled, settings.notice_speak_max_chars, settings.notice_speak_interval_seconds) == (False, 30, 10.0)
     assert settings.notice_phrase_dir == "/tmp/phrases"
+
+
+def test_android_notice_settings(monkeypatch):
+    """Androidの通知の設定を読み込む。既定では無効で、要約はgemma4:e4b・40文字から。"""
+    for name in ("ENABLED", "APPS_JSON", "MUTE_JSON", "OLLAMA_URL", "OLLAMA_MODEL", "SUMMARIZE_MIN_CHARS"):
+        monkeypatch.delenv(f"ARGOS_NOTICE_ANDROID_{name}", raising=False)
+    settings = load_settings()
+    assert settings.android_notice_enabled is False
+    assert settings.android_notice_ollama_model == "gemma4:e4b"
+    assert settings.android_notice_summarize_min_chars == 40
+
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_OLLAMA_URL", "http://ollama.example:11434")
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_SUMMARY_TIMEOUT_SECONDS", "9")
+    settings = load_settings()
+    assert settings.android_notice_enabled is True
+    assert settings.android_notice_ollama_url == "http://ollama.example:11434"
+    assert settings.android_notice_summary_timeout_seconds == 9.0

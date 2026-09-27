@@ -553,6 +553,37 @@ auth:
 - **停止**: `notice.speak: false` で読み上げをやめられます。
 - **ローカルの音声エンジン**: Kokoro（音声合成）や faster-whisper（音声認識）が入っていない環境では、それらへの切り替えを試さず、外部のVOICEVOXやSTTゲートウェイが使えないときに、1つのエラーにまとめて知らせます。
 
+### Androidのアプリの通知
+
+Waydroidで動かしているAndroidアプリ（Slackなど）の通知も、ARGOSの通知欄に出して読み上げられます。
+
+- **読み方**: 「Slackから通知だよ。監視通知、監視 (ボット)から。サーバーのディスク使用率が高くなっています。」のように、アプリ名、チャンネル（会話）名、送った人、本文を読みます。
+- **要約**: 本文が40文字を超えるときは、LAN内のOllamaで短い1文に要約して読みます。要約できなかったときは、本文の先頭だけ読みます。画面の通知欄には元の本文が出ます。
+- **起動前の通知**: ARGOSを起動したときに出ていた通知は読みません。そのあと届いたものだけ知らせます。
+- **対象のアプリ**: 既定はSlackだけです。ほかのアプリを増やすときは、`apps` にAndroidのパッケージ名と読み上げる名前を足します。
+- **読まない通知（ミュート）**: `mute` に条件を書くと、その通知は読まず、通知欄にも出しません。`app`（アプリ）、`conversation`（チャンネル・会話の名前）、`sender`（送った人）、`text`（本文）を組み合わせられ、書いた項目がすべて当てはまると読みません。
+- **ミュート中**: 画面のミュート中は、ほかの通知と同じく読みません。
+
+```yaml
+notice:
+  android:
+    enabled: true
+    apps:
+      - package: com.Slack
+        name: Slack
+      - package: jp.naver.line.android
+        name: LINE
+    mute:
+      - app: Slack
+        conversation: "#監視通知"   # このチャンネルは読まない
+      - sender: "(ボット)"          # ボットの投稿は読まない
+    summarize_min_chars: 40
+    ollama_url: http://ollama.example:11434
+    ollama_model: gemma4:e4b
+```
+
+設定を変えたら、ARGOSを再起動してください。
+
 ### 送る
 
 `POST /api/events` に JSON を送ります。`dashboard.token` による Bearer 認証が必要です。

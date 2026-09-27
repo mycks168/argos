@@ -77,7 +77,7 @@ def test_plan_keeps_terminal_punctuation():
 @pytest.mark.parametrize("source", sorted(ERROR_PHRASES))
 def test_plan_for_known_errors_uses_fixed_phrase(source):
     """決まった言葉のあるエラーは、生のエラー文ではなく、その言葉を読み上げる。"""
-    plan = build_plan(notice(title=f"{source} エラー", text="Read timed out (host='clove')", source=source, priority="high"))
+    plan = build_plan(notice(title=f"{source} エラー", text="Read timed out (host='example')", source=source, priority="high"))
     assert plan == SpeechPlan(key=f"error:{source}", text=ERROR_PHRASES[source], is_error=True)
     assert "timed out" not in plan.text
 
@@ -179,3 +179,13 @@ def test_response_ready_from_other_source_is_a_normal_notice():
     """発信元がARGOS以外なら、題名が応答完了でも、通常の外部通知として読む。"""
     plan = build_plan({"title": "応答完了", "text": "本文", "source": "Slack", "priority": "normal"})
     assert plan.is_error is False and plan.text.startswith("Slackから通知だよ。")
+
+
+def test_plan_prefers_speech_title_and_text():
+    """読み上げ用の題名と本文があれば、表示用の題名と本文より優先する。本文ごとに別のkeyにする。"""
+    item = {**notice(title="#01: ボット", text="とても長い元の本文"), "speech_title": "01、ボットから", "speech_text": "要約だよ"}
+    plan = build_plan(item)
+    assert plan.text == "Slackから通知だよ。01、ボットから。要約だよ。"
+    other = build_plan({**item, "speech_text": "別の要約"})
+    assert plan.key != other.key
+    assert build_plan(notice(title="件名")).key == "notice:Slack:件名"

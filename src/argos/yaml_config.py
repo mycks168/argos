@@ -44,6 +44,7 @@ SECTION_PREFIXES = {
     "whisper": "ARGOS_WHISPER_",
     "acknowledgement": "ARGOS_ACKNOWLEDGEMENT_",
     "notice": "ARGOS_NOTICE_",
+    "notice.android": "ARGOS_NOTICE_ANDROID_",
     "window_layout": "ARGOS_WINDOW_LAYOUT_",
 }
 
@@ -56,6 +57,12 @@ LIST_MAPPINGS = {
     ("agents.codex", "extra_args"): ("ARGOS_CODEX_EXTRA_ARGS", " "),
     ("agents.antigravity", "extra_args"): ("ARGOS_ANTIGRAVITY_EXTRA_ARGS", " "),
     ("agents.hermes", "extra_args"): ("ARGOS_HERMES_EXTRA_ARGS", " "),
+}
+
+# 配列やテーブルを、そのままJSONにして渡す項目。
+JSON_MAPPINGS = {
+    ("notice.android", "apps"): "ARGOS_NOTICE_ANDROID_APPS_JSON",
+    ("notice.android", "mute"): "ARGOS_NOTICE_ANDROID_MUTE_JSON",
 }
 
 EXACT_MAPPINGS = {
@@ -115,6 +122,7 @@ def load_yaml_environment(path: Path | None = None) -> dict[str, str]:
     _load_agent_slots(data, values)
     _load_named_commands(data, values)
     _load_list_values(data, values)
+    _load_json_values(data, values)
     return values
 
 
@@ -165,6 +173,10 @@ def write_yaml_from_environment(values: dict[str, str], path: Path) -> None:
     for (section, key), name in EXACT_MAPPINGS.items():
         if name in remaining:
             _ensure_table(data, section)[key] = _typed_value(remaining.pop(name))
+
+    for (section, key), name in JSON_MAPPINGS.items():
+        if name in remaining:
+            _ensure_table(data, section)[key] = json.loads(remaining.pop(name))
 
     for (section, key), (name, separator) in LIST_MAPPINGS.items():
         if name not in remaining:
@@ -252,6 +264,14 @@ def _load_list_values(data: dict[str, Any], values: dict[str, str]) -> None:
         value = table.get(key) if isinstance(table, dict) else None
         if isinstance(value, list):
             values[name] = separator.join(_stringify(item) for item in value)
+
+
+def _load_json_values(data: dict[str, Any], values: dict[str, str]) -> None:
+    """YAMLの配列やテーブルを、JSONの文字列にして既存設定名へ変換する。"""
+    for (section, key), name in JSON_MAPPINGS.items():
+        table = _nested_table(data, section)
+        if isinstance(table, dict) and key in table and table[key] is not None:
+            values[name] = json.dumps(table[key], ensure_ascii=False)
 
 
 def _nested_table(data: dict[str, Any], dotted: str) -> Any:

@@ -2371,6 +2371,40 @@ def test_notice_speaker_is_disabled_in_dry_run_and_by_setting(monkeypatch):
     assert app._notice_speaker.enabled is False and app._notice_speaker._queue.qsize() == 0
 
 
+def test_android_notice_watcher_is_built_from_settings(monkeypatch):
+    """Androidの通知の見張りは、設定とdry-runに従って作られ、見つけた通知は読み上げの順番待ちに入る。"""
+    _patch_app(monkeypatch)
+    assert ArgosApp(_settings())._android_notice.enabled is False
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "dry_run": False,
+            "android_notice_enabled": True,
+            "android_notice_apps_json": '[{"package": "jp.naver.line.android", "name": "LINE"}]',
+            "android_notice_mute_json": '[{"conversation": "家族"}]',
+            "android_notice_ollama_url": "http://ollama.example:11434",
+        }
+    )
+    app = ArgosApp(settings)
+    watcher = app._android_notice
+    assert watcher.enabled
+    assert list(watcher._apps) == ["jp.naver.line.android"]
+    assert watcher._mute_rules[0].conversation == "家族"
+    assert watcher._summarize is not None
+
+    app._post_android_notice(
+        {"title": "#雑談: 花子", "text": "長い本文", "source": "LINE", "speech_title": "雑談、花子から", "speech_text": "要約"}
+    )
+    assert [plan.text for plan in list(app._notice_speaker._queue.queue)] == ["LINEから通知だよ。雑談、花子から。要約。"]
+
+
+def test_android_notice_without_ollama_does_not_summarize(monkeypatch):
+    """OllamaのURLがなければ、要約しない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "android_notice_enabled": True}))
+    assert app._android_notice._summarize is None
+
+
 def test_speech_busy_reflects_playback_and_status(monkeypatch):
     """再生中、または発話・録音・文字起こしの状態のあいだは、通知の読み上げを待たせる。"""
     _patch_app(monkeypatch)
