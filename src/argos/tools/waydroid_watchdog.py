@@ -26,6 +26,9 @@ log = logging.getLogger("argos.waydroid_watchdog")
 
 LXC = ["sudo", "-n", "lxc-attach", "-P", "/var/lib/waydroid/lxc", "-n", "waydroid", "--"]
 AUDIO_PROCESSES = ("audioserver", "android.hardware.audio.service")
+# 音声の中心機能。プロセスがいても、これが登録されていなければ、音声は使えない（音声HALが起動できない状態）。
+AUDIO_SERVICE = "media.audio_flinger"
+AUDIO_SERVICE_FOUND = f"Service {AUDIO_SERVICE}: found"
 STATE_DIR = Path.home() / ".local/state/argos"
 INCIDENT_DIR = STATE_DIR / "waydroid-incidents"
 
@@ -139,12 +142,14 @@ class Watchdog:
             self._session_seen_at = now
         if status.get("Container") != "RUNNING" or now - self._session_seen_at < self._grace:
             return None
-        output = self._run([*LXC, "sh", "-c", "pidof " + " ".join(AUDIO_PROCESSES)], timeout=6.0)
+        # プロセスが両方いて、かつ音声の中心機能が登録されているときだけ、正常と見なす。
+        output = self._run([*LXC, "sh", "-c", "pidof " + " ".join(AUDIO_PROCESSES) + f"; service check {AUDIO_SERVICE}"], timeout=6.0)
         if output is None:
-            # 何も見つからないとpidofは失敗を返す。コンテナに入れないだけの可能性も、ここで見分ける。
+            # コンテナに入れないだけの可能性を、ここで見分ける。
             reachable = self._run([*LXC, "true"], timeout=6.0)
             return False if reachable is not None else None
-        return len(output.split()) >= len(AUDIO_PROCESSES)
+        pids = [token for token in output.split() if token.isdigit()]
+        return len(pids) >= len(AUDIO_PROCESSES) and AUDIO_SERVICE_FOUND in output
 
     def tick(self) -> str:
         """1回分の見張り。行った処理の名前（ok/skip/suspect/restarted/limited）を返す。"""

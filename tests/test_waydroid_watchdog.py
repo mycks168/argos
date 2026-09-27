@@ -7,6 +7,8 @@ import pytest
 from argos.tools import waydroid_watchdog as wd
 from argos.tools.waydroid_watchdog import Watchdog, parse_status
 
+HEALTHY = "226 235\nService media.audio_flinger: found\n"
+NOT_REGISTERED = "72306 72303\nService media.audio_flinger: not found\n"
 RUNNING = "Session:\tRUNNING\nContainer:\tRUNNING\nVendor type:\tMAINLINE\n"
 FROZEN = "Session:\tRUNNING\nContainer:\tFROZEN\n"
 STOPPED = "Session:\tSTOPPED\n"
@@ -18,7 +20,7 @@ class Env:
     def __init__(self, tmp_path, **overrides):
         """既定は、起動から十分たった、正常なWaydroid。"""
         self.status = RUNNING
-        self.pidof = "226 235\n"
+        self.pidof = HEALTHY
         self.reachable = True
         self.now = 1000.0
         self.restarts = 0
@@ -90,7 +92,7 @@ def test_grace_period_after_session_start(tmp_path):
 def test_one_missing_process_is_broken(tmp_path):
     """片方だけ消えていても、壊れていると見なす（音声HALだけ戻らない状態がある）。"""
     env = Env(tmp_path)
-    env.pidof = "235\n"
+    env.pidof = "235\nService media.audio_flinger: found\n"
     assert env.dog.tick() == "suspect"
 
 
@@ -114,7 +116,7 @@ def test_recovery_resets_failure_count(tmp_path):
     env = Env(tmp_path)
     env.pidof = None
     env.dog.tick()
-    env.pidof = "1 2\n"
+    env.pidof = HEALTHY
     assert env.dog.tick() == "ok"
     env.pidof = None
     assert env.dog.tick() == "suspect" and env.restarts == 0
@@ -417,3 +419,21 @@ def test_restore_window_shows_layout_and_restarts_only_stopped_services(monkeypa
     assert calls[0][-1] == "show" and calls[0][1:3] == ["-m", "argos.tools.window_layout"]
     started = [command[-1] for command in calls if "start" in command]
     assert started == ["gps.service"]
+
+
+def test_processes_alive_but_audio_service_not_registered_is_broken(tmp_path):
+    """プロセスが両方いても、音声の中心機能(audio_flinger)が登録されていなければ、壊れていると見なす。
+
+    音声サーバーが落ちて再起動されても、音声HALを起動できず、機能が登録されない状態がある。
+    """
+    env = Env(tmp_path, fail_threshold=1)
+    env.pidof = NOT_REGISTERED
+    assert env.dog.tick() == "restarted" and env.restarts == 1
+
+
+@pytest.mark.parametrize("output", ["226 235\n", "\n", "Service media.audio_flinger: found\n", "226\nService media.audio_flinger: found\n"])
+def test_health_requires_both_processes_and_service(tmp_path, output):
+    """プロセスが足りない、機能の確認結果がない、のいずれも、正常とは見なさない。"""
+    env = Env(tmp_path)
+    env.pidof = output
+    assert env.dog.check_audio() is False
