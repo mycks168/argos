@@ -1,0 +1,16 @@
+[Unit]
+Description=ARGOS Waydroid audio watchdog (recovers when Android audio dies)
+After=argos-window-layout.service
+
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/@ARGOS_UID@
+Environment=ARGOS_PYTHON=@PROJECT_DIR@/.venv/bin/python
+WorkingDirectory=@PROJECT_DIR@
+ExecStart=@PROJECT_DIR@/.venv/bin/python -m argos.tools.waydroid_watchdog
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

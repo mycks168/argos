@@ -21,6 +21,7 @@ from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
 
 
 WINDOW_LAYOUT_SERVICE = "argos-window-layout"
+WATCHDOG_SERVICE = "argos-waydroid-watchdog"
 WINDOW_LAYOUT_KEY = "ARGOS_WINDOW_LAYOUT_ANDROID_APP"
 WINDOW_LAYOUT_STYLE_KEY = "ARGOS_WINDOW_LAYOUT_STYLE"
 YIELD_TO_APPS_KEY = "AUDIO_YIELD_TO_APPS"
@@ -1168,7 +1169,11 @@ def _apply_window_layout_choice(
     if not any(service.name == WINDOW_LAYOUT_SERVICE for service in plan.services):
         return
     unit = f"{WINDOW_LAYOUT_SERVICE}.service"
+    watchdog = f"{WATCHDOG_SERVICE}.service"
+    has_watchdog = any(service.name == WATCHDOG_SERVICE for service in plan.services)
     if load_yaml_environment(config_path).get(WINDOW_LAYOUT_KEY, "").strip():
+        if has_watchdog:
+            _run_user_systemctl(plan, ["enable", "--now", watchdog], runner=runner)
         for tool in ("waydroid", "labwc"):
             if not shutil.which(tool):
                 output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
@@ -1176,10 +1181,11 @@ def _apply_window_layout_choice(
         _enable_multitouch(plan, runner=runner, output_func=output_func)
     else:
         # 画面分割を使わない端末でも毎回通る後始末なので、失敗してもインストールは止めない。
-        try:
-            _run_user_systemctl(plan, ["disable", "--now", unit], runner=runner)
-        except subprocess.CalledProcessError as exc:
-            output_func(f"警告: {unit}を無効化できませんでした。必要なら手動で確認してください: {exc}")
+        for name in ((watchdog,) if has_watchdog else ()) + (unit,):
+            try:
+                _run_user_systemctl(plan, ["disable", "--now", name], runner=runner)
+            except subprocess.CalledProcessError as exc:
+                output_func(f"警告: {name}を無効化できませんでした。必要なら手動で確認してください: {exc}")
 
 
 def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print) -> None:
