@@ -38,6 +38,15 @@
       "enabled_by_default": false
     },
     {
+      "name": "argos-waydroid-watchdog",
+      "description": "Waydroidの音声の部品が壊れたら、原因の記録を残して自動で再起動する見張り（Waydroidを使う端末向け）",
+      "kind": "user",
+      "bundle": "optional",
+      "source": ".",
+      "unit": "systemd/argos-waydroid-watchdog.service",
+      "enabled_by_default": false
+    },
+    {
       "name": "tts-filter",
       "description": "読み上げ前の辞書変換と読み間違い補正API",
       "kind": "system",

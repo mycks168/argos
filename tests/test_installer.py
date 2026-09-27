@@ -1304,3 +1304,54 @@ def test_sync_waydroid_audio_priority(layout, before, after):
     values = {installer.WINDOW_LAYOUT_KEY: layout, installer.YIELD_TO_APPS_KEY: before}
     installer._sync_waydroid_audio_priority(values)
     assert values[installer.YIELD_TO_APPS_KEY] == after
+
+
+def _watchdog_plan(tmp_path):
+    """画面配置と見張りの両方を含む計画を作る。"""
+    names = ("argos-dashboard-kiosk", "argos-window-layout", "argos-waydroid-watchdog")
+    return build_install_plan(
+        [service for service in load_manifest() if service.name in names],
+        project_dir=tmp_path,
+        system_unit_dir=tmp_path / "system-units",
+        user_unit_dir=tmp_path / "user-units",
+        service_user="argos",
+        service_group="argos",
+        service_home=tmp_path / "home",
+    )
+
+
+def test_watchdog_service_is_opt_in_and_generic():
+    """見張りは任意サービスで既定では有効化されず、unitに端末固有の名前を含めない。"""
+    service = next(item for item in load_manifest() if item.name == "argos-waydroid-watchdog")
+    assert (service.kind, service.bundle, service.enabled_by_default) == ("user", "optional", False)
+    text = (Path(__file__).resolve().parents[1] / "systemd/argos-waydroid-watchdog.service").read_text(encoding="utf-8")
+    assert "argos.tools.waydroid_watchdog" in text and "Restart=always" in text and "waydroid-gps" not in text
+
+
+@pytest.mark.parametrize("answer, action", [("maps", "enable"), ("", "disable")])
+def test_watchdog_follows_window_layout_choice(tmp_path, monkeypatch, answer, action):
+    """Waydroidと並べて使うなら見張りも有効化し、使わないなら無効化する。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": answer}, config_path)
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    commands = []
+    installer._apply_window_layout_choice(_watchdog_plan(tmp_path), config_path, runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None)
+    units = [command[-1] for command in commands if action in command]
+    assert units == ["argos-waydroid-watchdog.service", "argos-window-layout.service"]
+
+
+def test_watchdog_disable_failure_does_not_skip_the_rest(tmp_path):
+    """見張りの無効化に失敗しても、警告だけ出して、画面配置の無効化へ進む。"""
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": ""}, config_path)
+    seen, messages = [], []
+
+    def runner(command, **kwargs):
+        """見張りの無効化だけ失敗させる。"""
+        seen.append(command[-1])
+        if command[-1] == "argos-waydroid-watchdog.service":
+            raise subprocess.CalledProcessError(1, command)
+
+    installer._apply_window_layout_choice(_watchdog_plan(tmp_path), config_path, runner=runner, output_func=messages.append)
+    assert seen == ["argos-waydroid-watchdog.service", "argos-window-layout.service"]
+    assert len(messages) == 1 and "argos-waydroid-watchdog.service" in messages[0]
