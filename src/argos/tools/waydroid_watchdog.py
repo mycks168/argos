@@ -1,9 +1,13 @@
-"""Waydroidの音声の部品が壊れたら、原因の記録を残して、自動で再起動する見張り。
+"""Waydroidの見張り。音声の部品が壊れたら再起動し、地図のウィンドウが消えたら出し直す。
 
 Androidの音声サーバー(audioserver)と音声HALが消えると、地図などの音声を使うアプリが
 起動の途中で止まる。この状態は自動では戻らないため、検知して再起動する。
 あわせて、落ちる直前のホストの状態を短い間隔で覚えておき、落ちたときに記録として残す
 （原因の調査用）。
+
+Googleマップは、ナビを終了するとウィンドウごと閉じることがある（アプリの普通の動き）。
+配置ツールが地図を出すことになっているのに、ウィンドウが続けて見つからなければ、
+出し直して、止まっていたGPS中継も戻す。
 """
 
 from __future__ import annotations
@@ -68,6 +72,11 @@ class Watchdog:
         window_seconds: float = 3600.0,
         history_size: int = 60,
         sample_host: Callable[[], dict[str, Any]] | None = None,
+        window_missing: Callable[[], bool | None] | None = None,
+        restore_window: Callable[[], None] | None = None,
+        window_threshold: int = 3,
+        window_cooldown: float = 120.0,
+        max_window_restores: int = 5,
     ) -> None:
         """外部とのやり取りと、判断の基準を保持する。"""
         self._run = run
@@ -84,6 +93,13 @@ class Watchdog:
         self._failures = 0
         self._restarts: list[float] = []
         self._session_seen_at: float | None = None
+        self._window_missing = window_missing
+        self._restore_window = restore_window
+        self._window_threshold = window_threshold
+        self._window_cooldown = window_cooldown
+        self._max_window_restores = max_window_restores
+        self._window_misses = 0
+        self._window_restores: list[float] = []
 
     @staticmethod
     def default_host_sample() -> dict[str, Any]:
@@ -137,6 +153,8 @@ class Watchdog:
         if healthy is None:
             self._failures = 0
             return "skip"
+        if healthy and self._window_missing is not None:
+            return self.check_window() or "ok"
         if healthy:
             self._failures = 0
             return "ok"
@@ -155,6 +173,32 @@ class Watchdog:
         log.warning("Waydroidの音声の部品が壊れているため、再起動します")
         self._restart()
         return "restarted"
+
+    def check_window(self) -> str | None:
+        """地図のウィンドウが消えたままなら、出し直す。行った処理の名前を返す（何もしなければNone）。
+
+        続けてwindow_threshold回、見つからなかったときだけ出し直す。ナビの終了で一時的に閉じて
+        すぐ開き直す場合や、判断できない状態（地図を出さない配置など）では、何もしない。
+        出し直しは、間隔（window_cooldown）と、時間あたりの回数に上限がある。
+        """
+        missing = self._window_missing() if self._window_missing else None
+        if not missing:
+            self._window_misses = 0
+            return None
+        self._window_misses += 1
+        if self._window_misses < self._window_threshold or self._restore_window is None:
+            return "window-suspect"
+        now = self._clock()
+        self._window_restores = [moment for moment in self._window_restores if now - moment < self._window]
+        if self._window_restores and now - self._window_restores[-1] < self._window_cooldown:
+            return "window-wait"
+        if len(self._window_restores) >= self._max_window_restores:
+            return "window-limited"
+        self._window_restores.append(now)
+        self._window_misses = 0
+        log.warning("地図のウィンドウが消えているため、出し直します")
+        self._restore_window()
+        return "window-restored"
 
     def save_incident(self, action: str) -> Path | None:
         """壊れた時点の記録（直前のホストの様子、Androidの落ちた原因）を、ファイルに残す。"""
@@ -180,6 +224,42 @@ class Watchdog:
         return directory
 
 
+def window_missing() -> bool | None:
+    """配置ツールが地図を出すことになっているのに、ウィンドウが無いか判定する。
+
+    判断できない（Noneを返す）のは、ARGOSだけを出す配置、Androidアプリが未設定、
+    labwcのセッションが見つからない、地図を出すべきでない状態のとき。
+    """
+    from argos.tools import window_layout
+
+    try:
+        package = window_layout.configured_package()
+        state = window_layout.load_state(STATE_DIR / "window-layout.json")
+    except (RuntimeError, ValueError, OSError):
+        return None
+    if not package or state.get("mode") == "argos":
+        return None
+    try:
+        window_layout.preflight()
+    except RuntimeError:
+        return None
+    found = subprocess.run(["wlrctl", "toplevel", "find", "app_id:" + window_layout.android_id(package)], capture_output=True, check=False, timeout=8)
+    argos = subprocess.run(["wlrctl", "toplevel", "find", window_layout.ARGOS_MATCH], capture_output=True, check=False, timeout=8)
+    # ARGOSの画面も無いときは、画面全体が準備中か落ちているので、地図だけの問題とは見なさない。
+    return found.returncode != 0 if argos.returncode == 0 else None
+
+
+def restore_window() -> None:
+    """地図のウィンドウを出し直し、画面配置を戻す。止まっている関連サービス（GPS中継など）も再開する。"""
+    from argos.tools import window_layout
+
+    subprocess.run([os.environ.get("ARGOS_PYTHON", "python3"), "-m", "argos.tools.window_layout", "show"], check=False, timeout=600)
+    for unit in [name.strip() for name in window_layout.setting(window_layout.RESTART_SERVICES_SETTING).split(",") if name.strip()]:
+        active = subprocess.run(["systemctl", "--user", "is-active", "--quiet", unit], check=False, timeout=30).returncode == 0
+        if not active:
+            subprocess.run(["systemctl", "--user", "start", unit], check=False, timeout=30)
+
+
 def recover() -> None:
     """Waydroidを、今の描画サイズのまま再起動し、画面配置を元に戻す。"""
     from argos.tools import window_layout
@@ -202,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true", help="1回だけ確認して終了する")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    dog = Watchdog(restart=recover)
+    dog = Watchdog(restart=recover, window_missing=window_missing, restore_window=restore_window)
     while True:
         try:
             result = dog.tick()

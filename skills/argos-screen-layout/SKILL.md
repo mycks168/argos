@@ -94,7 +94,7 @@ Googleマップの案内音声が鳴っている間、ARGOSの発話は自動で
 
 ## 音声の部品が壊れたとき
 
-Waydroidの音声サーバーが落ちると、地図が起動できなくなる。`argos-waydroid-watchdog` が自動で検知して、Waydroidを再起動し、画面配置を戻す（ナビは中断される。再開は手動）。記録は `~/.local/state/argos/waydroid-incidents/` にある。地図が起動しないときは、まず `systemctl --user status argos-waydroid-watchdog` と、その記録を確認する。
+Waydroidの音声サーバーが落ちると、地図が起動できなくなる。`argos-waydroid-watchdog` が自動で検知して、Waydroidを再起動し、画面配置を戻す（ナビは中断される。再開は手動）。記録は `~/.local/state/argos/waydroid-incidents/` にある。また、地図のウィンドウが（ナビの終了などで）消えたままなら、約30秒後に、出し直して、止まっていたGPS中継も戻す。地図が起動しないときは、まず `systemctl --user status argos-waydroid-watchdog` と、その記録を確認する。
 
 ## 実行のたびに自動で行われること
 

@@ -225,7 +225,7 @@ def test_main_once_reports_result(monkeypatch, capsys):
 
         result = "ok"
 
-        def __init__(self, restart):
+        def __init__(self, restart, **kwargs):
             """再起動関数を受け取る。"""
 
         def tick(self):
@@ -245,7 +245,7 @@ def test_main_loop_survives_errors(monkeypatch):
 
         calls = 0
 
-        def __init__(self, restart):
+        def __init__(self, restart, **kwargs):
             """再起動関数を受け取る。"""
 
         def tick(self):
@@ -268,3 +268,152 @@ def test_main_loop_survives_errors(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         wd.main(["--interval", "1"])
     assert FlakyDog.calls == 2 and sleeps == [1.0, 1.0]
+
+
+class WindowEnv(Env):
+    """地図のウィンドウの有無を指定できる環境。"""
+
+    def __init__(self, tmp_path, **overrides):
+        """既定は、ウィンドウが無い状態。"""
+        self.missing = True
+        self.restored = 0
+        super().__init__(tmp_path, window_missing=lambda: self.missing, restore_window=self.restore, **overrides)
+
+    def restore(self):
+        """出し直しの呼び出しを数える。"""
+        self.restored += 1
+
+
+def test_window_is_restored_after_consecutive_misses(tmp_path):
+    """ウィンドウが続けて見つからなければ、出し直す。1〜2回見つからないだけでは何もしない。"""
+    env = WindowEnv(tmp_path)
+    assert [env.dog.tick() for _ in range(3)] == ["window-suspect", "window-suspect", "window-restored"]
+    assert env.restored == 1 and env.restarts == 0
+
+
+def test_short_disappearance_is_ignored(tmp_path):
+    """ナビ終了で一時的に閉じて、すぐ開き直した場合は、出し直さない（数え直し）。"""
+    env = WindowEnv(tmp_path)
+    env.dog.tick()
+    env.dog.tick()
+    env.missing = False
+    assert env.dog.tick() == "ok"
+    env.missing = True
+    assert env.dog.tick() == "window-suspect" and env.restored == 0
+
+
+def test_window_restore_has_cooldown_and_hourly_limit(tmp_path):
+    """出し直しても直らないとき、間隔を置き、時間あたりの回数に上限がある。"""
+    env = WindowEnv(tmp_path, window_cooldown=120.0, max_window_restores=2, window_threshold=1)
+    assert env.dog.tick() == "window-restored"
+    env.now += 60
+    assert env.dog.tick() == "window-wait"
+    env.now += 100
+    assert env.dog.tick() == "window-restored"
+    env.now += 200
+    assert env.dog.tick() == "window-limited" and env.restored == 2
+    env.now += 4000
+    assert env.dog.tick() == "window-restored"
+
+
+def test_window_not_checked_when_not_applicable(tmp_path):
+    """判断できない状態（地図を出さない配置など）や、機能を渡していないときは、何もしない。"""
+    env = WindowEnv(tmp_path, window_threshold=1)
+    env.dog._window_missing = lambda: None
+    assert env.dog.tick() == "ok" and env.restored == 0
+    plain = Env(tmp_path / "plain")
+    assert plain.dog.tick() == "ok"
+    no_restore = WindowEnv(tmp_path / "nr", window_threshold=1)
+    no_restore.dog._restore_window = None
+    assert no_restore.dog.tick() == "window-suspect"
+
+
+def test_window_check_waits_for_audio_health(tmp_path):
+    """音声の部品が壊れているときは、ウィンドウより先に再起動の判断を行い、ウィンドウは見ない。"""
+    env = WindowEnv(tmp_path, fail_threshold=1)
+    env.pidof = None
+    assert env.dog.tick() == "restarted" and env.restored == 0
+
+
+def _layout_env(monkeypatch, tmp_path, *, mode="split", package="pkg", found=0, argos=0, preflight_ok=True):
+    """配置ツールと外部コマンドを偽物にして、ウィンドウ判定の環境を作る。"""
+    from argos.tools import window_layout
+
+    monkeypatch.setattr(wd, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(window_layout, "configured_package", lambda: package)
+    monkeypatch.setattr(window_layout, "load_state", lambda path: {"mode": mode})
+    monkeypatch.setattr(window_layout, "android_id", lambda pkg: f"waydroid.{pkg}")
+
+    def fake_preflight():
+        """labwcのセッションが無い状態を模擬する。"""
+        if not preflight_ok:
+            raise RuntimeError("labwcなし")
+        return {}
+
+    monkeypatch.setattr(window_layout, "preflight", fake_preflight)
+
+    class Result:
+        """コマンドの結果を模した代役。"""
+
+        def __init__(self, code):
+            """終了コードを保持する。"""
+            self.returncode = code
+
+    def run(command, **kwargs):
+        """ARGOSの画面か、地図のウィンドウかで結果を分ける。"""
+        return Result(argos if command[-1] == window_layout.ARGOS_MATCH else found)
+
+    monkeypatch.setattr(wd.subprocess, "run", run)
+
+
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        ({"found": 1}, True),
+        ({"found": 0}, False),
+        ({"found": 1, "argos": 1}, None),
+        ({"mode": "argos", "found": 1}, None),
+        ({"package": None, "found": 1}, None),
+        ({"preflight_ok": False, "found": 1}, None),
+    ],
+)
+def test_window_missing_detection(monkeypatch, tmp_path, kwargs, expected):
+    """地図を出すはずの配置で、ウィンドウが無いときだけTrue。ARGOSだけの配置・未設定・ARGOSも無い・labwcなしは判断しない。"""
+    _layout_env(monkeypatch, tmp_path, **kwargs)
+    assert wd.window_missing() is expected
+
+
+def test_window_missing_returns_none_on_config_errors(monkeypatch, tmp_path):
+    """設定が不正・状態ファイルを読めないときは、判断しない。"""
+    from argos.tools import window_layout
+
+    monkeypatch.setattr(window_layout, "configured_package", lambda: (_ for _ in ()).throw(RuntimeError("未対応")))
+    assert wd.window_missing() is None
+
+
+def test_restore_window_shows_layout_and_restarts_only_stopped_services(monkeypatch):
+    """出し直しは、配置を戻し、止まっている関連サービス（GPS中継など）だけ再開する。動いているものには触れない。"""
+    from argos.tools import window_layout
+
+    monkeypatch.setattr(window_layout, "setting", lambda name: "gps.service, running.service")
+    calls = []
+
+    class Result:
+        """コマンドの結果を模した代役。"""
+
+        def __init__(self, code):
+            """終了コードを保持する。"""
+            self.returncode = code
+
+    def run(command, **kwargs):
+        """gps.serviceだけ止まっている状態にする。"""
+        calls.append(command)
+        if "is-active" in command:
+            return Result(3 if command[-1] == "gps.service" else 0)
+        return Result(0)
+
+    monkeypatch.setattr(wd.subprocess, "run", run)
+    wd.restore_window()
+    assert calls[0][-1] == "show" and calls[0][1:3] == ["-m", "argos.tools.window_layout"]
+    started = [command[-1] for command in calls if "start" in command]
+    assert started == ["gps.service"]
