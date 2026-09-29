@@ -11,6 +11,7 @@ import shutil
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 from tmux_util import capture, cleanup, send_keys, tmux, wait_for
 
@@ -117,6 +118,47 @@ def parse_usage(screen: str, now: datetime | None = None) -> dict:
     }
 
 
+def session_log_dir(cwd: Path, config_dir: Path) -> Path:
+    """claudeが、起動したディレクトリごとに会話の記録を置く場所を返す。
+
+    記録は `<設定ディレクトリ>/projects/<起動ディレクトリの英数字以外を-にした名前>/` に置かれる。
+    """
+    return config_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+
+
+def claude_config_dir() -> Path:
+    """claudeの設定ディレクトリを返す。CLAUDE_CONFIG_DIRがあればそれを使う。"""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
+def list_entries(directory: Path) -> set[str]:
+    """ディレクトリの中の名前の一覧を返す。ディレクトリがなければ空にする。"""
+    try:
+        return {entry.name for entry in directory.iterdir()}
+    except OSError:
+        return set()
+
+
+def remove_new_entries(directory: Path, before: set[str]) -> list[str]:
+    """起動前になかったもの（今回の/usageの会話の記録）だけを消し、消した名前を返す。
+
+    /usageを調べるたびに記録が1つずつ増え、どこからも使われないため。
+    前からあったものには触らない。消せなかったものは残す。
+    """
+    removed: list[str] = []
+    for name in sorted(list_entries(directory) - before):
+        path = directory / name
+        try:
+            if path.is_dir() and not path.is_symlink():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except OSError:
+            continue
+        removed.append(name)
+    return removed
+
+
 def main() -> None:  # pragma: no cover
     """tmuxセッション上でclaudeを起動して/usageを実行し、結果をJSONで標準出力する。"""
     session = f"claude_usage_{os.getpid()}"
@@ -124,6 +166,9 @@ def main() -> None:  # pragma: no cover
     if not claude_command:
         raise RuntimeError("claudeコマンドが見つかりません")
 
+    # 今回の会話の記録だけを、終わったあとで消せるよう、起動前の中身を覚えておく
+    log_dir = session_log_dir(Path.cwd(), claude_config_dir())
+    before = list_entries(log_dir)
     # 環境ごとにインストール先が違うため、PATHまたはCLAUDE_COMMANDで解決する
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", claude_command)
     try:
@@ -177,6 +222,7 @@ def main() -> None:  # pragma: no cover
         result = parse_usage(screen)
     finally:
         cleanup(session)
+        remove_new_entries(log_dir, before)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

@@ -82,6 +82,8 @@ uv run ./claude_usage.py
 
 `claude`を起動して`/usage`を実行し、現在セッションと週次の使用率を以下の形式のJSONで標準出力に出力します。
 
+`claude` は起動するたびに、会話の記録を `~/.claude/projects/-opt-argos-services-agent-limit/`（起動したディレクトリごとの場所。`CLAUDE_CONFIG_DIR` があればその下）に残します。5分おきに調べると1日に100件以上たまり、どこからも使わないため、`claude_usage.py` は起動前の中身を覚えておき、終わったあとで今回できた記録だけを消します。前からあったものには触りません。
+
 ```json
 {
   "five_hour": {"usage_pct": 12.34, "reset": "06/15 14:45"},
