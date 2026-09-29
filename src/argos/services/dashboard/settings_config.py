@@ -296,6 +296,13 @@ DESCRIPTION_BY_KEY = {
 
 SECRET_SUFFIXES = ("token", "bearer_token", "view_key", "keyword_hash")
 
+# エージェントランナーも起動時に読む設定。変えたら、ランナーの再起動も必要になる。
+# environmentは、ランナーが起動するエージェントのコマンドへ引き継がれる。
+RUNNER_SETTING_PREFIXES = ("agent.", "agents.", "runner.", "environment.")
+
+# 保存のたびに作る設定の控えを、新しいものから何件残すか。
+MAX_CONFIG_BACKUPS = 5
+
 
 def load_settings_form(config_path: Path) -> dict[str, Any]:
     """設定画面用の項目定義と現在値を返す。"""
@@ -309,6 +316,23 @@ def load_settings_form(config_path: Path) -> dict[str, Any]:
         "sections": SECTION_LABELS,
         "restart_required": True,
     }
+
+
+def changed_setting_keys(config_path: Path, values: object) -> list[str]:
+    """保存しようとしている値のうち、今の設定から変わる項目の名前を返す。"""
+    if not isinstance(values, dict):
+        return []
+    current_values = dict(_flatten_config(_load_yaml_mapping(config_path)))
+    return sorted(
+        key
+        for key, value in values.items()
+        if value != "__ARGOS_SECRET_UNCHANGED__" and key in current_values and current_values[key] != value
+    )
+
+
+def needs_runner_restart(keys: list[str]) -> bool:
+    """エージェントランナーも読む設定が含まれるか判定する。"""
+    return any(key.startswith(RUNNER_SETTING_PREFIXES) for key in keys)
 
 
 def save_settings_form(config_path: Path, values: object) -> Path:
@@ -334,6 +358,7 @@ def save_settings_form(config_path: Path, values: object) -> Path:
     original = config_path.read_bytes()
     backup_path.write_bytes(original)
     os.chmod(backup_path, config_path.stat().st_mode & 0o777)
+    _prune_backups(config_path, MAX_CONFIG_BACKUPS)
 
     rendered = yaml.safe_dump(data, allow_unicode=True, sort_keys=False).encode("utf-8")
     fd, temp_name = tempfile.mkstemp(prefix=f".{config_path.name}.", dir=config_path.parent)
@@ -348,6 +373,20 @@ def save_settings_form(config_path: Path, values: object) -> Path:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
     return backup_path
+
+
+def _prune_backups(config_path: Path, keep: int) -> None:
+    """設定の控えを、新しいものから keep 件だけ残して消す。
+
+    控えの名前は日時順に並ぶ（`<設定ファイル名>.backup-<年月日-時分秒-マイクロ秒>`）ので、名前で並べる。
+    消せなかった控えは、保存を失敗させずに残す。
+    """
+    backups = sorted(config_path.parent.glob(f"{config_path.name}.backup-*"), key=lambda path: path.name)
+    for old in backups[: max(0, len(backups) - keep)]:
+        try:
+            old.unlink()
+        except OSError:
+            continue
 
 
 def _flatten_config(data: dict[str, Any], prefix: str = "") -> list[tuple[str, Any]]:

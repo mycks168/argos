@@ -570,6 +570,9 @@ def test_dashboard_settings_page_and_authenticated_config_api(tmp_path, monkeypa
         assert status == 200
         assert body["saved"] is True
         assert body["restart_required"] is True
+        assert body["runner_restart_required"] is False
+        assert body["changed"] == ["audio.output_volume"]
+        assert "エージェントランナー" not in body["message"]
     finally:
         server.stop()
 
@@ -1236,3 +1239,54 @@ def test_add_notification_keeps_speech_fields_only_when_given():
     state.add_notification("#雑談", "長い本文", source="Slack", speech_title="雑談", speech_text="要約")
     assert "speech_text" not in received[0] and "speech_title" not in received[0]
     assert received[1]["speech_title"] == "雑談" and received[1]["speech_text"] == "要約"
+
+
+def _css_rule(html: str, selector: str) -> str:
+    """HTMLのstyleから、指定したセレクターの宣言部分を取り出す。"""
+    import re
+
+    match = re.search(r"\n\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", html)
+    assert match, selector
+    return match.group(1)
+
+
+def test_settings_modal_scrolls_when_screen_is_short():
+    """画面の縦幅が狭くても、設定モーダルが画面に収まり、中身だけスクロールできる。"""
+    from importlib.resources import files
+
+    html = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
+    assert "max-height: 100%" in _css_rule(html, ".settings-modal-content")
+    body = _css_rule(html, ".settings-modal-body")
+    assert "overflow-y: auto" in body and "min-height: 0" in body
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-modal-header")
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-row")
+
+
+def test_config_save_reports_runner_restart_for_agent_settings(tmp_path):
+    """エージェント関係の設定を変えたら、エージェントランナーの再起動も必要だと知らせる。"""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agents:\n  codex:\n    model: old\naudio:\n  output_volume: 70\n", encoding="utf-8")
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", config_path=config_path)
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        status, body = _read_json(
+            base_url + "/api/config", "PUT", {"values": {"agents.codex.model": "new", "audio.output_volume": 70}}, "secret"
+        )
+    finally:
+        server.stop()
+    assert status == 200
+    assert body["runner_restart_required"] is True
+    assert body["changed"] == ["agents.codex.model"]
+    assert "エージェントランナーの再起動も必要" in body["message"]
+
+
+def test_settings_page_has_restart_button():
+    """本体設定の画面に、確認つきの再起動ボタンと、戻ってくるのを待つ処理がある。"""
+    from importlib.resources import files
+
+    html = files("argos.services.dashboard.static").joinpath("settings.html").read_text(encoding="utf-8")
+    assert '<button id="restart" type="button" data-confirm="false">ARGOSを再起動</button>' in html
+    assert 'JSON.stringify({action: "restart_argos"})' in html
+    assert "もう一度押すと再起動" in html
+    assert "async function waitForRestart()" in html

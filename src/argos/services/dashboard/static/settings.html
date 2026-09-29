@@ -56,6 +56,10 @@
     #save { min-width: 150px; min-height: 46px; border: 0; border-radius: 10px; background: #18a6c6; color: #051116;
       font-weight: 800; cursor: pointer; }
     #save:disabled { opacity: .55; cursor: wait; }
+    #restart { min-height: 46px; padding: 0 16px; border: 1px solid #735f30; border-radius: 10px; background: #231c0c;
+      color: #f3d99b; font-weight: 800; cursor: pointer; }
+    #restart[data-confirm="true"] { background: #b8860b; color: #140f04; }
+    #restart:disabled { opacity: .55; cursor: wait; }
     .empty { padding: 24px; border: 1px dashed #465964; border-radius: 12px; color: #bac7ce; }
     @media (max-width: 640px) {
       main { width: min(100% - 20px, 920px); padding-top: 18px; }
@@ -63,7 +67,7 @@
       .card { grid-template-columns: 1fr; gap: 13px; }
       .switch { justify-self: start; }
       .actions-inner { align-items: stretch; flex-direction: column; }
-      #save { width: 100%; }
+      #save, #restart { width: 100%; }
     }
   </style>
 </head>
@@ -82,6 +86,7 @@
   <div class="actions">
     <div class="actions-inner">
       <div id="status" role="status"></div>
+      <button id="restart" type="button" data-confirm="false">ARGOSを再起動</button>
       <button id="save" type="button" disabled>変更を保存</button>
     </div>
   </div>
@@ -91,6 +96,14 @@
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const form = document.querySelector("#form");
     const saveButton = document.querySelector("#save");
+    const restartButton = document.querySelector("#restart");
+    // 再起動は、誤って押しても止まらないよう、もう一度押したときだけ行う。
+    const RESTART_CONFIRM_MS = 5000;
+    // 本体が止まるまで待ってから、戻ってきたかを確かめる。
+    const RESTART_FIRST_CHECK_MS = 3000;
+    const RESTART_CHECK_INTERVAL_MS = 2000;
+    const RESTART_TIMEOUT_MS = 90000;
+    let restartConfirmTimer = null;
     const statusText = document.querySelector("#status");
     const searchInput = document.querySelector("#search");
     let fields = [];
@@ -376,6 +389,70 @@
       } catch (error) {
         setStatus(error.message, true);
       } finally {
+        saveButton.disabled = false;
+      }
+    });
+
+    function resetRestartButton() {
+      clearTimeout(restartConfirmTimer);
+      restartConfirmTimer = null;
+      restartButton.dataset.confirm = "false";
+      restartButton.textContent = "ARGOSを再起動";
+    }
+
+    function wait(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async function isArgosBack() {
+      // 本体の中で動くダッシュボードが応答すれば、再起動が終わったとみなす。
+      try {
+        const response = await fetch("/api/config", {headers: {Authorization: `Bearer ${dashboardToken}`}, cache: "no-store"});
+        return response.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    async function waitForRestart() {
+      await wait(RESTART_FIRST_CHECK_MS);
+      const deadline = Date.now() + RESTART_TIMEOUT_MS;
+      while (Date.now() < deadline) {
+        if (await isArgosBack()) return true;
+        await wait(RESTART_CHECK_INTERVAL_MS);
+      }
+      return false;
+    }
+
+    restartButton.addEventListener("click", async () => {
+      if (restartButton.dataset.confirm !== "true") {
+        restartButton.dataset.confirm = "true";
+        restartButton.textContent = "もう一度押すと再起動";
+        restartConfirmTimer = setTimeout(resetRestartButton, RESTART_CONFIRM_MS);
+        return;
+      }
+      resetRestartButton();
+      restartButton.disabled = true;
+      saveButton.disabled = true;
+      setStatus("ARGOSを再起動しています…");
+      try {
+        const response = await fetch("/api/control", {
+          method: "POST",
+          headers: {"Content-Type": "application/json", Authorization: `Bearer ${dashboardToken}`},
+          body: JSON.stringify({action: "restart_argos"}),
+        });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || "再起動できませんでした");
+        if (await waitForRestart()) {
+          setStatus("再起動しました。");
+          await loadSettings();
+        } else {
+          setStatus("ARGOSが戻ってきません。ARGOSの状態を確認してください。", true);
+        }
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        restartButton.disabled = false;
         saveButton.disabled = false;
       }
     });

@@ -539,6 +539,27 @@ def test_locked_double_click_switches_slot_without_auth_release(monkeypatch):
     assert snapshot["status"]["code"] == "locked"
 
 
+def test_dashboard_control_restart_stops_app_and_marks_restart(monkeypatch):
+    """再起動の操作を受けたら、応答を返したあとで止まり、再起動を求められたことを覚える。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    app._restart_delay_seconds = 0
+    assert app.restart_requested is False
+
+    assert app._handle_dashboard_control({"action": "restart_argos"}) == {"restarting": True}
+    assert app.restart_requested is True
+    assert app._shutdown.wait(2)
+
+
+def test_dashboard_control_restart_is_rejected_in_dry_run(monkeypatch):
+    """dry-runでは、再起動の操作を受け付けない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    with pytest.raises(ValueError, match="dry-run"):
+        app._handle_dashboard_control({"action": "restart_argos"})
+    assert app.restart_requested is False
+
+
 def test_dashboard_control_updates_mute_state(monkeypatch):
     """ダッシュボード操作でミュート状態を切り替える。"""
     _patch_app(monkeypatch)

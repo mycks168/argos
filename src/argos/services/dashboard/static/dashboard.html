@@ -891,9 +891,14 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      /* 画面の縦幅が狭くても、設定画面が画面からはみ出さないよう、上下に余白を残す。 */
+      padding: 8px 0;
     }
     .settings-modal-content {
       width: min(400px, 90vw);
+      max-height: 100%;
+      display: flex;
+      flex-direction: column;
       border: 1px solid #354855;
       background: #0b1117;
       border-radius: 12px;
@@ -901,6 +906,7 @@
       box-shadow: 0 10px 25px rgba(0,0,0,0.5);
     }
     .settings-modal-header {
+      flex-shrink: 0;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -919,8 +925,15 @@
       display: flex;
       flex-direction: column;
       gap: 16px;
+      /* 入りきらない項目は、見出しと「閉じる」を残したまま、中身だけスクロールする。 */
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      touch-action: pan-y;
     }
     .settings-row {
+      /* スクロールする中では、項目を縮めない。 */
+      flex-shrink: 0;
       display: flex;
       flex-direction: column;
       gap: 8px;

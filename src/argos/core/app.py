@@ -295,6 +295,9 @@ class ArgosApp:
             should_record_short_press=self._is_auth_locked,
         )
         self._shutdown = threading.Event()
+        self._restart_requested = False
+        # 再起動を求められてから止まるまでの秒数。ダッシュボードへ応答を返す時間を残す。
+        self._restart_delay_seconds = 0.5
         self._status = StatusController(self._dashboard_state, self._auth.is_authenticated)
         initial_muted = saved_audio_state.muted if saved_audio_state.muted is not None else False
         self._speech = SpeechController(
@@ -1337,6 +1340,8 @@ class ArgosApp:
                 "session_reset": True,
                 "slot": {"name": slot_name, "provider": slot_provider},
             }
+        elif action == "restart_argos":
+            return self._request_restart()
         elif action == "compact_agent_session":
             if not self._settings.conversation_memory_enabled:
                 raise ValueError("会話履歴の引き継ぎが無効です")
@@ -1692,9 +1697,34 @@ class ArgosApp:
         """いまの会話が続いているか。エージェントが作業中（考え中）の無音の時間も含む。"""
         return self._is_speech_busy() or self._dashboard_state.status_code() in CONVERSATION_STATUS_CODES
 
+    @property
+    def restart_requested(self) -> bool:
+        """ダッシュボードから再起動を求められて止まったならTrueを返す。"""
+        return self._restart_requested
+
+    def _request_restart(self) -> dict[str, object]:
+        """ARGOS本体を止めて、systemdに起動し直してもらう。
+
+        応答を返してから止まるよう、少し待ってから停止する。止まったあと、`main` が
+        RESTART_EXIT_CODE で終わり、systemd（Restart=on-failure）が起動し直す。
+        エージェントランナーなど、別のサービスは止めない。
+        """
+        if self._settings.dry_run:
+            raise ValueError("dry-runでは再起動できません")
+        log.info("ダッシュボードから再起動を求められました")
+        self._restart_requested = True
+        timer = threading.Timer(self._restart_delay_seconds, self._stop_components)
+        timer.daemon = True
+        timer.start()
+        return {"restarting": True}
+
     def _handle_signal(self, signum: int, _frame: object) -> None:
         """終了シグナルを受けて停止する。"""
         log.info("終了シグナルを受信しました: %s", signum)
+        self._stop_components()
+
+    def _stop_components(self) -> None:
+        """動いている部品を止めて、メインループを終わらせる。"""
         self._shutdown.set()
         if self._greeting is not None:
             self._greeting.mark_active()
