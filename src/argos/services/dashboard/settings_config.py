@@ -296,6 +296,10 @@ DESCRIPTION_BY_KEY = {
 
 SECRET_SUFFIXES = ("token", "bearer_token", "view_key", "keyword_hash")
 
+# エージェントランナーも起動時に読む設定。変えたら、ランナーの再起動も必要になる。
+# environmentは、ランナーが起動するエージェントのコマンドへ引き継がれる。
+RUNNER_SETTING_PREFIXES = ("agent.", "agents.", "runner.", "environment.")
+
 
 def load_settings_form(config_path: Path) -> dict[str, Any]:
     """設定画面用の項目定義と現在値を返す。"""
@@ -309,6 +313,23 @@ def load_settings_form(config_path: Path) -> dict[str, Any]:
         "sections": SECTION_LABELS,
         "restart_required": True,
     }
+
+
+def changed_setting_keys(config_path: Path, values: object) -> list[str]:
+    """保存しようとしている値のうち、今の設定から変わる項目の名前を返す。"""
+    if not isinstance(values, dict):
+        return []
+    current_values = dict(_flatten_config(_load_yaml_mapping(config_path)))
+    return sorted(
+        key
+        for key, value in values.items()
+        if value != "__ARGOS_SECRET_UNCHANGED__" and key in current_values and current_values[key] != value
+    )
+
+
+def needs_runner_restart(keys: list[str]) -> bool:
+    """エージェントランナーも読む設定が含まれるか判定する。"""
+    return any(key.startswith(RUNNER_SETTING_PREFIXES) for key in keys)
 
 
 def save_settings_form(config_path: Path, values: object) -> Path:

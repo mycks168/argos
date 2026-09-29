@@ -5,6 +5,8 @@ import yaml
 
 from argos.services.dashboard.settings_config import (
     load_settings_form,
+    changed_setting_keys,
+    needs_runner_restart,
     save_settings_form,
 )
 
@@ -106,3 +108,28 @@ def test_secret_values_are_masked_and_unchanged_marker_keeps_value(tmp_path):
 
     save_settings_form(config_path, {"dashboard.token": "__ARGOS_SECRET_UNCHANGED__"})
     assert yaml.safe_load(config_path.read_text(encoding="utf-8"))["dashboard"]["token"] == "secret-value"
+
+
+def test_changed_setting_keys_returns_only_changed_values(tmp_path):
+    """今の設定から変わる項目だけを返す。未知の項目と、変えない秘密情報は含めない。"""
+    config_path = tmp_path / "config.yaml"
+    _write_config(config_path)
+    values = {
+        "audio.output_volume": 70,
+        "audio.listen_mode": "vad",
+        "agents.antigravity.skip_permissions": True,
+        "unknown.key": 1,
+        "custom.keep_me": "__ARGOS_SECRET_UNCHANGED__",
+    }
+    assert changed_setting_keys(config_path, values) == ["agents.antigravity.skip_permissions", "audio.listen_mode"]
+    assert changed_setting_keys(config_path, None) == []
+
+
+def test_needs_runner_restart_for_agent_settings():
+    """エージェント・ランナー・environmentの項目を変えたときだけ、ランナーの再起動が必要になる。"""
+    assert needs_runner_restart(["audio.device", "agents.codex.model"])
+    assert needs_runner_restart(["agent.slots"])
+    assert needs_runner_restart(["runner.port"])
+    assert needs_runner_restart(["environment.SLACK_WEBHOOK_URL"])
+    assert not needs_runner_restart(["audio.device", "audio.output_device", "agent_extra"])
+    assert not needs_runner_restart([])

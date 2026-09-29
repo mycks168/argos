@@ -29,6 +29,8 @@ from argos.services.dashboard.audio_devices import (
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.settings_config import (
     load_settings_form,
+    changed_setting_keys,
+    needs_runner_restart,
     save_settings_form,
 )
 from argos.services.dashboard.state import DashboardState
@@ -450,6 +452,7 @@ def _create_handler(
                 return
             try:
                 payload = self._read_json(MAX_BODY_BYTES)
+                changed = changed_setting_keys(config_path, payload.get("values"))
                 backup_path = save_settings_form(config_path, payload.get("values"))
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -458,11 +461,17 @@ def _create_handler(
                 log.exception("設定ファイルの保存に失敗しました")
                 self._send_json({"error": "設定ファイルを保存できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
+            runner_restart = needs_runner_restart(changed)
+            message = "保存しました。反映にはARGOSの再起動が必要です。"
+            if runner_restart:
+                message += "エージェント関係の設定は、エージェントランナーの再起動も必要です。"
             self._send_json(
                 {
                     "saved": True,
                     "restart_required": True,
-                    "message": "保存しました。反映にはARGOSの再起動が必要です。",
+                    "runner_restart_required": runner_restart,
+                    "changed": changed,
+                    "message": message,
                     "backup": backup_path.name,
                 }
             )
