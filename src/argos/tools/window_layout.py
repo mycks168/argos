@@ -312,10 +312,14 @@ def resolve_display(args):
     return detect_display()
 
 
+class UnsupportedDesktopError(RuntimeError):
+    """配置機能を利用できないデスクトップ環境を表す。"""
+
+
 def preflight():
     """操作対象のlabwcセッションを確認し、labwcへ渡す環境変数を返す。"""
-    if not all(shutil.which(tool) for tool in ("wtype", "wlrctl")) or not os.environ.get("WAYLAND_DISPLAY"):
-        raise RuntimeError("labwcのWaylandセッションとwtype・wlrctlが必要です")
+    if not all(shutil.which(tool) for tool in ("labwc", "wtype", "wlrctl")) or not os.environ.get("WAYLAND_DISPLAY"):
+        raise UnsupportedDesktopError("labwcのWaylandセッションとwtype・wlrctlが必要です")
     try:
         pids = subprocess.check_output(["pgrep", "-u", str(os.getuid()), "-x", "labwc"], text=True, timeout=5).split()
     except subprocess.CalledProcessError:
@@ -644,7 +648,7 @@ def apply_layout(args, state, path):
         raise RuntimeError(f"Androidアプリが未設定です。config.yamlのwindow_layout.android_appに{'/'.join(ANDROID_APPS)}を指定してください")
     try:
         env = preflight()
-    except RuntimeError as exc:
+    except UnsupportedDesktopError as exc:
         if args.mode != "boot":
             raise
         print(json.dumps(dict(state, skipped=str(exc)), ensure_ascii=False))
