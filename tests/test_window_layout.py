@@ -270,15 +270,31 @@ def test_boot_skips_quietly(desktop, monkeypatch, capsys, reason):
     if reason == "no_app":
         monkeypatch.setenv(layout.APP_SETTING, "")
     else:
-        def no_labwc(*args, **kwargs):
-            """labwcのプロセスがない状態を模擬する。"""
-            raise subprocess.CalledProcessError(1, "pgrep")
-
-        monkeypatch.setattr(layout.subprocess, "check_output", no_labwc)
+        monkeypatch.setattr(layout.shutil, "which", lambda tool: None)
     original = config.read_bytes()
     monkeypatch.setattr(sys, "argv", ["layout", "boot"])
     layout.main()
     assert "skipped" in capsys.readouterr().out
+    assert config.read_bytes() == original
+    assert ["labwc", "-r"] not in calls
+
+
+@pytest.mark.parametrize("pids", ["", "123\n456\n", None])
+def test_boot_session_not_ready_remains_retryable(desktop, monkeypatch, pids):
+    """起動途中のセッション不確定を成功扱いせず、サービスの再試行へ渡す。"""
+    _, config, calls = desktop
+    original = config.read_bytes()
+
+    def sessions(*args, **kwargs):
+        """セッション未起動または複数存在を再現する。"""
+        if pids is None:
+            raise subprocess.CalledProcessError(1, "pgrep")
+        return pids
+
+    monkeypatch.setattr(layout.subprocess, "check_output", sessions)
+    monkeypatch.setattr(sys, "argv", ["layout", "boot"])
+    with pytest.raises(RuntimeError, match="一意"):
+        layout.main()
     assert config.read_bytes() == original
     assert ["labwc", "-r"] not in calls
 
