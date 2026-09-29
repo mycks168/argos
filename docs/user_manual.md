@@ -329,7 +329,7 @@ sudo systemctl restart argos-agent-runner.service
 
 - ボタンの再起動は、systemd の `argos.service` で動かしているとき（通常の導入）に使えます。手で `argos` を起動している場合は、止まるだけで起動し直さないので、もう一度起動してください。
 
-保存の前に `config.yaml` のバックアップを自動で作ります（`config.yaml.backup-<日時>`）。設定を壊したときはこのファイルから戻せます。
+保存の前に `config.yaml` のバックアップを自動で作ります（`config.yaml.backup-<日時>`）。設定を壊したときはこのファイルから戻せます。バックアップは新しいものから5件だけ残り、それより古いものは保存のときに自動で消えます。
 
 ---
 

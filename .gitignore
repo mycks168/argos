@@ -9,5 +9,7 @@ cache/
 .env.*
 config.toml
 config.yaml
+# 設定画面で保存するたびに作る控え（最新5件だけ残る）
+config.yaml.backup-*
 services/agent-limit/*.json
 hailort.log
