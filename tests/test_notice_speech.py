@@ -150,13 +150,17 @@ def test_error_tone_is_a_short_valid_wav():
 
 
 @pytest.mark.parametrize(
-    "title, spoken",
-    [("Claude 応答完了", "Claudeの応答が終わったよ。"), ("Codex 端末応答完了", "Codex 端末の応答が終わったよ。"), ("応答完了", "応答が終わったよ。")],
+    "title, spoken, slot",
+    [
+        ("Claude 応答完了", "Claudeの応答が終わったよ。", "Claude"),
+        ("Codex 端末応答完了", "Codex 端末の応答が終わったよ。", "Codex"),
+        ("応答完了", "応答が終わったよ。", ""),
+    ],
 )
-def test_response_ready_of_another_slot_is_spoken(title, spoken):
+def test_response_ready_of_another_slot_is_spoken(title, spoken, slot):
     """別のスロットで応答が終わったことは、ARGOS自身の通知でも、声で知らせる。"""
     plan = build_plan({"id": "n1", "title": title, "text": "スロットを切り替えると読み上げます。", "source": "ARGOS", "priority": "normal"})
-    assert plan == SpeechPlan(key="response:n1", text=spoken, is_error=False)
+    assert plan == SpeechPlan(key="response:n1", text=spoken, is_error=False, slot=slot)
     assert should_speak({"title": title, "source": "ARGOS", "priority": "normal"}) is True
 
 
@@ -189,3 +193,18 @@ def test_plan_prefers_speech_title_and_text():
     other = build_plan({**item, "speech_text": "別の要約"})
     assert plan.key != other.key
     assert build_plan(notice(title="件名")).key == "notice:Slack:件名"
+
+
+@pytest.mark.parametrize(
+    "title, slot, text",
+    [
+        ("Claude 応答完了", "Claude", "Claudeの応答が終わったよ。"),
+        ("mint codex 端末応答完了", "mint codex", "mint codex 端末の応答が終わったよ。"),
+    ],
+)
+def test_response_plan_keeps_slot_name(title, slot, text):
+    """応答完了の読み上げは、未読の確認に使うスロット名を持つ。"""
+    plan = build_plan(notice(title=title, source="ARGOS"))
+    assert plan.slot == slot
+    assert plan.text == text
+    assert build_plan(notice(title="件名")).slot == ""

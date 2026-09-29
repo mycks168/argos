@@ -150,6 +150,11 @@ class DashboardState:
             self._slots[key] = {**self._slots[key], "busy": busy, "updated_at": _now_iso()}
             self._publish_locked()
 
+    def has_unread_slot(self, name: str) -> bool:
+        """指定した名前のスロットに、未読の応答があるか返す。"""
+        with self._lock:
+            return any(slot["name"] == name and slot["unread"] for slot in self._slots.values())
+
     def set_slot_unread(self, name: str, provider: str, unread: bool) -> None:
         """スロットの未読応答状態を更新する。"""
         with self._lock:

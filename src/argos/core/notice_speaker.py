@@ -49,6 +49,7 @@ class NoticeSpeaker:
         is_busy: Callable[[], bool],
         is_locked: Callable[[], bool] = lambda: False,
         is_conversation_active: Callable[[], bool] | None = None,
+        is_completion_pending: Callable[[str], bool] | None = None,
         max_chars: int = 60,
         min_interval: float = 60.0,
         warm_retry_seconds: float = 300.0,
@@ -71,6 +72,8 @@ class NoticeSpeaker:
         self._is_locked = is_locked
         # 会話が続いているか。指定がなければ、発話・録音中かどうかと同じ判断にする。
         self._is_conversation_active = is_conversation_active or is_busy
+        # 完了通知のスロットの応答が、まだ読まれていないか。指定がなければ、常に未読として扱う。
+        self._is_completion_pending = is_completion_pending or (lambda _slot: True)
         self._max_chars = max_chars
         self._min_interval = min_interval
         self._warm_retry_seconds = warm_retry_seconds
@@ -178,16 +181,26 @@ class NoticeSpeaker:
         completion = plan.key.startswith("response:")
         # 待つ時間の上限は、音声を作る前後の待ちを合わせて数える。
         deadline = self._clock() + (self._idle_wait_seconds if completion else self._busy_wait_seconds)
-        if not self._wait_until_quiet(plan, completion=completion, deadline=deadline):
+        if not self._wait_until_quiet(plan, completion=completion, deadline=deadline) or self._already_read(plan):
             return
         wav_data = self._prepare_audio(plan)
         # 音声を作っている間に、別の発話や録音が始まった場合も、終わるまで待つ。
-        if not self._wait_until_quiet(plan, completion=completion, deadline=deadline):
+        if not self._wait_until_quiet(plan, completion=completion, deadline=deadline) or self._already_read(plan):
             return
         if self._play(wav_data, plan.text) is False:
             self._retry_later(plan)
         else:
             self._retries.pop(plan.key, None)
+
+    def _already_read(self, plan: SpeechPlan) -> bool:
+        """完了通知のスロットの応答を、待っている間に利用者が読んだ（切り替えて聞いた）か判定する。
+
+        読んだあとで「応答が終わったよ」と知らせても意味がないので、読まずにやめる。
+        """
+        if not plan.slot or self._is_completion_pending(plan.slot):
+            return False
+        log.info("応答はもう読まれたため、完了通知を読み上げません: %s", plan.text)
+        return True
 
     def _prepare_audio(self, plan: SpeechPlan) -> bytes:
         """再生する音声を用意する。保存済みの声、合成した声、警告音の順に使う。"""

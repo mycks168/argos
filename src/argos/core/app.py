@@ -328,6 +328,7 @@ class ArgosApp:
             is_muted=self._speech.is_muted,
             is_busy=self._is_speech_busy,
             is_conversation_active=self._is_conversation_active,
+            is_completion_pending=self._is_completion_pending,
             is_locked=self._is_auth_locked,
             max_chars=settings.notice_speak_max_chars,
             min_interval=settings.notice_speak_interval_seconds,
@@ -1692,6 +1693,13 @@ class ArgosApp:
         """
         playing = bool(getattr(self._audio, "is_playing", False))
         return playing or self._speech.is_active() or self._dashboard_state.status_code() in BUSY_STATUS_CODES
+
+    def _is_completion_pending(self, slot_name: str) -> bool:
+        """応答完了の通知を読み上げてよいか。そのスロットが今のスロットでなく、未読の応答が残っていればTrue。
+
+        切り替えて応答を聞いたあとや、今のスロットの応答なら、完了を知らせる意味がないのでFalseを返す。
+        """
+        return slot_name != self._agent.current_name and self._dashboard_state.has_unread_slot(slot_name)
 
     def _is_conversation_active(self) -> bool:
         """いまの会話が続いているか。エージェントが作業中（考え中）の無音の時間も含む。"""
