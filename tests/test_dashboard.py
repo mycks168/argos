@@ -1290,3 +1290,14 @@ def test_settings_page_has_restart_button():
     assert 'JSON.stringify({action: "restart_argos"})' in html
     assert "もう一度押すと再起動" in html
     assert "async function waitForRestart()" in html
+
+
+def test_has_unread_slot_by_name():
+    """名前で、未読の応答があるスロットか調べられる。"""
+    state = DashboardState()
+    state.set_slots([("Claude", "claude"), ("Codex", "codex")])
+    assert state.has_unread_slot("Claude") is False
+    state.set_slot_unread("Claude", "claude", True)
+    assert state.has_unread_slot("Claude") is True
+    assert state.has_unread_slot("Codex") is False
+    assert state.has_unread_slot("存在しない") is False

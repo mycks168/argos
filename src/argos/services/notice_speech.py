@@ -30,6 +30,7 @@ ERROR_PHRASES: dict[str, str] = {
 ERROR_TITLE_SUFFIX = "エラー"
 # 別のスロットで応答が終わったときの通知の題名の末尾（例: 「Claude 応答完了」「Codex 端末応答完了」）。
 RESPONSE_READY_SUFFIX = "応答完了"
+TERMINAL_MARK = "端末"
 _URL_PATTERN = re.compile(r"https?://\S+")
 
 
@@ -40,6 +41,8 @@ class SpeechPlan:
     key: str
     text: str
     is_error: bool
+    # 応答完了の通知なら、応答が終わったスロットの名前。読み上げる前に、まだ未読かを確かめるのに使う。
+    slot: str = ""
 
 
 def is_response_ready(notice: dict[str, Any]) -> bool:
@@ -87,7 +90,14 @@ def build_plan(notice: dict[str, Any], max_chars: int = 60) -> SpeechPlan | None
         # 題名は「<スロット名> 応答完了」。毎回知らせるので、通知ごとに別のkeyにする。
         slot = title.removesuffix(RESPONSE_READY_SUFFIX).strip()
         unique = str(notice.get("id") or notice.get("created_at") or title)
-        return SpeechPlan(key=f"response:{unique}", text=f"{slot}の応答が終わったよ。" if slot else "応答が終わったよ。", is_error=False)
+        # 端末からの応答の題名は「<スロット名> 端末応答完了」。スロット名だけを取り出す。
+        slot_name = slot.removesuffix(TERMINAL_MARK).strip()
+        return SpeechPlan(
+            key=f"response:{unique}",
+            text=f"{slot}の応答が終わったよ。" if slot else "応答が終わったよ。",
+            is_error=False,
+            slot=slot_name,
+        )
     if _is_error(notice):
         # 題名は「<発信元> エラー」。決まった言葉がある発信元だけ読み上げる。
         phrase = ERROR_PHRASES.get(source)

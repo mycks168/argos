@@ -2426,6 +2426,20 @@ def test_android_notice_without_ollama_does_not_summarize(monkeypatch):
     assert app._android_notice._summarize is None
 
 
+def test_completion_pending_only_for_unread_other_slot(monkeypatch):
+    """完了通知は、今のスロットでなく、未読の応答が残っているスロットのときだけ読む。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
+    current = app._agent.current_name
+    app._dashboard_state.set_slot_unread("別スロット", "claude", True)
+    assert app._is_completion_pending("別スロット") is True
+    app._dashboard_state.set_slot_unread("別スロット", "claude", False)
+    assert app._is_completion_pending("別スロット") is False
+    app._dashboard_state.set_slot_unread(current, app._agent.current_provider, True)
+    assert app._is_completion_pending(current) is False
+    assert app._notice_speaker._is_completion_pending == app._is_completion_pending
+
+
 def test_speech_busy_reflects_playback_and_status(monkeypatch):
     """再生中、または発話・録音・文字起こしの状態のあいだは、通知の読み上げを待たせる。"""
     _patch_app(monkeypatch)

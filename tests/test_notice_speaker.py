@@ -425,3 +425,60 @@ def test_wait_returns_false_when_stopped_during_wait(tmp_path):
     h.speaker.submit(notice())
     h.speak_next()
     assert h.played == []
+
+
+@pytest.mark.parametrize(
+    "title, slot",
+    [("Claude 応答完了", "Claude"), ("mint codex 端末応答完了", "mint codex")],
+)
+def test_completion_is_skipped_when_already_read(tmp_path, title, slot):
+    """会話を待っている間に、利用者がそのスロットへ切り替えて応答を聞いたら、完了通知は読まない。"""
+    pending = {slot: True}
+    asked = []
+
+    def is_pending(name):
+        asked.append(name)
+        return pending[name]
+
+    h = Harness(tmp_path, is_completion_pending=is_pending)
+    h.busy = [True] * 50
+    original_sleep = h.speaker._sleep
+
+    def sleep(seconds):
+        """待っている間に、切り替えて読んだ状態にする。"""
+        original_sleep(seconds)
+        pending[slot] = False
+
+    h.speaker._sleep = sleep
+    h.speaker.submit(notice(title=title, source="ARGOS"))
+    h.speak_next()
+    assert h.played == [] and h.synthesized == []
+    assert asked and set(asked) == {slot}
+
+
+def test_completion_is_skipped_when_read_during_synthesis(tmp_path):
+    """音声を作っている間に読まれた場合も、再生しない。"""
+    pending = {"Claude": True}
+    h = Harness(tmp_path, is_completion_pending=lambda name: pending[name])
+
+    def synthesize(text, speaker):
+        """合成中に、利用者が応答を読んだ状態にする。"""
+        pending["Claude"] = False
+        return voice(speaker, text)
+
+    h.speaker._synthesize = synthesize
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS"))
+    h.speak_next()
+    assert h.played == []
+
+
+def test_completion_is_spoken_while_still_unread(tmp_path):
+    """まだ読まれていなければ、完了通知を読む。ほかの通知は未読の確認をしない。"""
+    asked = []
+    h = Harness(tmp_path, is_completion_pending=lambda name: asked.append(name) or True)
+    h.speaker.submit(notice(title="Claude 応答完了", source="ARGOS"))
+    h.speaker.submit(notice(title="会議", source="Slack"))
+    h.speak_next()
+    h.speak_next()
+    assert len(h.played) == 2
+    assert asked == ["Claude", "Claude"]
