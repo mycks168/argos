@@ -1236,3 +1236,24 @@ def test_add_notification_keeps_speech_fields_only_when_given():
     state.add_notification("#雑談", "長い本文", source="Slack", speech_title="雑談", speech_text="要約")
     assert "speech_text" not in received[0] and "speech_title" not in received[0]
     assert received[1]["speech_title"] == "雑談" and received[1]["speech_text"] == "要約"
+
+
+def _css_rule(html: str, selector: str) -> str:
+    """HTMLのstyleから、指定したセレクターの宣言部分を取り出す。"""
+    import re
+
+    match = re.search(r"\n\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", html)
+    assert match, selector
+    return match.group(1)
+
+
+def test_settings_modal_scrolls_when_screen_is_short():
+    """画面の縦幅が狭くても、設定モーダルが画面に収まり、中身だけスクロールできる。"""
+    from importlib.resources import files
+
+    html = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
+    assert "max-height: 100%" in _css_rule(html, ".settings-modal-content")
+    body = _css_rule(html, ".settings-modal-body")
+    assert "overflow-y: auto" in body and "min-height: 0" in body
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-modal-header")
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-row")
