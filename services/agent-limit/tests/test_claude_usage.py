@@ -2,7 +2,16 @@ from datetime import datetime
 
 import pytest
 
-from claude_usage import _extract_section, _parse_pct, _parse_reset, parse_usage
+from pathlib import Path
+
+from claude_usage import (
+    _extract_section,
+    _parse_pct,
+    _parse_reset,
+    claude_config_dir,
+    parse_usage,
+    session_log_dir,
+)
 
 
 CLAUDE_USAGE_SCREEN = """
@@ -53,3 +62,21 @@ def test_extract_section_and_pct_fallbacks():
     assert _extract_section("abc", "missing", "next") == ""
     assert _extract_section("Current session only", "Current session", "Current week") == "Current session only"
     assert _parse_pct("no percent") == 0.0
+
+
+def test_session_log_dir_follows_claude_naming():
+    """起動したディレクトリの英数字以外を-にした名前の場所を返す。"""
+    assert session_log_dir(Path("/opt/argos/services/agent-limit"), Path("/home/u/.claude")) == Path(
+        "/home/u/.claude/projects/-opt-argos-services-agent-limit"
+    )
+    assert session_log_dir(Path("/a/b.c_d"), Path("/c")) == Path("/c/projects/-a-b-c-d")
+
+
+def test_claude_config_dir(monkeypatch, tmp_path):
+    """CLAUDE_CONFIG_DIRがあればそれを、なければホームの.claudeを使う。"""
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    assert claude_config_dir() == tmp_path
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    assert claude_config_dir() == tmp_path / "home" / ".claude"
+

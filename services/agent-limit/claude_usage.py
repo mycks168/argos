@@ -11,7 +11,9 @@ import shutil
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
+from session_cleanup import list_entries, remove_new_entries
 from tmux_util import capture, cleanup, send_keys, tmux, wait_for
 
 
@@ -117,6 +119,19 @@ def parse_usage(screen: str, now: datetime | None = None) -> dict:
     }
 
 
+def session_log_dir(cwd: Path, config_dir: Path) -> Path:
+    """claudeが、起動したディレクトリごとに会話の記録を置く場所を返す。
+
+    記録は `<設定ディレクトリ>/projects/<起動ディレクトリの英数字以外を-にした名前>/` に置かれる。
+    """
+    return config_dir / "projects" / re.sub(r"[^A-Za-z0-9]", "-", str(cwd))
+
+
+def claude_config_dir() -> Path:
+    """claudeの設定ディレクトリを返す。CLAUDE_CONFIG_DIRがあればそれを使う。"""
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
 def main() -> None:  # pragma: no cover
     """tmuxセッション上でclaudeを起動して/usageを実行し、結果をJSONで標準出力する。"""
     session = f"claude_usage_{os.getpid()}"
@@ -124,6 +139,9 @@ def main() -> None:  # pragma: no cover
     if not claude_command:
         raise RuntimeError("claudeコマンドが見つかりません")
 
+    # 今回の会話の記録だけを、終わったあとで消せるよう、起動前の中身を覚えておく
+    log_dir = session_log_dir(Path.cwd(), claude_config_dir())
+    before = list_entries(log_dir)
     # 環境ごとにインストール先が違うため、PATHまたはCLAUDE_COMMANDで解決する
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", claude_command)
     try:
@@ -177,6 +195,7 @@ def main() -> None:  # pragma: no cover
         result = parse_usage(screen)
     finally:
         cleanup(session)
+        remove_new_entries(log_dir, before)
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
