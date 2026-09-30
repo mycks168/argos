@@ -9,9 +9,7 @@ from claude_usage import (
     _parse_pct,
     _parse_reset,
     claude_config_dir,
-    list_entries,
     parse_usage,
-    remove_new_entries,
     session_log_dir,
 )
 
@@ -82,37 +80,3 @@ def test_claude_config_dir(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     assert claude_config_dir() == tmp_path / "home" / ".claude"
 
-
-def test_remove_new_entries_keeps_existing(tmp_path):
-    """起動前からあった記録は残し、今回できた記録（ファイルとフォルダ）だけを消す。"""
-    (tmp_path / "old.jsonl").write_text("{}", encoding="utf-8")
-    before = list_entries(tmp_path)
-    (tmp_path / "new.jsonl").write_text("{}", encoding="utf-8")
-    (tmp_path / "new").mkdir()
-    (tmp_path / "new" / "tool.txt").write_text("x", encoding="utf-8")
-
-    assert remove_new_entries(tmp_path, before) == ["new", "new.jsonl"]
-    assert sorted(entry.name for entry in tmp_path.iterdir()) == ["old.jsonl"]
-
-
-def test_remove_new_entries_without_directory(tmp_path):
-    """記録の場所がまだないときは、何もしない。"""
-    missing = tmp_path / "missing"
-    assert list_entries(missing) == set()
-    assert remove_new_entries(missing, set()) == []
-
-
-def test_remove_new_entries_skips_undeletable(tmp_path, monkeypatch):
-    """消せないものは残し、ほかは消す。"""
-    (tmp_path / "a.jsonl").write_text("{}", encoding="utf-8")
-    (tmp_path / "b.jsonl").write_text("{}", encoding="utf-8")
-    original = Path.unlink
-
-    def unlink(self, missing_ok=False):
-        if self.name == "a.jsonl":
-            raise OSError("busy")
-        return original(self, missing_ok=missing_ok)
-
-    monkeypatch.setattr(Path, "unlink", unlink)
-    assert remove_new_entries(tmp_path, set()) == ["b.jsonl"]
-    assert (tmp_path / "a.jsonl").exists()

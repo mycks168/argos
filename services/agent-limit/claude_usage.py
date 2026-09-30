@@ -13,6 +13,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from session_cleanup import list_entries, remove_new_entries
 from tmux_util import capture, cleanup, send_keys, tmux, wait_for
 
 
@@ -129,34 +130,6 @@ def session_log_dir(cwd: Path, config_dir: Path) -> Path:
 def claude_config_dir() -> Path:
     """claudeの設定ディレクトリを返す。CLAUDE_CONFIG_DIRがあればそれを使う。"""
     return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
-
-
-def list_entries(directory: Path) -> set[str]:
-    """ディレクトリの中の名前の一覧を返す。ディレクトリがなければ空にする。"""
-    try:
-        return {entry.name for entry in directory.iterdir()}
-    except OSError:
-        return set()
-
-
-def remove_new_entries(directory: Path, before: set[str]) -> list[str]:
-    """起動前になかったもの（今回の/usageの会話の記録）だけを消し、消した名前を返す。
-
-    /usageを調べるたびに記録が1つずつ増え、どこからも使われないため。
-    前からあったものには触らない。消せなかったものは残す。
-    """
-    removed: list[str] = []
-    for name in sorted(list_entries(directory) - before):
-        path = directory / name
-        try:
-            if path.is_dir() and not path.is_symlink():
-                shutil.rmtree(path)
-            else:
-                path.unlink()
-        except OSError:
-            continue
-        removed.append(name)
-    return removed
 
 
 def main() -> None:  # pragma: no cover
