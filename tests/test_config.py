@@ -771,3 +771,11 @@ def test_android_notice_settings(monkeypatch):
     assert settings.android_notice_enabled is True
     assert settings.android_notice_ollama_url == "http://ollama.example:11434"
     assert settings.android_notice_summary_timeout_seconds == 9.0
+
+
+def test_agent_runner_job_retention_days(monkeypatch):
+    """届け終わったジョブを残す日数は、既定で7日。設定で変えられる。"""
+    monkeypatch.delenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", raising=False)
+    assert load_settings().agent_runner_job_retention_days == 7.0
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "3")
+    assert load_settings().agent_runner_job_retention_days == 3.0

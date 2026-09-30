@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
@@ -708,3 +709,110 @@ def test_agent_runner_server_rejects_bad_request_body(tmp_path):
     finally:
         httpd.shutdown()
         thread.join(timeout=2)
+
+
+def _saved_job(store, job_id, *, status, delivered, age_seconds, now):
+    """指定した状態と経過時間のジョブを、記録置き場へ直接書く。"""
+    import json as _json
+
+    job_dir = store._jobs_dir / job_id
+    job_dir.mkdir(parents=True)
+    (job_dir / "output.txt").write_text("返事", encoding="utf-8")
+    data = {
+        "job_id": job_id,
+        "slot_name": "Codex",
+        "provider": "codex",
+        "cwd": "/tmp",
+        "status": status,
+        "prompt_path": str(job_dir / "prompt.txt"),
+        "output_path": str(job_dir / "output.txt"),
+        "result_path": str(job_dir / "result.txt"),
+        "error_path": str(job_dir / "error.txt"),
+        "created_at": now - age_seconds,
+        "updated_at": now - age_seconds,
+        "delivered_to_argos": delivered,
+        "delivered_at": (now - age_seconds) if delivered else None,
+    }
+    (job_dir / "job.json").write_text(_json.dumps(data), encoding="utf-8")
+    return job_dir
+
+
+def test_prune_delivered_removes_only_old_delivered_jobs(tmp_path):
+    """届け終わって日数がたったジョブだけを消す。実行中・未配信・新しいもの・読めないものは残す。"""
+    store = AgentJobStore(tmp_path / "runner")
+    now = 1_000_000.0
+    week = 7 * 86400
+    _saved_job(store, "old-delivered", status="delivered", delivered=True, age_seconds=week + 1, now=now)
+    _saved_job(store, "old-failed", status="failed_delivered", delivered=True, age_seconds=week * 2, now=now)
+    _saved_job(store, "new-delivered", status="delivered", delivered=True, age_seconds=60, now=now)
+    _saved_job(store, "old-undelivered", status="completed", delivered=False, age_seconds=week * 3, now=now)
+    _saved_job(store, "old-running", status="running", delivered=True, age_seconds=week * 3, now=now)
+    broken = store._jobs_dir / "broken"
+    broken.mkdir()
+    (broken / "job.json").write_text("壊れた", encoding="utf-8")
+
+    assert store.prune_delivered(week, now=now) == ["old-delivered", "old-failed"]
+    assert sorted(path.name for path in store._jobs_dir.iterdir()) == [
+        "broken",
+        "new-delivered",
+        "old-running",
+        "old-undelivered",
+    ]
+
+
+def test_prune_delivered_without_jobs_dir_and_undeletable(tmp_path, monkeypatch):
+    """記録置き場がなければ何もしない。消せないジョブは残して続ける。"""
+    import shutil as _shutil
+
+    store = AgentJobStore(tmp_path / "runner")
+    assert store.prune_delivered(1) == []
+    now = 1_000_000.0
+    _saved_job(store, "a", status="delivered", delivered=True, age_seconds=100, now=now)
+    _saved_job(store, "b", status="delivered", delivered=True, age_seconds=100, now=now)
+    original = _shutil.rmtree
+
+    def rmtree(path, *args, **kwargs):
+        if path.name == "a":
+            raise OSError("busy")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr("argos.services.agent.runner.shutil.rmtree", rmtree)
+    assert store.prune_delivered(10, now=now) == ["b"]
+    assert (store._jobs_dir / "a").exists()
+
+
+def test_runner_prunes_by_retention_days(tmp_path):
+    """設定の日数でジョブを消し、0以下なら消さない。"""
+    import time as _time
+
+    store = AgentJobStore(tmp_path / "runner")
+    _saved_job(store, "old", status="delivered", delivered=True, age_seconds=8 * 86400, now=_time.time())
+    settings = _settings(tmp_path)
+    off = AgentRunner(replace(settings, agent_runner_job_retention_days=0), store, client_factory=lambda _s, _slot: FakeAgentClient())
+    assert off.prune_jobs() == []
+    runner = AgentRunner(settings, store, client_factory=lambda _s, _slot: FakeAgentClient())
+    assert runner.prune_jobs() == ["old"]
+    assert runner.prune_jobs() == []
+
+
+def test_job_pruning_thread_runs_now_and_stops(tmp_path):
+    """削除のスレッドは、すぐに1回動き、止める合図で終わる。失敗しても止まらない。"""
+    import threading as _threading
+
+    store = AgentJobStore(tmp_path / "runner")
+    runner = AgentRunner(_settings(tmp_path), store, client_factory=lambda _s, _slot: FakeAgentClient())
+    calls = []
+    stop = _threading.Event()
+
+    def prune():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("想定外")
+        stop.set()
+        return []
+
+    runner.prune_jobs = prune
+    thread = runner.start_job_pruning(interval_seconds=0.01, stop=stop)
+    thread.join(2)
+    assert not thread.is_alive()
+    assert len(calls) == 2

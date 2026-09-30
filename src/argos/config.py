@@ -279,6 +279,8 @@ class Settings:
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    # ARGOSへ届け終わったジョブの記録を残す日数。0以下なら消さない。
+    agent_runner_job_retention_days: float = 7.0
     remote_argos_timeout_seconds: float = 1800.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
@@ -629,6 +631,7 @@ def load_settings() -> Settings:
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
+        agent_runner_job_retention_days=float(os.environ.get("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "7")),
         remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "1800")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
