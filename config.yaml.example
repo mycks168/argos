@@ -178,6 +178,8 @@ runner:
   host: 127.0.0.1
   port: 28765
   state_dir: ~/.local/state/argos/agent-runner
+  # ARGOSへ届け終わったジョブの記録（依頼内容と返事）を残す日数。0以下なら消さない。
+  job_retention_days: 7
 dashboard:
   enabled: true
   host: 127.0.0.1

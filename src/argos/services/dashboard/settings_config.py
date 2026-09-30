@@ -284,6 +284,7 @@ DESCRIPTION_BY_KEY = {
     "conversation_history.max_messages": "スロットごとに保持する最大メッセージ数です。",
     "conversation_memory.enabled": "過去会話の要約を新しいAIセッションへ引き継ぎます。",
     "conversation_memory.path": "会話要約の保存先です。",
+    "runner.job_retention_days": "エージェントランナーが、ARGOSへ届け終わった作業の記録（依頼内容と返事）を残す日数です。0以下なら消しません。",
     "notice.android.enabled": "Android（Waydroid）のアプリの通知を、ARGOSの通知欄に出して読み上げます。",
     "notice.android.interval_seconds": "Androidの通知を確認する間隔（秒）です。",
     "notice.android.apps": "知らせる対象のアプリです。packageにAndroidのパッケージ名、nameに読み上げる名前をJSONで指定します。",

@@ -147,6 +147,8 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 
 同一スロット（同じ会話セッション）で現在のRunnerプロセスが `running`/`queued` 状態のジョブを実行中の場合、`AgentRunner.start_job` は新規ジョブを作らず `409 Conflict` を返す。既存ジョブを返してしまうと、新しいユーザー発話が古いジョブに吸収されて失われるため、競合として明示的に失敗させる。ARGOS本体からのHTTPリクエストが一時的なタイムアウトで失敗しても、Runner側のジョブ自体はバックグラウンドスレッドで動き続けているため、同じ会話セッションへ`claude --resume`等のCLIプロセスを複数同時に走らせない。
 
+ARGOS本体へ届け終わったジョブ（`delivered_to_argos` が真で、`queued`/`running` 以外）の記録は、どこからも読まれない（会話の履歴はARGOS本体が別に保存する）ため、届けてから `runner.job_retention_days`（`ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS`、既定7日、0以下なら消さない）たったら、ジョブのディレクトリごと消す（`AgentJobStore.prune_delivered`）。Runnerの起動時に1回と、そのあと1時間ごとに行う。実行中・未配信のジョブと、状態を読めないディレクトリには触らない。消さないと、ジョブを探すたびに全件を読むため、記録が増えるほど遅くなり、依頼内容と返事もたまり続ける。
+
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
 ローカルAgent Runnerの完了待ちは時間上限を設けず、ジョブ状態が完了・失敗になるまで継続する。別ARGOSへTerminal APIで接続する場合だけ、`remote_argos.timeout_seconds`をSSEの無通信読取タイムアウトとして使う。既定は1800秒とし、0以下なら読取タイムアウトを設けない。接続確立は設定値にかかわらず5秒で打ち切る。
