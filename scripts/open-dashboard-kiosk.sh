@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# HDMI画面へARGOSダッシュボードを全画面表示する。
+# HDMI画面へARGOSダッシュボードを表示する。
 export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:/usr/local/bin:/usr/bin:/bin:/snap/bin:${PATH:-}"
 # snap版Chromiumにはホストの日本語フォントが公開されないため、リビジョン別の
 # ユーザーフォント領域へ同期する。current symlinkによりsnap更新後も追従できる。
@@ -53,8 +53,23 @@ case "${ARGOS_DASHBOARD_SSL:-false}" in
     ;;
 esac
 DASHBOARD_URL="${DASHBOARD_SCHEME}://127.0.0.1:${ARGOS_DASHBOARD_PORT:-8765}/"
+DASHBOARD_QUERY=""
 if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
-  DASHBOARD_URL="${DASHBOARD_URL}?key=${ARGOS_DASHBOARD_VIEW_KEY}"
+  DASHBOARD_QUERY="key=${ARGOS_DASHBOARD_VIEW_KEY}"
+fi
+
+# 画面配置ツール(argos.tools.window_layout)が選んだレイアウトがあれば、Cookieより優先して開く。
+# 環境変数の指定が最優先。standard/sp/grid以外の値は無視する。
+LAYOUT_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/argos/dashboard-layout"
+KIOSK_LAYOUT="${ARGOS_DASHBOARD_KIOSK_LAYOUT:-}"
+if [ -z "${KIOSK_LAYOUT}" ] && [ -f "${LAYOUT_FILE}" ]; then
+  KIOSK_LAYOUT="$(head -c 16 "${LAYOUT_FILE}" | tr -d '[:space:]')"
+fi
+case "${KIOSK_LAYOUT}" in
+  standard|sp|grid) DASHBOARD_QUERY="${DASHBOARD_QUERY:+${DASHBOARD_QUERY}&}layout=${KIOSK_LAYOUT}" ;;
+esac
+if [ -n "${DASHBOARD_QUERY}" ]; then
+  DASHBOARD_URL="${DASHBOARD_URL}?${DASHBOARD_QUERY}"
 fi
 
 # 母艦起動直後はダッシュボードより先にChromiumが立ち上がるため、
@@ -73,6 +88,18 @@ ENCODED_TARGET="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote
 # フラグメントはローカルファイル名の解決に使われないため、認証キーを安全に渡せる。
 SPLASH_URL="${SPLASH_FILE_URL}#target=${ENCODED_TARGET}"
 
+# Waydroidなどと画面を分割する場合は、全画面キオスクではなく
+# ブラウザ枠のないアプリモードで指定位置に開く。
+KIOSK_MODE="${ARGOS_DASHBOARD_KIOSK_MODE:-fullscreen}"
+CHROMIUM_DISPLAY_ARGS=(--kiosk "${SPLASH_URL}")
+if [ "${KIOSK_MODE}" = "split-right" ]; then
+  CHROMIUM_DISPLAY_ARGS=(
+    "--app=${SPLASH_URL}"
+    "--window-position=${ARGOS_DASHBOARD_WINDOW_X:-960},${ARGOS_DASHBOARD_WINDOW_Y:-0}"
+    "--window-size=${ARGOS_DASHBOARD_WINDOW_WIDTH:-960},${ARGOS_DASHBOARD_WINDOW_HEIGHT:-440}"
+  )
+fi
+
 exec chromium \
   --user-data-dir="${HOME}/.config/argos-dashboard-chromium-kiosk" \
   --password-store=basic \
@@ -87,11 +114,10 @@ exec chromium \
   --disable-search-engine-choice-screen \
   --disable-features=Translate,TranslateUI,SigninIntercept,ChromeWhatsNewUI,AutofillServerCommunication,MediaRouter \
   --disable-translate \
-  --kiosk \
   --noerrdialogs \
   --disable-infobars \
   --disable-session-crashed-bubble \
   --touch-events=enabled \
   --autoplay-policy=no-user-gesture-required \
   "${CHROMIUM_TLS_ARGS[@]}" \
-  "${SPLASH_URL}"
+  "${CHROMIUM_DISPLAY_ARGS[@]}"

@@ -545,7 +545,10 @@ def test_load_agent_progress_settings(monkeypatch):
 
 def test_load_agent_progress_settings_falls_back_to_codex_env(monkeypatch):
     """旧 ARGOS_CODEX_PROGRESS_* も後方互換で読み込む。"""
+    # 新しい名前が設定されていると旧名より優先される。実機のconfig.yamlが読み込まれていても、
+    # 結果が変わらないよう、新しい名前を消してから確かめる。
     monkeypatch.delenv("ARGOS_AGENT_PROGRESS_VOICE", raising=False)
+    monkeypatch.delenv("ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS", raising=False)
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_VOICE", "false")
     monkeypatch.setenv("ARGOS_CODEX_PROGRESS_INTERVAL_SECONDS", "9")
 
@@ -701,3 +704,78 @@ def test_load_dashboard_settings(monkeypatch):
     assert settings.location_provider == "remote"
     assert settings.remote_location_url == "http://example.test/gps"
     assert settings.remote_location_timeout_seconds == 1.5
+
+
+def test_load_audio_yield_settings(monkeypatch):
+    """他アプリの再生中に発話を保留する設定を読み込む。"""
+    monkeypatch.setenv("AUDIO_YIELD_TO_APPS", "Waydroid, Other App")
+    monkeypatch.setenv("AUDIO_YIELD_RELEASE_SECONDS", "1.5")
+    monkeypatch.setenv("AUDIO_YIELD_MAX_HOLD_SECONDS", "30")
+
+    settings = load_settings()
+
+    assert settings.audio_yield_to_apps == ("Waydroid", "Other App")
+    assert settings.audio_yield_release_seconds == 1.5
+    assert settings.audio_yield_max_hold_seconds == 30.0
+
+
+def test_audio_yield_defaults_to_disabled(monkeypatch):
+    """既定では他アプリの監視をしない。"""
+    for name in ("AUDIO_YIELD_TO_APPS", "AUDIO_YIELD_RELEASE_SECONDS", "AUDIO_YIELD_MAX_HOLD_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+
+    settings = load_settings()
+
+    assert settings.audio_yield_to_apps == ()
+    assert (settings.audio_yield_release_seconds, settings.audio_yield_max_hold_seconds) == (0.6, 20.0)
+
+
+def test_load_dashboard_sp_notice_seconds(monkeypatch):
+    """SP表示で通知欄を自動で開く秒数を読み込む。未設定は8秒。"""
+    monkeypatch.delenv("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", raising=False)
+    assert load_settings().dashboard_sp_notice_seconds == 8.0
+    monkeypatch.setenv("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "15")
+    assert load_settings().dashboard_sp_notice_seconds == 15.0
+
+
+def test_load_notice_speech_settings(monkeypatch):
+    """通知の読み上げの設定を読み込む。既定は、有効・60文字・60秒間隔。"""
+    for name in ("ARGOS_NOTICE_SPEAK", "ARGOS_NOTICE_SPEAK_MAX_CHARS", "ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "ARGOS_NOTICE_PHRASE_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert (settings.notice_speak_enabled, settings.notice_speak_max_chars, settings.notice_speak_interval_seconds) == (True, 60, 60.0)
+    assert settings.notice_phrase_dir == "~/.local/state/argos/notice-phrases"
+
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK", "false")
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK_MAX_CHARS", "30")
+    monkeypatch.setenv("ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "10")
+    monkeypatch.setenv("ARGOS_NOTICE_PHRASE_DIR", "/tmp/phrases")
+    settings = load_settings()
+    assert (settings.notice_speak_enabled, settings.notice_speak_max_chars, settings.notice_speak_interval_seconds) == (False, 30, 10.0)
+    assert settings.notice_phrase_dir == "/tmp/phrases"
+
+
+def test_android_notice_settings(monkeypatch):
+    """Androidの通知の設定を読み込む。既定では無効で、要約はgemma4:e4b・40文字から。"""
+    for name in ("ENABLED", "APPS_JSON", "MUTE_JSON", "OLLAMA_URL", "OLLAMA_MODEL", "SUMMARIZE_MIN_CHARS"):
+        monkeypatch.delenv(f"ARGOS_NOTICE_ANDROID_{name}", raising=False)
+    settings = load_settings()
+    assert settings.android_notice_enabled is False
+    assert settings.android_notice_ollama_model == "gemma4:e4b"
+    assert settings.android_notice_summarize_min_chars == 40
+
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_ENABLED", "true")
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_OLLAMA_URL", "http://ollama.example:11434")
+    monkeypatch.setenv("ARGOS_NOTICE_ANDROID_SUMMARY_TIMEOUT_SECONDS", "9")
+    settings = load_settings()
+    assert settings.android_notice_enabled is True
+    assert settings.android_notice_ollama_url == "http://ollama.example:11434"
+    assert settings.android_notice_summary_timeout_seconds == 9.0
+
+
+def test_agent_runner_job_retention_days(monkeypatch):
+    """届け終わったジョブを残す日数は、既定で7日。設定で変えられる。"""
+    monkeypatch.delenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", raising=False)
+    assert load_settings().agent_runner_job_retention_days == 7.0
+    monkeypatch.setenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "3")
+    assert load_settings().agent_runner_job_retention_days == 3.0

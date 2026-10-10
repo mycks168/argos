@@ -1,5 +1,6 @@
 import json
 import os
+from http.client import HTTPConnection
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
@@ -253,6 +254,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "previousMessages = \"\";" in html
         assert "previousNotifications = \"\";" in html
         assert "renderSlots(state);" in html
+        # オーバーレイ表示中も、各スロットに置かれている標準ビューだけを隠す（入れ替え後の反対側を隠さない）。
+        assert "viewIn(slotContainerCenter)" in html and "viewIn(slotContainerRight)" in html
         assert "touch-action: pan-y" in html
         assert "followLatestMessage" in html
         assert "const visibleMessages = state.messages;" in html
@@ -567,6 +570,9 @@ def test_dashboard_settings_page_and_authenticated_config_api(tmp_path, monkeypa
         assert status == 200
         assert body["saved"] is True
         assert body["restart_required"] is True
+        assert body["runner_restart_required"] is False
+        assert body["changed"] == ["audio.output_volume"]
+        assert "エージェントランナー" not in body["message"]
     finally:
         server.stop()
 
@@ -1100,3 +1106,198 @@ def test_dashboard_without_view_key_stays_open():
         assert status == 200
     finally:
         server.stop()
+
+
+@pytest.mark.parametrize(
+    "path, cookie, layout",
+    [
+        ("/?layout=sp", "", "sp"),
+        ("/?layout=standard", "argos_layout=sp", "standard"),
+        ("/?layout=SP", "", "sp"),
+        ("/?layout=foo", "argos_layout=sp", "sp"),
+        ("/?layout=", "", "standard"),
+        ("/", "argos_layout=sp", "sp"),
+    ],
+)
+def test_dashboard_root_layout_query_overrides_cookie(path, cookie, layout):
+    """?layout=で指定したレイアウトがCookieより優先される。不明な値は無視してCookieと既定値に従う。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        request = Request(f"http://{server.address[0]}:{server.address[1]}{path}", headers={"Cookie": cookie} if cookie else {})
+        with urlopen(request, timeout=2) as response:
+            html = response.read().decode("utf-8")
+        assert f'data-layout="{layout}"' in html
+    finally:
+        server.stop()
+
+
+def test_dashboard_root_layout_query_grid_redirects():
+    """?layout=gridはGrid表示へ転送する。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        connection = HTTPConnection(*server.address, timeout=2)
+        connection.request("GET", "/?layout=grid")
+        response = connection.getresponse()
+        assert response.status == 303 and response.getheader("Location") == "/grid"
+        connection.close()
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize("seconds, expected", [(None, "8.0"), (12.5, "12.5"), (0, "0")])
+def test_dashboard_injects_sp_notice_seconds(seconds, expected):
+    """SP表示で通知欄を自動で開く秒数を、設定値のまま画面へ埋め込む（未指定は8秒、0は無効）。"""
+    kwargs = {} if seconds is None else {"sp_notice_seconds": seconds}
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", **kwargs)
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert f"seconds: Number({expected})" in html
+    assert "__ARGOS_" not in html
+
+
+def test_dashboard_sp_notice_popup_is_wired_only_for_sp_layout():
+    """通知欄の自動表示は、SP表示のときだけ呼び出し、利用者の操作で自動では閉じなくする。"""
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+    server.start()
+    try:
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/static/sp_notice_popup.js", timeout=2) as response:
+            assert response.headers["Content-Type"].startswith(("text/javascript", "application/javascript"))
+            script = response.read().decode("utf-8")
+        with urlopen(f"http://{server.address[0]}:{server.address[1]}/sp", timeout=2) as response:
+            html = response.read().decode("utf-8")
+    finally:
+        server.stop()
+    assert "class NoticePopup" in script and "function shouldPopup" in script
+    assert '<script src="/static/sp_notice_popup.js"></script>' in html
+    # 一覧の描画が済んでから開く（描画より前に例外が出ても、一覧が更新されないままにならないように）。
+    assert html.index("previousNotifications = nextNotifications;") < html.index("spNoticePopup.update(state.notifications);")
+    assert 'if (dashboardLayout === "sp") {\n        spNoticePopup.update(state.notifications);' in html
+    assert "spNoticePopup.takeOver();" in html
+    assert 'document.getElementById("slot-right").addEventListener(eventName' in html
+    # バッジは大きく、動きを減らす設定では止める。
+    assert "min-width: 28px" in html and "sp-notification-pulse" in html
+    assert "prefers-reduced-motion: reduce" in html
+
+
+def test_notification_listener_receives_external_and_error_notifications():
+    """通知が追加されたら、登録した関数が、追加された通知のコピーを受け取る。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "3時から", source="Slack", priority="normal")
+    error_id = state.add_error_notification("文字起こし", "失敗")
+    received[0]["title"] = "書き換えても本体に影響しない"
+
+    assert [item["id"] for item in received] == [notification_id, error_id]
+    assert received[1]["priority"] == "high" and received[1]["title"] == "文字起こし エラー"
+    assert state.snapshot()["notifications"][0]["title"] == "会議"
+
+
+def test_duplicate_error_notification_is_not_announced_twice():
+    """直前と同じ内容のエラーは、追加されないので、受け取る関数も呼ばれない。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+
+    state.add_error_notification("音声合成", "同じ")
+    state.add_error_notification("音声合成", "同じ")
+
+    assert len(received) == 1
+
+
+def test_notification_listener_error_does_not_break_adding():
+    """受け取る関数が例外を出しても、通知は追加され、ほかの関数も呼ばれる。"""
+    state = DashboardState()
+    received = []
+
+    def broken(_notice):
+        """失敗する受け取り先。"""
+        raise RuntimeError("失敗")
+
+    state.add_notification_listener(broken)
+    state.add_notification_listener(received.append)
+
+    notification_id = state.add_notification("会議", "本文")
+
+    assert [item["id"] for item in received] == [notification_id]
+    assert len(state.snapshot()["notifications"]) == 1
+
+
+def test_add_notification_keeps_speech_fields_only_when_given():
+    """読み上げ用の題名と本文は、指定したときだけ通知に含める。"""
+    state = DashboardState()
+    received = []
+    state.add_notification_listener(received.append)
+    state.add_notification("通知", "本文")
+    state.add_notification("#雑談", "長い本文", source="Slack", speech_title="雑談", speech_text="要約")
+    assert "speech_text" not in received[0] and "speech_title" not in received[0]
+    assert received[1]["speech_title"] == "雑談" and received[1]["speech_text"] == "要約"
+
+
+def _css_rule(html: str, selector: str) -> str:
+    """HTMLのstyleから、指定したセレクターの宣言部分を取り出す。"""
+    import re
+
+    match = re.search(r"\n\s*" + re.escape(selector) + r"\s*\{([^}]*)\}", html)
+    assert match, selector
+    return match.group(1)
+
+
+def test_settings_modal_scrolls_when_screen_is_short():
+    """画面の縦幅が狭くても、設定モーダルが画面に収まり、中身だけスクロールできる。"""
+    from importlib.resources import files
+
+    html = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
+    assert "max-height: 100%" in _css_rule(html, ".settings-modal-content")
+    body = _css_rule(html, ".settings-modal-body")
+    assert "overflow-y: auto" in body and "min-height: 0" in body
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-modal-header")
+    assert "flex-shrink: 0" in _css_rule(html, ".settings-row")
+
+
+def test_config_save_reports_runner_restart_for_agent_settings(tmp_path):
+    """エージェント関係の設定を変えたら、エージェントランナーの再起動も必要だと知らせる。"""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("agents:\n  codex:\n    model: old\naudio:\n  output_volume: 70\n", encoding="utf-8")
+    server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret", config_path=config_path)
+    server.start()
+    base_url = f"http://{server.address[0]}:{server.address[1]}"
+    try:
+        status, body = _read_json(
+            base_url + "/api/config", "PUT", {"values": {"agents.codex.model": "new", "audio.output_volume": 70}}, "secret"
+        )
+    finally:
+        server.stop()
+    assert status == 200
+    assert body["runner_restart_required"] is True
+    assert body["changed"] == ["agents.codex.model"]
+    assert "エージェントランナーの再起動も必要" in body["message"]
+
+
+def test_settings_page_has_restart_button():
+    """本体設定の画面に、確認つきの再起動ボタンと、戻ってくるのを待つ処理がある。"""
+    from importlib.resources import files
+
+    html = files("argos.services.dashboard.static").joinpath("settings.html").read_text(encoding="utf-8")
+    assert '<button id="restart" type="button" data-confirm="false">ARGOSを再起動</button>' in html
+    assert 'JSON.stringify({action: "restart_argos"})' in html
+    assert "もう一度押すと再起動" in html
+    assert "async function waitForRestart()" in html
+
+
+def test_has_unread_slot_by_name():
+    """名前で、未読の応答があるスロットか調べられる。"""
+    state = DashboardState()
+    state.set_slots([("Claude", "claude"), ("Codex", "codex")])
+    assert state.has_unread_slot("Claude") is False
+    state.set_slot_unread("Claude", "claude", True)
+    assert state.has_unread_slot("Claude") is True
+    assert state.has_unread_slot("Codex") is False
+    assert state.has_unread_slot("存在しない") is False

@@ -380,3 +380,262 @@ def test_audio_player_scales_wav_before_playback(monkeypatch):
 
     sample = int.from_bytes(proc.input[:2], "little", signed=True)
     assert sample == 2500
+
+
+class HoldProc(FakeProc):
+    """pidを持ち、終了状態を切り替えられる再生プロセスの代役。"""
+
+    pid = 4321
+
+
+def _play_pcm_wav(frames=4096):
+    """16bit PCMの短いWAVを作る。"""
+    buffer = BytesIO()
+    with wave.open(buffer, "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(16000)
+        target.writeframes(b"\x01\x00" * frames)
+    return buffer.getvalue()
+
+
+def test_audio_player_hold_and_release_signal_running_aplay(monkeypatch):
+    """保留で再生中のaplayを一時停止し、再開で続きを再生する。"""
+    import signal as signal_module
+
+    sent = []
+    monkeypatch.setattr("argos.hardware.audio.os.kill", lambda pid, sig: sent.append((pid, sig)))
+    player = AudioPlayer("speaker", "", 80)
+    player._proc = HoldProc()
+
+    player.hold()
+    assert player.is_held
+    player.hold()
+    player.release()
+
+    assert not player.is_held
+    assert sent == [(4321, signal_module.SIGSTOP), (4321, signal_module.SIGCONT)]
+
+
+def test_audio_player_hold_timer_forces_release_after_limit(monkeypatch):
+    """保留が上限を超えたら自動で再開する（他アプリが鳴らし続けても発話が止まりきらない）。"""
+    timers = []
+
+    class FakeTimer:
+        """タイマーの設定を記録する。"""
+
+        def __init__(self, interval, callback):
+            """間隔とコールバックを保存する。"""
+            self.interval, self.callback, self.cancelled, self.daemon = interval, callback, False, False
+            timers.append(self)
+
+        def start(self):
+            """開始は記録しない。"""
+
+        def cancel(self):
+            """取り消しを記録する。"""
+            self.cancelled = True
+
+    monkeypatch.setattr("argos.hardware.audio.threading.Timer", FakeTimer)
+    player = AudioPlayer("speaker", "", 80)
+    player.set_max_hold_seconds(0)
+    assert player._max_hold_seconds == 1.0
+    player.set_max_hold_seconds(20)
+
+    player.hold()
+    assert timers[0].interval == 20.0 and player.is_held
+    timers[0].callback()
+    assert not player.is_held
+
+    player.hold()
+    player.release()
+    assert timers[1].cancelled
+
+
+def test_audio_player_release_without_hold_is_safe(monkeypatch):
+    """保留していなくても、再開は何もせず安全に終わる。"""
+    sent = []
+    monkeypatch.setattr("argos.hardware.audio.os.kill", lambda pid, sig: sent.append(sig))
+    player = AudioPlayer("speaker", "", 80)
+    player.release()
+    assert not player.is_held and sent == []
+
+
+def test_audio_player_signal_ignores_finished_or_missing_process(monkeypatch):
+    """終了済みのプロセスや、pidを持たない代役には、シグナルを送らない。"""
+    sent = []
+    monkeypatch.setattr("argos.hardware.audio.os.kill", lambda pid, sig: sent.append(sig))
+    player = AudioPlayer("speaker", "", 80)
+    finished = HoldProc()
+    finished.poll = lambda: 0
+    player._proc = finished
+    player.hold()
+    player.release()
+    player._proc = FakeProc()
+    player.hold()
+    player.release()
+    assert sent == []
+
+
+def test_audio_player_streaming_waits_while_held(monkeypatch):
+    """保留中は次の音声を始めず、再開されたら続きを再生する。"""
+    import threading
+    import time
+
+    proc = FakeProc()
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: proc)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    player.hold()
+    finished = threading.Event()
+
+    def speak():
+        """保留中に発話を始める。"""
+        player.play_wav(_play_pcm_wav())
+        finished.set()
+
+    thread = threading.Thread(target=speak, daemon=True)
+    thread.start()
+    time.sleep(0.2)
+    assert not finished.is_set() and proc.input == b""
+
+    player.release()
+    assert finished.wait(2)
+    assert len(proc.input) == 4096 * 2
+
+
+def test_audio_player_cancel_resumes_stopped_process_before_terminate(monkeypatch):
+    """一時停止中のプロセスは、先に再開させてから終了させる（SIGTERMを受け取れないため）。"""
+    import signal as signal_module
+
+    order = []
+    monkeypatch.setattr("argos.hardware.audio.os.kill", lambda pid, sig: order.append(("kill", sig)))
+    proc = HoldProc()
+    proc.terminate = lambda: order.append(("terminate", None))
+    player = AudioPlayer("speaker", "", 80)
+    player._proc = proc
+
+    player.cancel()
+
+    assert order == [("kill", signal_module.SIGCONT), ("terminate", None)]
+
+
+class BlockingProc(FakeProc):
+    """communicateが、外から許可するまで終わらない再生プロセスの代役。"""
+
+    def __init__(self, gate):
+        """再生の終了を制御するイベントを受け取る。"""
+        super().__init__()
+        self.gate = gate
+
+    def communicate(self, input=None, timeout=None):
+        """許可があるまで、再生中のまま待つ。"""
+        self.input = input
+        self.gate.wait(5)
+        return b"", b""
+
+
+def test_audio_player_plays_one_voice_at_a_time(monkeypatch):
+    """同時に再生しようとしても、声が混ざらないよう、順番に再生する。"""
+    import threading
+    import time
+
+    started = []
+    gates = [threading.Event(), threading.Event()]
+    procs = [BlockingProc(gates[0]), BlockingProc(gates[1])]
+
+    def popen(command, **kwargs):
+        """起動された順に、用意したプロセスを返す。"""
+        started.append(time.monotonic())
+        return procs[len(started) - 1]
+
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", popen)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    first = threading.Thread(target=player.play_wav, args=(b"one",), daemon=True)
+    second = threading.Thread(target=player.play_wav, args=(b"two",), daemon=True)
+
+    first.start()
+    while not started:
+        time.sleep(0.01)
+    second.start()
+    time.sleep(0.3)
+    assert len(started) == 1
+
+    gates[0].set()
+    first.join(2)
+    while len(started) < 2:
+        time.sleep(0.01)
+    gates[1].set()
+    second.join(2)
+    assert procs[0].input == b"one" and procs[1].input == b"two"
+
+
+def test_audio_player_drops_waiting_playback_after_cancel(monkeypatch):
+    """順番待ちの間にcancel()されたら、その音声は再生しない。中断後の新しい再生は通常どおり鳴る。"""
+    import threading
+    import time
+
+    gate = threading.Event()
+    played = []
+    procs = [BlockingProc(gate)]
+
+    def popen(command, **kwargs):
+        """1回目は待たせ、以降は普通の代役を返す。"""
+        proc = procs[0] if not played else FakeProc()
+        played.append(proc)
+        return proc
+
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", popen)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    first = threading.Thread(target=player.play_wav, args=(b"one",), daemon=True)
+    waiting = threading.Thread(target=player.play_wav, args=(b"waiting",), daemon=True)
+    first.start()
+    while not played:
+        time.sleep(0.01)
+    waiting.start()
+    time.sleep(0.2)
+
+    player.cancel()
+    gate.set()
+    first.join(2)
+    waiting.join(2)
+    assert len(played) == 1
+
+    player.play_wav(b"after")
+    assert len(played) == 2 and played[1].input == b"after"
+
+
+def test_audio_player_cancel_when_idle_does_not_block_next_playback(monkeypatch):
+    """何も再生していないときのcancel()のあとも、次の再生は、そのまま鳴る。"""
+    procs = []
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: procs.append(FakeProc()) or procs[-1])
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    player.cancel()
+    player.cancel()
+    player.play_wav(b"voice")
+    assert len(procs) == 1 and procs[0].input == b"voice"
+
+
+def test_audio_player_play_wav_reports_completion(monkeypatch):
+    """最後まで再生できたらTrue、順番待ちの間や再生中に中断されたらFalseを返す。"""
+    proc = FakeProc()
+    monkeypatch.setattr("argos.hardware.audio.subprocess.Popen", lambda command, **kwargs: proc)
+    monkeypatch.setattr("argos.hardware.audio.subprocess.run", lambda command, **kwargs: None)
+    player = AudioPlayer("speaker", "", 100)
+    assert player.play_wav(b"voice") is True
+
+    # 再生の途中でcancel()された（世代が進んだ）場合。
+    original = proc.communicate
+
+    def cancel_while_playing(input=None, timeout=None):
+        """再生中に、利用者の発話などで中断された状態を作る。"""
+        player.cancel()
+        return original(input=input, timeout=timeout)
+
+    proc.communicate = cancel_while_playing
+    assert player.play_wav(b"voice") is False
+    proc.communicate = original
+    assert player.play_wav(b"voice") is True

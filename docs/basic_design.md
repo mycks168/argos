@@ -71,7 +71,7 @@ location:
 }
 ```
 
-`STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。
+`STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。faster-whisper が未導入（`uv sync --extra whisper` をしていない）なら、試さずに飛ばし、stt-gateway の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`文字起こし` エラー）にする。フォールバックが使えないのに、`stt-gateway` エラーと `faster-whisper が未導入です` エラーを2つ並べない。
 文字起こし結果が空文字だった場合は発話をエージェントへ送らず、ログに録音ファイルパスとRMSを出し、ダッシュボード通知に「音声を認識できませんでした。」を表示する。
 
 faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_WHISPER_COMPUTE_TYPE` で調整する。既定モデルは `small`。faster-whisper を使う環境では `uv sync --extra whisper` を実行する。
@@ -113,7 +113,7 @@ VOICEVOX Engine は次の順で呼び出す。
 
 `VOICEVOX_ACCEPT_OPUS=true` のときは、`synthesis` のリクエストに `Accept: audio/opus` を付ける。素の VOICEVOX Engine は Opus 非対応のため、これは Opus 対応ラッパーを前提とする（ラッパーが `Accept` を見て Ogg Opus を返す）。レスポンスの `Content-Type` に `opus` を含む場合は ffmpeg で WAV へデコードしてから再生へ渡す。WAV が返った場合はそのまま再生するため、既定（`false`）や非対応エンジンでもフォールバックが効く。
 
-`VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。
+`VOICEVOX_URL` が空の場合は VOICEVOX を使わず、Kokoro TTS で日本語音声を生成する。`VOICEVOX_URL` が設定済みでも、`audio_query` または `synthesis` でエラーが起きた場合はダッシュボードに `VOICEVOX` エラーを通知し、その発話を Kokoro TTS で読み上げる。Kokoro が未導入（`uv sync --extra kokoro` をしていない）なら、試さずに飛ばし、VOICEVOX の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`音声合成` エラー）にする。この場合は声を作れないので、下の「通知の読み上げ」の保存音声か警告音で知らせる。
 
 Kokoro TTS は `ARGOS_KOKORO_VOICE`、`ARGOS_KOKORO_SPEED`、`ARGOS_KOKORO_REPO_ID`、`ARGOS_KOKORO_SAMPLE_RATE` で調整する。Kokoro を使う環境では `uv sync --extra kokoro` を実行し、必要に応じて `uv run python -m unidic download` で日本語辞書を用意する。
 
@@ -129,7 +129,7 @@ ARGOS は短い読み上げ文の合成結果をWAVファイルとしてロー�
 
 HDMIダッシュボードは、現在の状態、現在のエージェントスロット名、provider、Wi-Fi接続状態、会話履歴、通知を表示する。PTT短押しで録音を破棄した場合や、PTTダブルクリックでスロットを切り替えた場合は、認証状態に応じて表示を待機中またはロック中へ戻し、録音中表示を残さない。本人確認が必要なロック中にPTTを押した場合は、通常の録音中ではなく「本人確認録音中」と表示し、PTT解放後は「本人確認中」と表示する。これにより、発話が本人確認用であることと、PTT入力が認識されたことを画面上でも示す。
 
-設定モーダルの画面レイアウト選択は通常、SP、Gridに対応する。Gridを選択すると次回のルート表示を`/grid`へ遷移させる。Grid画面の設定ボタンは設定画面を開き、設定画面の戻るリンクからGridへ復帰できる。
+設定モーダルは画面の高さを超えないよう上限を設け、見出しと「閉じる」を固定したまま、項目の部分だけを縦にスクロールする（縦幅の狭い画面でも、下の項目まで操作できるようにする）。設定モーダルの画面レイアウト選択は通常、SP、Gridに対応する。Gridを選択すると次回のルート表示を`/grid`へ遷移させる。Grid画面の設定ボタンは設定画面を開き、設定画面の戻るリンクからGridへ復帰できる。
 
 ### LLM エージェント
 
@@ -146,6 +146,8 @@ Agent Runner はジョブごとに `ARGOS_AGENT_RUNNER_STATE_DIR/jobs/<job_id>/`
 `output.txt` は実行中も逐次flushされ、`GET /api/jobs/<job_id>` のレスポンスに `output` フィールドとして含まれる。ARGOS本体側の `RunnerAgentClient.ask_stream` は0.2秒ごとにポーリングし、前回までに受け取った `output` との差分だけを読み上げ用チャンクとして返す。これにより、Runner経由でもCLI側のトークン単位ストリーミングをほぼそのまま中継できる。
 
 同一スロット（同じ会話セッション）で現在のRunnerプロセスが `running`/`queued` 状態のジョブを実行中の場合、`AgentRunner.start_job` は新規ジョブを作らず `409 Conflict` を返す。既存ジョブを返してしまうと、新しいユーザー発話が古いジョブに吸収されて失われるため、競合として明示的に失敗させる。ARGOS本体からのHTTPリクエストが一時的なタイムアウトで失敗しても、Runner側のジョブ自体はバックグラウンドスレッドで動き続けているため、同じ会話セッションへ`claude --resume`等のCLIプロセスを複数同時に走らせない。
+
+ARGOS本体へ届け終わったジョブ（`delivered_to_argos` が真で、`queued`/`running` 以外）の記録は、どこからも読まれない（会話の履歴はARGOS本体が別に保存する）ため、届けてから `runner.job_retention_days`（`ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS`、既定7日、0以下なら消さない）たったら、ジョブのディレクトリごと消す（`AgentJobStore.prune_delivered`）。Runnerの起動時に1回と、そのあと1時間ごとに行う。実行中・未配信のジョブと、状態を読めないディレクトリには触らない。消さないと、ジョブを探すたびに全件を読むため、記録が増えるほど遅くなり、依頼内容と返事もたまり続ける。
 
 Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが残っている場合、それらは前回Runnerプロセスの再起動や異常終了で実行スレッドを失った中断ジョブとして `failed` に更新する。これにより、古い `running` 状態が永続化されたまま新しい発話を塞ぎ続ける事故を避ける。また `RunnerAgentClient` のポーリングは、Raspberry Pi側の一時的な負荷などでHTTPリクエストが失敗しても連続10回までは諦めずに再試行し、ジョブ自体が生きていれば応答取得失敗として扱わない。
 
@@ -243,7 +245,7 @@ ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの 
 
 `dashboard.ssl: true` の場合はHTTPSサーバーとして起動する。証明書と秘密鍵は `dashboard.ssl_cert_path` と `dashboard.ssl_key_path` で指定し、既定は `~/.config/argos/tls/dashboard.crt` と `dashboard.key` とする。両方が未作成ならopensslで自己署名証明書を生成して再利用し、保存ディレクトリは700、秘密鍵は600、証明書は644とする。片方だけ存在する場合は不整合として起動を中止し、既存ファイルを上書きしない。自己署名証明書のため、リモートブラウザでは初回に利用者が証明書を信頼する必要がある。ローカルキオスクはHTTPS設定を読み、localhostに限って自己署名警告を通過する。
 
-既存の `/` は車載・固定ディスプレイ向け表示として維持する。`/sp` はスマートフォン・タブレット向け表示を提供し、状態欄と通知欄を左右のドロワーとして開閉する。SP表示ではツールバー左上のメニューボタン（`☰`）を押すことで、左側のステータスパネルを常時固定表示するモード（`sp-left-pinned`）と非表示モードを直接切り替えることができる。左枠固定時は中央の会話領域の幅と位置が自動調整され、背景バックドロップを非表示にしてスムーズに操作できる。固定状態はブラウザの `localStorage`（`argos-sp-left-pinned`）に保持される。
+既存の `/` は車載・固定ディスプレイ向け表示として維持する。`/sp` はスマートフォン・タブレット向け表示を提供し、状態欄と通知欄を左右のドロワーとして開閉する。SP表示ではツールバー左上のメニューボタン（`☰`）を押すことで、左側のステータスパネルを常時固定表示するモード（`sp-left-pinned`）と非表示モードを直接切り替えることができる。左枠固定時は中央の会話領域の幅と位置が自動調整され、背景バックドロップを非表示にしてスムーズに操作できる。固定状態はブラウザの `localStorage`（`argos-sp-left-pinned`）に保持される。SP表示では、新しい通知が届いたとき通知欄（右ドロワー）を自動で開いて、`dashboard.sp_notice_seconds`（`ARGOS_DASHBOARD_SP_NOTICE_SECONDS`、既定8秒、0以下で無効）たつと閉じる（`static/sp_notice_popup.js` の `NoticePopup`）。対象は、`source` が `ARGOS` 以外の通知と、`priority` が `high` の通知で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は、バッジだけで自動では開かない。ページを開いた時点の通知は既存のものとして扱い、開かない。利用者が通知欄を操作（ベル・背景の押下、通知欄への接触・スクロール）したら、自動では閉じない。自動で開いた通知は既読にする。バッジは、未確認があるあいだ、大きく赤く表示して拡大縮小する（`prefers-reduced-motion` では止める）。
 
 また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。
 
@@ -329,9 +331,11 @@ Chromiumは接続待ち画面 `scripts/kiosk-splash.html` をsnapからアクセ
    - 各項目には名前だけでなく、用途、変更時の影響や注意を表示する。設定名と説明の全文検索、カテゴリー単位の折りたたみに対応する。
    - トークン、閲覧キー、キーワードハッシュなどの機密値はブラウザへ返さず、「設定済み」とだけ表示する。空欄のまま保存した場合は既存値を維持する。
    - `GET /api/config` と `PUT /api/config` はダッシュボードのBearer認証を必須とする。APIは現在のYAMLに存在する項目だけを更新し、任意の新規YAMLパスは受け付けない。
-   - 保存時は既存の設定構造と画面対象外の項目を維持し、`config.yaml.backup-<日時>`へ保存前の内容を退避してから原子的に置き換える。
+   - 保存時は既存の設定構造と画面対象外の項目を維持し、`config.yaml.backup-<日時>`へ保存前の内容を退避してから原子的に置き換える。控えは新しいものから5件（`MAX_CONFIG_BACKUPS`）だけ残し、古いものは退避のたびに消す（消せないものは残し、保存は失敗させない）。控えはgitの管理対象外（`.gitignore` の `config.yaml.backup-*`）。
    - 設定は保存だけでは実行中プロセスへ反映されない。画面にはARGOSの再起動が必要であることを表示する。
    - 設定画面の「戻る」はダッシュボードへ遷移した印をクエリで渡す。ダッシュボードはこの場合だけ初回スプラッシュを省略し、単なる画面遷移が本体再起動に見えないようにする。通常起動時や表示復帰時のスプラッシュは維持する。
+   - `PUT /api/config` の応答には、今の設定から変わった項目（`changed`）と、エージェントランナーの再起動も必要か（`runner_restart_required`）を含める。エージェントランナーも起動時に `config.yaml` を読むため、`agent.`・`agents.`・`runner.`・`environment.` で始まる項目が変わったら `true` にし、保存時の案内にランナーの再起動が必要なことを加える。
+   - 設定画面の「ARGOSを再起動」は、確認のため2回押したとき（1回目から5秒以内）に `POST /api/control`（`action: restart_argos`、Bearer認証）を送る。ARGOS本体は応答を返してから0.5秒後に、終了シグナルを受けたときと同じ手順で部品を止め、`main` が終了コード75で終わる。`argos.service` は `Restart=on-failure` なので、systemdが起動し直す。エージェントランナーなど、別のサービスは止めない。dry-runでは受け付けない。画面は3秒待ってから2秒おきに `GET /api/config` を確かめ、応答が戻ったら再起動の完了を表示する（90秒戻らなければエラーを表示する）。
    - `GET /api/config/audio-devices` は`arecord -l`と`aplay -l`から接続中のマイク・スピーカーを名前付き候補として返す。設定画面では`audio.input_devices`、`audio.device`、`audio.output_device`を候補選択できる。
    - `POST /api/config/test-microphone` は選択マイクを1秒録音してRMS入力レベルを返す。`POST /api/config/test-speaker` は選択スピーカーへ短い確認音を再生する。どちらもBearer認証を必須とし、ユーザーが確認ボタンを押した場合だけ実行する。
    - タッチ操作をマウスドラッグとして通知するディスプレイ向けに、設定カードや説明文を上下へドラッグするとページをスクロールする。入力欄、選択欄、ボタン、リンク、スイッチ、カテゴリー見出しは対象外とし、各部品の通常操作を優先する。説明文や見出しは常時文字選択を無効にし、入力欄とテキストエリアだけ文字選択を許可する。指を離した後は移動速度を上限付きで引き継ぎ、フレームごとに減速する短い慣性スクロールを行う。次のドラッグ開始時には慣性を即停止する。
@@ -507,6 +511,28 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
   - 音量: ARGOSのTTSは従来`aplay`でHDMIへ直出し＝PipeWire音量をバイパスして大音量だったが、`ec_sink`経由にするとTTS音量がPipeWireの既定sink音量に従う。そのため既定sink音量を100%に固定し、音量調整はARGOS内部のvolume設定で行う
   - 導入手順: `scripts/setup-echo-cancel.sh` が (1) PipeWire永続ドロップイン（既定入出力に追従する`ec-source`/`ec-sink`ノード）、(2) `/etc/asound.conf`のブリッジPCM`ec_source`/`ec_sink`（sudo要）、(3) WirePlumberドロップイン（サスペンド無効化＋HDMI headroom増）、(4) 既定sink音量100%固定 を書き込む。`default`は変更しないため通常運用には影響しない。依存が不足していれば案内して中断し、`--install-deps`で`pipewire-alsa`と`libspa-0.2-modules`をapt導入できる。反映（`systemctl --user restart pipewire pipewire-pulse wireplumber`）後は`aplay -D ec_sink ...`で疎通確認してから、`config.yaml`の`audio.output_device: ec_sink`、`audio.input_devices: [ec_source]`、`wakeword.bargein_enabled: true`を設定する。デバイス名は環境で変わるためPipeWireの既定デバイスに紐付けて移植性を確保しており、Raspberry Pi OS / Ubuntu 共通。これらの設定はファイルとして永続するため再起動後も有効。車載やデスクトップUbuntuなど環境が変わる場合は同条件でエコー抑制を再計測する
   - 元に戻す: `scripts/setup-echo-cancel.sh --revert` でPipeWireドロップイン、`/etc/asound.conf`のARGOSブロック、WirePlumberドロップインを削除する（`default`や既存`config.yaml`、既定sink音量には触れない）。反映は `systemctl --user restart pipewire pipewire-pulse wireplumber`。`config.yaml`側で入出力デバイスや`wakeword.bargein_enabled`を変更していた場合はそちらも戻す
+- 通知の読み上げ: 運転中など画面を見られないときのため、通知を声でも知らせる（`notice.speak`、`ARGOS_NOTICE_SPEAK`、既定は有効。dry-runでは無効）。`DashboardState.add_notification_listener` に登録した `NoticeSpeaker`（`argos.core.notice_speaker`）が、追加された通知を順番に読み上げる。
+  - 対象: ダッシュボードのSP表示で通知欄を自動で開く対象と同じ基準（`argos.services.notice_speech.should_speak`）。外部の通知と優先度が高い通知が対象で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は読まない。ただし、別のスロットで応答が終わった通知（`source: ARGOS`、題名が「応答完了」で終わるもの。「Claude 応答完了」「Codex 端末応答完了」など）は、そのスロットの応答が切り替えるまで声に出ないため、読み上げ・通知欄の自動表示の対象にする。読み上げは「<スロット名>の応答が終わったよ。」で、通知ごとに別のkeyにするので、続けて届いても抑制しない。
+  - 内容: 外部の通知は「<発信元>から通知だよ。<題名>。<本文>」の形で、URLと改行を除き、本文は `notice.speak_max_chars`（既定60文字）で切る。内部エラーは、生のエラー文を読まず、決まった言葉（`ERROR_PHRASES`: `音声合成`=「声を作れなかったよ。」、`音声認識`・`文字起こし`=「音声を認識できなかったよ。」、`音声再生`=「音声を再生できなかったよ。」）だけを読む。VOICEVOX・stt-gatewayの失敗（代替で続く）と、エージェントの失敗（別に読み上げる）は、二重に知らせないため読まない。
+  - 重ならない・待つ条件: 通知の声は、いまの会話の邪魔にならないよう、次の間は待つ。
+    - 通常の通知・エラー: ARGOSの発話中・再生中（話す処理自身の数え上げ `SpeechController.is_active()` と `AudioPlayer.is_playing`）、または状態が「読み上げ中」「録音中」「本人確認録音中」「本人確認中」「文字起こし中」「継続受付中」（応答のあとにマイクが開いている時間。通知の声が利用者の発話と間違えて認識されないようにするため）のあいだ待つ。最大30秒で、超えたら読み上げる。音声を作っている間に始まった発話や録音も、待つ。
+    - 別スロットの完了通知（`response:` のkey）: いまの会話が終わるまで待つ。上の状態に加えて「考え中」（エージェントが作業中の無音の時間）も待つ。待つ上限は10分（`idle_wait_seconds`）で、超えたら割り込まずに読み上げをやめる（通知欄には残る）。長く待たされる間も、ほかの通知（順番待ちの後ろ）は、その後ろで待つ。待ち終わったとき（音声を作る前と、作ったあとの2回）に、そのスロットがまだ未読か（今のスロットでなく、`DashboardState.has_unread_slot` が真か）を確かめ、待っている間に利用者が切り替えて応答を聞いた場合や、今のスロットの応答だった場合は、読まずにやめる（`SpeechPlan.slot` に題名から取り出したスロット名を持つ。「端末応答完了」は「端末」を除く）。
+    - 「ARGOSが話している最中か」は、画面の状態表示（別のスロットの処理が「待機中」に戻すことがある）ではなく、応答・状態案内を読み上げている間の数え上げで判断するため、応答の文と文のすき間に割り込まない。
+    - ミュート中は読まない。待っている間にミュート・ロック（通知の中身の場合）・停止になったら、やめる。ロック中（本人確認前）は、通知の中身を読まず、決まった言葉のエラーだけ読む。
+    - 同じ内容は `notice.speak_interval_seconds`（既定60秒）以内に続けて読まない（完了通知は、通知ごとに別のkeyで、抑制しない）。順番待ちは最大5件で、あふれたら古いものを捨てる。
+    - 応答・状態案内・通知の音声が、同時に再生されて混ざらないよう、`AudioPlayer.play_wav` は再生中なら終わるまで待ってから再生する（順番待ちの間に `cancel()` されたものは再生しない）。`play_wav` は最後まで再生できたらTrue、中断されたらFalseを返す。ナビなど他アプリの音声が鳴っている間は、`audio.yield_to_apps` の仕組みで待つ。
+  - 中断とやり直し: 利用者がPTT・ウェイクワードで話し始めると、再生中の音声は中断される（利用者が優先）。中断された通知は、静かになってから、読み上げ直す（最大2回）。
+  - 自分の声への対策: 通知の声も、応答の読み上げと同じく、ウェイクワードを含む文の間は割り込みを抑止し（`_speaking_wakeword`）、終了後は一定時間、反応を抑える（`_mark_tts_finished` のクールダウン）。
+  - 音声合成が使えないとき: エラーの決まった言葉は、音声合成が使えるうちに、話者ごとに作って `notice.phrase_dir`（既定 `~/.local/state/argos/notice-phrases`）へ保存しておく（音声合成が使えない間は、5分おきに再挑戦する）。使えないときは、その保存音声を再生する。保存もなければ、下がる2音の警告音（`build_error_tone`）で知らせる。この保存先は、一般の音声キャッシュ（`tts_cache`。総量が上限を超えたら古い順に削除する）とは別で、上限や有効期限による自動削除がなく、利用者がディレクトリを消さない限り残る。エラーが長く起きなくても消えない。再生できない音声（壊れたファイル、WAVでないデータ、フレームが0のもの）は、保存もせず、保存済みでも未保存として扱い、音声合成が使えるときに作り直して置き換える。通常の通知も、声を作れなければ警告音にする。読み上げ用の合成の失敗は、エラー通知にしない（通知が通知を呼ぶ循環を防ぐ）。
+- Androidのアプリ通知: Waydroid上のアプリ（既定はSlack）の通知を、ARGOSの外部通知として通知欄へ出し、上の通知の読み上げで知らせる（`notice.android`、`ARGOS_NOTICE_ANDROID_*`、既定は無効。dry-runでは無効）。見張りスレッド `AndroidNoticeWatcher`（`argos.core.android_notice_watcher`）が、`notice.android.interval_seconds`（既定5秒）ごとに `sudo -n lxc-attach ... -- /system/bin/dumpsys notification --noredact` を実行して、表示中の通知（`Notification List:` の段落だけ）を読む（`argos.services.android_notice.parser`）。Waydroidが止まっているなど取得に失敗したときは、何もせず次の確認を待つ。sudoの記録によるjournalへの書き込みは、インストーラーが置く `/etc/sudoers.d/argos-lxc-attach` で抑える（`docs/bundled_installer.md` 参照）。
+  - アプリ専用の処理は持たない: Androidの標準の通知項目だけを使う。題名 `android.title`、本文 `android.text`／`android.bigText`、会話名 `android.conversationTitle`（Slackのチャンネル名、LINEのグループ名など。ない場合は題名）、メッセージ一覧 `android.messages`（送信者・本文・時刻）、自分の名前 `android.selfDisplayName`。メッセージ一覧があるアプリはメッセージ1件ずつ、ない普通の通知は本文を1件のメッセージとして扱う。自分が送ったメッセージは除く。
+  - 対象: `notice.android.apps`（`package` と、読み上げ・表示に使う `name` の配列。省略時は `com.Slack`／`Slack`）のアプリだけ。常駐する通知（`FLAG_ONGOING_EVENT`・`FLAG_FOREGROUND_SERVICE`）と、メッセージ一覧のないまとめ表示の通知（`FLAG_GROUP_SUMMARY`）は扱わない。
+  - 新着の判定: 起動して最初に取得できた時点の通知は、既に届いていたものとして知らせない。メッセージは（パッケージ、時刻、本文）で識別し、1回だけ知らせる（まとめ表示と個別の通知に同じメッセージが載っていても1回）。覚えておく数は2000件までで、古いものから忘れる。
+  - ミュート: `notice.android.mute` の条件（`app`・`conversation`・`sender`・`text`）に当てはまるメッセージは、通知欄にも出さない。指定した項目がすべて当てはまれば対象で、`app` はパッケージ名か `name` と完全一致、ほかは大文字小文字を区別しない部分一致。条件のない要素は設定エラーにする。
+  - 通知の内容: 1回の確認で見つかった新しいメッセージを、アプリと会話ごとに1件の通知にまとめる。`source` はアプリの `name`、題名は「<会話名>: <送信者>」（送信者が会話名と同じなら会話名だけ）、本文は元の本文（送信者が複数なら「<送信者>: <本文>」の行）。読み上げ用に、`speech_title`（会話名の先頭の `#` を除き、「<会話名>、<送信者>から」）と `speech_text` を付ける。
+  - 要約: 読み上げる本文（URLと改行を除いたもの）が `notice.android.summarize_min_chars`（既定40文字）を超えたら、`notice.android.ollama_url` のOllama（`/api/chat`、`notice.android.ollama_model`、既定 `gemma4:e4b`、`think: false`）で40文字以内の1文に要約し、`speech_text` にする。通知の中身を外部のサービスへ送らないよう、LAN内のOllamaだけを使う。URLが空、失敗、`notice.android.summary_timeout_seconds`（既定15秒）の時間切れのときは、元の本文を `speech_text` にする（読み上げ時に `notice.speak_max_chars` で切る）。画面の通知欄には、要約ではなく元の本文を出す。
+  - 読み上げ: `build_plan` は `speech_title`・`speech_text` があれば題名・本文より優先し、「<アプリ名>から通知だよ。<会話名>、<送信者>から。<要約>。」と読む。同じ会話の別のメッセージを抑制しないよう、keyに `speech_text` も含める。待つ条件、ミュート中・ロック中の扱いは、通常の通知と同じ。
+- 他アプリの音声への譲り合い: `audio.yield_to_apps`（`AUDIO_YIELD_TO_APPS`、カンマ区切り）にアプリ名（PipeWireの`application.name`。例: Waydroid）を指定すると、そのアプリの再生ストリーム（`Stream/Output/Audio`）が動いている間、ARGOSの発話を一時停止する。PipeWireのイベント（`pw-dump -m`）を監視スレッド（`argos.hardware.audio_priority.PriorityStreamWatcher`）で読み、動き始めたら`AudioPlayer.hold()`（再生中の`aplay`へSIGSTOPし、次の音声の再生は再開まで待つ）、止まって`AUDIO_YIELD_RELEASE_SECONDS`（既定0.6秒）たったら`AudioPlayer.release()`（SIGCONTで続きから再生）を呼ぶ。他アプリが止まらなくても、保留は`AUDIO_YIELD_MAX_HOLD_SECONDS`（既定20秒）で打ち切る。既定は空で監視しない。`pw-dump`がない環境やdry-runでは監視を組み込まない。保留中の`cancel()`は、停止中のプロセスへ先にSIGCONTを送ってから終了する。
 - 応答の読み上げが終わったら、`ARGOS_WAKEWORD_FOLLOWUP_SECONDS`（既定3秒、0で無効）だけ「追いかけ受付窓」を開き、ウェイクワードを言い直さなくても続けて話せるようにする。窓の中で発話（RMSが `SILENCE_RMS_THRESHOLD` 以上）を検知したら、ウェイクワード無しでそのまま録音・処理する。追いかけ受付の録音は呼びかけを含まないため、STTの呼びかけ必須判定（`ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD`）と先頭呼びかけ除去はスキップする
 - 追いかけ受付は本人確認済みのときだけ開く。ロック中は従来どおりウェイクワードと本人確認を求める。窓を開いている間はダッシュボード状態を `followup`（継続受付中）にして画面を起こしたままにし、無音のまま窓が締め切られたら待機表示へ戻す。窓の中で発話に応答したら、その応答のあとに再び窓を開き、会話が続く限り連続で受け付ける。PTT押下時は窓を閉じる。自己音声対策のクールダウンは追いかけ受付には適用しない
 - `ARGOS_WAKEWORD_REQUIRE_STT_WAKEWORD=true` の場合、ウェイクワード後録音のSTT結果が「アルゴス」などの呼びかけから始まる時だけ本文処理へ進む。自宅など通信遅延が小さく誤検知を強く抑えたい環境向けの設定とする

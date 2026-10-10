@@ -145,6 +145,17 @@ def test_dashboard_kiosk_uses_portable_splash_url():
     assert 'queryParams.get("target")' in splash
 
 
+def test_dashboard_kiosk_supports_split_right_mode():
+    """Waydroidと並べる右半分モードを選べる。"""
+    script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
+
+    assert 'ARGOS_DASHBOARD_KIOSK_MODE:-fullscreen' in script
+    assert 'if [ "${KIOSK_MODE}" = "split-right" ]' in script
+    assert '"--app=${SPLASH_URL}"' in script
+    assert 'ARGOS_DASHBOARD_WINDOW_X:-960' in script
+    assert 'ARGOS_DASHBOARD_WINDOW_WIDTH:-960' in script
+
+
 def test_dashboard_chromium_policy_disables_translation():
     """Chromium管理ポリシーで翻訳バーとサインインUIを無効化する。"""
     policy_path = Path(__file__).parents[1] / "chromium" / "argos-dashboard.json"
@@ -187,3 +198,14 @@ def test_download_face_models_script_exists():
 
     assert script.exists()
     assert "face_detection_yunet_2023mar.onnx" in script.read_text()
+
+
+def test_dashboard_kiosk_opens_layout_chosen_by_window_layout():
+    """画面配置ツールが選んだレイアウトを、Cookieより優先するURLパラメーターで開く。"""
+    script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
+
+    assert 'LAYOUT_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/argos/dashboard-layout"' in script
+    assert 'KIOSK_LAYOUT="${ARGOS_DASHBOARD_KIOSK_LAYOUT:-}"' in script
+    assert "standard|sp|grid)" in script
+    assert 'layout=${KIOSK_LAYOUT}' in script
+    assert 'DASHBOARD_URL="${DASHBOARD_URL}?${DASHBOARD_QUERY}"' in script

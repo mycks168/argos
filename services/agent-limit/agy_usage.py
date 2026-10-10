@@ -10,15 +10,20 @@ import re
 import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from typing import Any
 
+from session_cleanup import list_entries, remove_history_lines, remove_new_entries
 from tmux_util import cleanup, send_keys, tmux, wait_for
 
 _LIMIT_RE = (
-    r"{label}(?:\s+Remaining)?\s*\n\s*\[[^\]]*\]\s*([\d.]+)%\s*\n\s*"
-    r"(?:(\d+)% remaining(?:\s*·\s*Refreshes in\s*(?:(\d+)h)?\s*(?:(\d+)m)?)?"
-    r"|Quota available)"
+    r"{label}(?:\s+Remaining)?\s*\n\s*\[[^\]]*\]\s*(?P<pct>[\d.]+)%\s*\n\s*"
+    r"(?:"
+    r"Quota available"
+    r"|(?:(?:\d+)%\s+remaining\s*(?:·\s*)?)?"
+    r"(?:Refreshes\s+in\s*(?:(?P<hours>\d+)h)?\s*(?:(?P<minutes>\d+)m)?)?"
+    r")"
 )
 
 
@@ -29,10 +34,10 @@ def _parse_limit(block: str, label: str, now: datetime) -> dict[str, Any]:
     if not m:
         raise ValueError(f"{label}を解析できませんでした:\n{block}")
 
-    bar_pct = float(m.group(1))
+    bar_pct = float(m.group("pct"))
     usage_pct = round(100 - bar_pct, 2)
 
-    hours_str, minutes_str = m.group(3), m.group(4)
+    hours_str, minutes_str = m.group("hours"), m.group("minutes")
     if hours_str is None and minutes_str is None:
         reset = None
     else:
@@ -90,8 +95,18 @@ def _wait_until_ready(session: str) -> str:
     return screen
 
 
+# agyが記録を残す場所。調べるたびにログが1つ、履歴に /usage と /exit が増える。
+AGY_DATA_DIR = Path.home() / ".gemini" / "antigravity-cli"
+USAGE_COMMANDS = {"/usage", "/exit"}
+
+
 def main() -> None:
+    """tmuxセッション上でagyを起動して/usageを実行し、結果をJSONで標準出力する。"""
     session = f"agy_usage_{os.getpid()}"
+    # 今回の実行でできた記録だけを、終わったあとで片付けられるよう、起動前の状態を覚えておく
+    log_dir = AGY_DATA_DIR / "log"
+    logs_before = list_entries(log_dir)
+    start_ms = int(time.time() * 1000)
     tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "agy")
     try:
         _wait_until_ready(session)
@@ -104,6 +119,14 @@ def main() -> None:
         result = parse_usage(screen)
     finally:
         cleanup(session)
+        remove_new_entries(log_dir, logs_before)
+        remove_history_lines(
+            AGY_DATA_DIR / "history.jsonl",
+            workspace=os.getcwd(),
+            commands=USAGE_COMMANDS,
+            start_ms=start_ms,
+            end_ms=int(time.time() * 1000),
+        )
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

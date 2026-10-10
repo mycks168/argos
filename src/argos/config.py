@@ -242,6 +242,24 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    # SP表示で、新しい通知が来たときに通知欄を自動で開いておく秒数。0以下なら自動で開かない。
+    dashboard_sp_notice_seconds: float = 8.0
+    # 通知を声でも知らせる。運転中など、画面を見られないとき向け。
+    notice_speak_enabled: bool = True
+    notice_speak_max_chars: int = 60
+    notice_speak_interval_seconds: float = 60.0
+    notice_phrase_dir: str = "~/.local/state/argos/notice-phrases"
+    # Android(Waydroid)のアプリ通知を、ARGOSの通知として知らせる。
+    android_notice_enabled: bool = False
+    android_notice_interval_seconds: float = 5.0
+    # 対象アプリとミュートの条件（YAMLの配列をJSONにしたもの）。
+    android_notice_apps_json: str = ""
+    android_notice_mute_json: str = ""
+    # この文字数を超える本文は、Ollamaで要約して読み上げる。URLが空なら要約しない。
+    android_notice_summarize_min_chars: int = 40
+    android_notice_ollama_url: str = ""
+    android_notice_ollama_model: str = "gemma4:e4b"
+    android_notice_summary_timeout_seconds: float = 15.0
     dashboard_default_font_size: str = "medium"
     dashboard_default_layout: str = "standard"
     dashboard_upload_dir: str = "/tmp/argos/uploads"
@@ -252,11 +270,17 @@ class Settings:
     remote_location_timeout_seconds: float = 2.0
     remote_location_token: str = ""
     audio_state_path: str = "~/.local/state/argos/audio-state.json"
+    # 再生中はARGOSの発話を保留する、他アプリの名前(PipeWireのapplication.name)。空なら監視しない。
+    audio_yield_to_apps: tuple[str, ...] = ()
+    audio_yield_release_seconds: float = 0.6
+    audio_yield_max_hold_seconds: float = 20.0
     agent_runner_url: str = ""
     agent_runner_token: str = ""
     agent_runner_host: str = "127.0.0.1"
     agent_runner_port: int = 28765
     agent_runner_state_dir: str = "~/.local/state/argos/agent-runner"
+    # ARGOSへ届け終わったジョブの記録を残す日数。0以下なら消さない。
+    agent_runner_job_retention_days: float = 7.0
     remote_argos_timeout_seconds: float = 1800.0
     voicevox_volume_scale: float = 1.0
     voicevox_bearer_token: str = ""
@@ -599,11 +623,15 @@ def load_settings() -> Settings:
         audio_output_card=os.environ.get("AUDIO_OUTPUT_CARD", ""),
         audio_output_volume=int(os.environ.get("AUDIO_OUTPUT_VOLUME", "90")),
         audio_state_path=os.environ.get("ARGOS_AUDIO_STATE_PATH", "~/.local/state/argos/audio-state.json"),
+        audio_yield_to_apps=_split_aliases("AUDIO_YIELD_TO_APPS", ()),
+        audio_yield_release_seconds=float(os.environ.get("AUDIO_YIELD_RELEASE_SECONDS", "0.6")),
+        audio_yield_max_hold_seconds=float(os.environ.get("AUDIO_YIELD_MAX_HOLD_SECONDS", "20")),
         agent_runner_url=os.environ.get("ARGOS_AGENT_RUNNER_URL", ""),
         agent_runner_token=os.environ.get("ARGOS_AGENT_RUNNER_TOKEN", ""),
         agent_runner_host=os.environ.get("ARGOS_AGENT_RUNNER_HOST", "127.0.0.1"),
         agent_runner_port=int(os.environ.get("ARGOS_AGENT_RUNNER_PORT", "28765")),
         agent_runner_state_dir=os.environ.get("ARGOS_AGENT_RUNNER_STATE_DIR", "~/.local/state/argos/agent-runner"),
+        agent_runner_job_retention_days=float(os.environ.get("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "7")),
         remote_argos_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_ARGOS_TIMEOUT_SECONDS", "1800")),
         audio_sample_rate=int(os.environ.get("AUDIO_SAMPLE_RATE", "16000")),
         lcd_enabled=_bool_env("ARGOS_LCD_ENABLED", False),
@@ -632,6 +660,21 @@ def load_settings() -> Settings:
             "~/.config/argos/tls/dashboard.key",
         ),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        dashboard_sp_notice_seconds=float(os.environ.get("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "8")),
+        notice_speak_enabled=_bool_env("ARGOS_NOTICE_SPEAK", True),
+        notice_speak_max_chars=int(os.environ.get("ARGOS_NOTICE_SPEAK_MAX_CHARS", "60")),
+        notice_speak_interval_seconds=float(os.environ.get("ARGOS_NOTICE_SPEAK_INTERVAL_SECONDS", "60")),
+        notice_phrase_dir=os.environ.get("ARGOS_NOTICE_PHRASE_DIR", "~/.local/state/argos/notice-phrases"),
+        android_notice_enabled=_bool_env("ARGOS_NOTICE_ANDROID_ENABLED", False),
+        android_notice_interval_seconds=float(os.environ.get("ARGOS_NOTICE_ANDROID_INTERVAL_SECONDS", "5")),
+        android_notice_apps_json=os.environ.get("ARGOS_NOTICE_ANDROID_APPS_JSON", ""),
+        android_notice_mute_json=os.environ.get("ARGOS_NOTICE_ANDROID_MUTE_JSON", ""),
+        android_notice_summarize_min_chars=int(os.environ.get("ARGOS_NOTICE_ANDROID_SUMMARIZE_MIN_CHARS", "40")),
+        android_notice_ollama_url=os.environ.get("ARGOS_NOTICE_ANDROID_OLLAMA_URL", ""),
+        android_notice_ollama_model=os.environ.get("ARGOS_NOTICE_ANDROID_OLLAMA_MODEL", "gemma4:e4b"),
+        android_notice_summary_timeout_seconds=float(
+            os.environ.get("ARGOS_NOTICE_ANDROID_SUMMARY_TIMEOUT_SECONDS", "15")
+        ),
         dashboard_default_font_size=os.environ.get("ARGOS_DASHBOARD_DEFAULT_FONT_SIZE", "medium"),
         dashboard_default_layout=_normalize_layout(os.environ.get("ARGOS_DASHBOARD_DEFAULT_LAYOUT", "standard")),
         dashboard_upload_dir=os.environ.get("ARGOS_DASHBOARD_UPLOAD_DIR", "/tmp/argos/uploads"),

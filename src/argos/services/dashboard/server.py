@@ -29,6 +29,8 @@ from argos.services.dashboard.audio_devices import (
 from argos.services.dashboard.location import DEFAULT_GPS_DEVICE_PATH, read_location
 from argos.services.dashboard.settings_config import (
     load_settings_form,
+    changed_setting_keys,
+    needs_runner_restart,
     save_settings_form,
 )
 from argos.services.dashboard.state import DashboardState
@@ -50,6 +52,8 @@ FONT_SIZE_OPTIONS = {"small", "medium", "large"}
 # 閲覧認証で使うCookie名。値には閲覧キーそのものを保持する。
 VIEW_KEY_COOKIE = "argos_view_key"
 LAYOUT_COOKIE = "argos_layout"
+# URLの?layout=で指定できるレイアウト名。
+LAYOUT_CHOICES = ("standard", "sp", "grid")
 # アップロード画像のMIMEタイプと保存拡張子の対応。
 UPLOAD_MIME_EXTENSIONS = {
     "image/png": ".png",
@@ -110,6 +114,7 @@ class DashboardServer:
         camera_snapshot_path: Path = DEFAULT_CAMERA_SNAPSHOT_PATH,
         gps_device_path: Path = DEFAULT_GPS_DEVICE_PATH,
         screensaver_seconds: float = 300.0,
+        sp_notice_seconds: float = 8.0,
         default_font_size: str = "medium",
         default_layout: str = "standard",
         location_provider: str = "local",
@@ -137,6 +142,7 @@ class DashboardServer:
         self._upload_max_bytes = upload_max_bytes
         self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
+        self._sp_notice_seconds = sp_notice_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
         self._default_layout = _normalize_layout(default_layout)
         self._location_provider = location_provider
@@ -184,6 +190,7 @@ class DashboardServer:
             self._event_handler,
             self._terminal_handler,
             self._config_path,
+            sp_notice_seconds=self._sp_notice_seconds,
         )
         context: ssl.SSLContext | None = None
         if self._tls.is_enabled:
@@ -234,6 +241,7 @@ def _create_handler(
     event_handler: Callable[[dict[str, Any], dict[str, Any]], None] | None = None,
     terminal_handler: Any | None = None,
     config_path: Path = Path("config.yaml"),
+    sp_notice_seconds: float = 8.0,
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -252,6 +260,10 @@ def _create_handler(
                 layout_morsel = cookie.get(LAYOUT_COOKIE)
                 cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
                 target_layout = cookie_layout if cookie_layout else default_layout
+                # キオスクなどから、Cookieや既定値より優先して表示するレイアウトを指定できる。
+                requested_layout = str(query.get("layout", [""])[0]).strip().lower()
+                if requested_layout in LAYOUT_CHOICES:
+                    target_layout = requested_layout
                 if open_settings and target_layout == "grid":
                     target_layout = "standard"
                 if target_layout == "grid":
@@ -440,6 +452,7 @@ def _create_handler(
                 return
             try:
                 payload = self._read_json(MAX_BODY_BYTES)
+                changed = changed_setting_keys(config_path, payload.get("values"))
                 backup_path = save_settings_form(config_path, payload.get("values"))
             except ValueError as exc:
                 self._send_json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
@@ -448,11 +461,17 @@ def _create_handler(
                 log.exception("設定ファイルの保存に失敗しました")
                 self._send_json({"error": "設定ファイルを保存できませんでした"}, HTTPStatus.INTERNAL_SERVER_ERROR)
                 return
+            runner_restart = needs_runner_restart(changed)
+            message = "保存しました。反映にはARGOSの再起動が必要です。"
+            if runner_restart:
+                message += "エージェント関係の設定は、エージェントランナーの再起動も必要です。"
             self._send_json(
                 {
                     "saved": True,
                     "restart_required": True,
-                    "message": "保存しました。反映にはARGOSの再起動が必要です。",
+                    "runner_restart_required": runner_restart,
+                    "changed": changed,
+                    "message": message,
                     "backup": backup_path.name,
                 }
             )
@@ -506,6 +525,7 @@ def _create_handler(
             html_text = files("argos.services.dashboard.static").joinpath("dashboard.html").read_text(encoding="utf-8")
             html_text = html_text.replace("__ARGOS_DASHBOARD_TOKEN__", json.dumps(token, ensure_ascii=False))
             html_text = html_text.replace("__ARGOS_DASHBOARD_SCREENSAVER_SECONDS__", json.dumps(screensaver_seconds))
+            html_text = html_text.replace("__ARGOS_DASHBOARD_SP_NOTICE_SECONDS__", json.dumps(sp_notice_seconds))
             html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
             html_text = html_text.replace("__ARGOS_DASHBOARD_LAYOUT__", json.dumps(layout))
             html = html_text.encode("utf-8")

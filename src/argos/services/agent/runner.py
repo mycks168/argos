@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import threading
 import time
 import uuid
@@ -104,6 +105,31 @@ class AgentJobStore:
             tmp_path = path.with_suffix(".json.tmp")
             tmp_path.write_text(json.dumps(asdict(job), ensure_ascii=False, indent=2), encoding="utf-8")
             tmp_path.replace(path)
+
+    def prune_delivered(self, max_age_seconds: float, now: float | None = None) -> list[str]:
+        """ARGOSへ届け終わってから max_age_seconds 以上たったジョブを消し、消したジョブIDを返す。
+
+        届け終わった記録は、どこからも読まれない（会話の履歴はARGOS本体が別に保存する）。
+        実行中・未配信のジョブと、状態を読めないディレクトリには触らない。
+        """
+        if not self._jobs_dir.exists():
+            return []
+        cutoff = (time.time() if now is None else now) - max_age_seconds
+        removed: list[str] = []
+        with self._lock:
+            for path in sorted(self._jobs_dir.glob("*/job.json")):
+                job = self.load(path.parent.name)
+                if job is None or not job.delivered_to_argos or job.status in {"queued", "running"}:
+                    continue
+                if (job.delivered_at or job.updated_at) > cutoff:
+                    continue
+                try:
+                    shutil.rmtree(path.parent)
+                except OSError:
+                    log.exception("古いジョブを削除できませんでした: %s", job.job_id)
+                    continue
+                removed.append(job.job_id)
+        return removed
 
     def load(self, job_id: str) -> AgentJob | None:
         """ジョブIDから状態を読み込む。"""
@@ -244,6 +270,33 @@ class AgentRunner:
         recovered = self._store.mark_interrupted_active_jobs_failed()
         if recovered:
             log.warning("Runner再起動で中断されたジョブを失敗扱いにしました: count=%s", len(recovered))
+
+    def prune_jobs(self) -> list[str]:
+        """設定の日数より前に届け終わったジョブを消す。日数が0以下なら消さない。"""
+        days = self._settings.agent_runner_job_retention_days
+        if days <= 0:
+            return []
+        removed = self._store.prune_delivered(days * 86400)
+        if removed:
+            log.info("届け終わった古いジョブを削除しました: count=%s", len(removed))
+        return removed
+
+    def start_job_pruning(self, interval_seconds: float = 3600.0, stop: threading.Event | None = None) -> threading.Thread:
+        """古いジョブの削除を、すぐに1回と、そのあと interval_seconds ごとに行うスレッドを開始する。"""
+        stop_event = stop or threading.Event()
+
+        def loop() -> None:
+            while True:
+                try:
+                    self.prune_jobs()
+                except Exception:  # noqa: BLE001 - 削除の失敗で、Runnerを止めない
+                    log.exception("古いジョブの削除に失敗しました")
+                if stop_event.wait(interval_seconds):
+                    return
+
+        thread = threading.Thread(target=loop, name="agent-job-pruning", daemon=True)
+        thread.start()
+        return thread
 
     def start_job(
         self,

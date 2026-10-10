@@ -8,6 +8,7 @@ ARGOS本体からTTSの配管(tts-filter正規化、VOICEVOX/Kokoroフォール�
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import queue
 import threading
@@ -63,6 +64,10 @@ class SpeechController:
         self._mute_condition = threading.Condition()
         self._muted = muted
         self._last_tts_finished_at = 0.0
+        # 応答・状態案内を読み上げている間の数。画面の状態表示は別のスロットの処理で
+        # 書き換わることがあるため、「ARGOSが話している最中か」は、これで判断する。
+        self._activity_count = 0
+        self._activity_lock = threading.Lock()
         # バージイン抑止用: 自分がウェイクワードを含むチャンクを読み上げている最中か。
         self._speaking_wakeword = False
         self._wakeword_aliases = tuple(alias.lower() for alias in settings.wakeword_aliases if alias)
@@ -102,8 +107,56 @@ class SpeechController:
             return False
         return time.monotonic() - self._last_tts_finished_at < cooldown
 
+    @contextlib.contextmanager
+    def _speaking_activity(self):
+        """応答や状態案内を読み上げている間、話している最中として数える。"""
+        with self._activity_lock:
+            self._activity_count += 1
+        try:
+            yield
+        finally:
+            with self._activity_lock:
+                self._activity_count -= 1
+
+    def is_active(self) -> bool:
+        """応答や状態案内を、読み上げている最中ならTrueを返す（合成待ちの間も含む）。"""
+        with self._activity_lock:
+            return self._activity_count > 0
+
+    def synthesize_for_notice(self, text: str, speaker: int) -> bytes:
+        """通知の読み上げ用に音声を作る。失敗してもエラー通知は出さない（循環を防ぐ）。"""
+        return self._synthesize_tts(text, report_errors=False, speaker=speaker)
+
+    def play_notice_audio(self, wav_data: bytes, text: str = "") -> bool:
+        """通知の音声（読み上げ・警告音）を再生し、最後まで再生できたらTrueを返す。
+
+        ARGOS自身の声をマイクが拾って反応しないよう、応答の読み上げと同じ対策を行う
+        （ウェイクワードを含む文の間は割り込みを抑止し、終了後は一定時間、反応を抑える）。
+        再生中に利用者の発話などで中断されたときは、Falseを返す。
+        """
+        self._wake_dashboard_display()
+        self._speaking_wakeword = self._chunk_contains_wakeword(text)
+        try:
+            return self._audio.play_wav(wav_data) is not False
+        finally:
+            self._speaking_wakeword = False
+            self._mark_tts_finished()
+
+    def current_speaker_id(self) -> int:
+        """現在のスロットのVOICEVOX話者IDを返す。"""
+        return self._voicevox_speaker_for_slot("")
+
+    def known_speaker_ids(self) -> set[int]:
+        """スロットごとの話者IDと、既定の話者IDをまとめて返す。"""
+        return {*self._voicevox_speakers_by_slot_key.values(), self._settings.voicevox_speaker}
+
     def speak_status(self, text: str) -> None:
-        """短い状態メッセージを読み上げる。"""
+        """短い状態メッセージを読み上げる。読み上げている間は、話している最中として数える。"""
+        with self._speaking_activity():
+            self._speak_status(text)
+
+    def _speak_status(self, text: str) -> None:
+        """短い状態メッセージを読み上げる（数え上げの内側の処理）。"""
         log.info("状態通知: %s", text)
         self._show_lcd(text)
         if self.is_muted():
@@ -130,7 +183,12 @@ class SpeechController:
             self._report_error("音声再生", exc)
 
     def speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "", slot_key: str = "") -> str:
-        """応答差分を句読点で分割し、TTS へ順次投入する。"""
+        """応答差分を句読点で分割し、TTS へ順次投入する。読み上げている間は、話している最中として数える。"""
+        with self._speaking_activity():
+            return self._speak_response_stream(deltas, dashboard_message_id, slot_key)
+
+    def _speak_response_stream(self, deltas: Iterable[str], dashboard_message_id: str = "", slot_key: str = "") -> str:
+        """応答差分を句読点で分割し、TTS へ順次投入する（数え上げの内側の処理）。"""
         full_response = ""
         chunker = TextChunker(self._settings.tts_delimiters)
         if self._settings.dry_run:
@@ -292,14 +350,20 @@ class SpeechController:
             except queue.Empty:
                 return
 
-    def _synthesize_tts(self, text: str, slot_key: str = "") -> bytes:
-        """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。"""
-        speaker_id = self._voicevox_speaker_for_slot(slot_key)
+    def _synthesize_tts(self, text: str, slot_key: str = "", *, report_errors: bool = True, speaker: int | None = None) -> bytes:
+        """VOICEVOXを優先し、未設定または失敗時はKokoroで音声を生成する。
+
+        Kokoroが未導入なら、試さずに飛ばし、使えない理由を1つのエラーにまとめる。
+        report_errors=Falseは、エラー通知の読み上げ自身が使うとき用で、失敗を通知にしない
+        （通知が通知を呼ぶ循環を防ぐ）。speakerを指定すると、その話者IDで生成する。
+        """
+        speaker_id = self._voicevox_speaker_for_slot(slot_key) if speaker is None else speaker
         if self._settings.tts_cache_enabled:
             cached = self._tts_cache.get(text, speaker_id)
             if cached is not None:
                 return cached
 
+        voicevox_error: Exception | None = None
         if self._settings.voicevox_url.strip():
             try:
                 wav_data = self._voicevox.synthesize(text, speaker=speaker_id)
@@ -307,8 +371,19 @@ class SpeechController:
                     self._tts_cache.set(text, speaker_id, wav_data)
                 return wav_data
             except Exception as exc:
-                log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
-                self._report_error("VOICEVOX", exc)
+                voicevox_error = exc
+                if getattr(self._kokoro, "available", True):
+                    log.exception("VOICEVOXに失敗しました。Kokoroへフォールバックします")
+                    if report_errors:
+                        self._report_error("VOICEVOX", exc)
+                else:
+                    log.exception("VOICEVOXに失敗しました。Kokoroも未導入のため、音声を作れません")
+        if not getattr(self._kokoro, "available", True):
+            reason = f"VOICEVOXに失敗しました({voicevox_error})" if voicevox_error else "VOICEVOXが未設定です"
+            error = RuntimeError(f"{reason}。ローカルのKokoroも未導入のため、音声を作れません。")
+            if report_errors:
+                self._report_error("音声合成", error)
+            raise error
         try:
             wav_data = self._kokoro.synthesize(text)
             if self._settings.tts_cache_enabled:
@@ -316,7 +391,8 @@ class SpeechController:
             return wav_data
         except Exception as exc:
             log.exception("Kokoroに失敗しました")
-            self._report_error("Kokoro", exc)
+            if report_errors:
+                self._report_error("音声合成", exc)
             raise
 
     def _voicevox_speaker_for_slot(self, slot_key: str = "") -> int:

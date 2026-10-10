@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from typing import Any
 
@@ -16,6 +17,11 @@ class FasterWhisperClient:
         self._device = device
         self._compute_type = compute_type
         self._model: Any | None = None
+
+    @property
+    def available(self) -> bool:
+        """faster-whisper が導入済みで使えればTrueを返す。未導入なら、試さずに飛ばすための判定。"""
+        return self._model is not None or importlib.util.find_spec("faster_whisper") is not None
 
     def transcribe(self, wav_path: str) -> str:
         """WAV ファイルを faster-whisper で文字起こしする。"""

@@ -458,6 +458,16 @@ class AudioPlayer:
         self._volume_lock = threading.Lock()
         self._volume_set = False
         self._proc: subprocess.Popen | None = None
+        # 他アプリの音声(ナビ案内など)を優先するための保留。Eventがセット中は再生してよい。
+        self._playable = threading.Event()
+        self._playable.set()
+        self._hold_lock = threading.Lock()
+        self._hold_timer: threading.Timer | None = None
+        self._max_hold_seconds = 20.0
+        # 複数のスレッド（応答・状態案内・通知）が同時に再生しようとしても、声が混ざらないよう順番に再生する。
+        # cancel()のたびに世代を進め、順番待ちの間に中断された再生は、鳴らさずに捨てる。
+        self._play_lock = threading.Lock()
+        self._cancel_epoch = 0
 
     @property
     def volume(self) -> int:
@@ -480,8 +490,76 @@ class AudioPlayer:
         self._volume_set = True
         return applied
 
-    def play_wav(self, wav_data: bytes) -> None:
-        """WAV データを同期的に再生する。"""
+    @property
+    def is_held(self) -> bool:
+        """他アプリの音声を優先して、再生を保留中ならTrueを返す。"""
+        return not self._playable.is_set()
+
+    def set_max_hold_seconds(self, seconds: float) -> None:
+        """保留の上限秒数を設定する。上限を過ぎたら、他アプリの再生中でも再開する。"""
+        self._max_hold_seconds = max(1.0, float(seconds))
+
+    def hold(self) -> None:
+        """再生を保留する。再生中の aplay は一時停止し、次の音声は再開まで始めない。
+
+        他アプリが鳴らし続けても発話が永久に止まらないよう、上限秒数で自動的に再開する。
+        """
+        with self._hold_lock:
+            if not self._playable.is_set():
+                return
+            self._playable.clear()
+            self._signal_proc(signal.SIGSTOP)
+            timer = threading.Timer(self._max_hold_seconds, self._release_after_limit)
+            timer.daemon = True
+            self._hold_timer = timer
+            timer.start()
+
+    def release(self) -> None:
+        """保留を解除し、一時停止していた再生を続ける。"""
+        with self._hold_lock:
+            timer, self._hold_timer = self._hold_timer, None
+            if timer is not None:
+                timer.cancel()
+            self._playable.set()
+            self._signal_proc(signal.SIGCONT)
+
+    def _release_after_limit(self) -> None:
+        """保留が上限秒数を超えたときに、発話を再開する。"""
+        log.warning("音声の保留が上限(%.0f秒)を超えたため、再開します", self._max_hold_seconds)
+        self.release()
+
+    def _signal_proc(self, sig: int) -> None:
+        """再生中の aplay があればシグナルを送る。終了済みなら何もしない。"""
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.kill(proc.pid, sig)
+        except (OSError, AttributeError):
+            pass
+
+    def _wait_until_playable(self) -> None:
+        """保留中なら再開まで待つ。上限はhold()のタイマーが保証する。"""
+        self._playable.wait()
+
+    def play_wav(self, wav_data: bytes) -> bool:
+        """WAV データを同期的に再生し、最後まで再生できたらTrueを返す。
+
+        すでに別の音声を再生中なら、終わるまで待ってから再生する（声を重ねない）。
+        順番待ちの間、または再生中にcancel()が呼ばれたら、再生せず（または途中で止まり）、
+        Falseを返す。
+        """
+        epoch = self._cancel_epoch
+        with self._play_lock:
+            if epoch != self._cancel_epoch:
+                log.info("順番待ちの間に中断されたため、音声を再生しません")
+                return False
+            self._play_wav_locked(wav_data)
+            return epoch == self._cancel_epoch
+
+    def _play_wav_locked(self, wav_data: bytes) -> None:
+        """再生の順番を得たあとの、実際の再生処理。"""
+        self._wait_until_playable()
         self._set_volume_once()
         if self._play_wav_streaming(wav_data):
             return
@@ -499,10 +577,13 @@ class AudioPlayer:
             self._proc = None
 
     def cancel(self) -> None:
-        """再生中の aplay を停止する。"""
+        """再生中の aplay を停止し、順番待ちの再生も取り消す。"""
+        self._cancel_epoch += 1
         proc = self._proc
         if proc is None or proc.poll() is not None:
             return
+        # 一時停止中のプロセスはSIGTERMを受け取れないため、先に再開させる。
+        self._signal_proc(signal.SIGCONT)
         proc.terminate()
         try:
             proc.wait(timeout=1)
@@ -577,6 +658,7 @@ class AudioPlayer:
                     frames = source.readframes(2048)
                     if not frames:
                         break
+                    self._wait_until_playable()
                     current_volume = self.volume
                     proc.stdin.write(self._scale_pcm16_ramp(frames, previous_volume, current_volume, params.nchannels))
                     previous_volume = current_volume

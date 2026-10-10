@@ -71,6 +71,9 @@ uv run ./agy_usage.py
 - `usage_pct`: 使用率(%)。クォータが100%残っている場合は`0.0`
 - `reset`: リセット予定日時(`MM/DD HH:MM`形式)。クォータが満タンの場合は`null`
 
+> [!NOTE]
+> Antigravity CLIのバージョンにより、「X% remaining」の残量表記が省略されリフレッシュ時刻のみ表示される形式や、リフレッシュ時間が分単位のみ（例: `Refreshes in 41m`）となる形式にも対応しています。
+
 ### claudeの使用状況取得
 
 ```sh
@@ -78,6 +81,8 @@ uv run ./claude_usage.py
 ```
 
 `claude`を起動して`/usage`を実行し、現在セッションと週次の使用率を以下の形式のJSONで標準出力に出力します。
+
+
 
 ```json
 {
@@ -93,6 +98,14 @@ uv run ./claude_usage.py
 `update_limits.py` は `codex_status.py` の結果を `codex.json` と `hermes.json` に、`agy_usage.py` の `gemini` を `antigravity.json` に、`claude_usage.py` の結果を `claude.json` に書き出します。
 
 なお`codex`は`/status`を短時間に連続実行すると「refresh requested; run /status again shortly」と表示され値が返らないことがあるため、最大5回まで自動リトライします。
+
+## 調べたときの記録の片付け
+
+CLIは起動するたびに記録を残します。5分おきに調べると1日に100件以上たまり、どこからも使わないため、今回の実行でできたものだけを片付けます（`session_cleanup.py`）。前からあったもの、ほかのディレクトリやほかの時間に利用者が使った記録には触りません。
+
+- `claude`: 会話の記録を `~/.claude/projects/-opt-argos-services-agent-limit/`（起動したディレクトリごとの場所。`CLAUDE_CONFIG_DIR` があればその下）に残します。起動前の中身を覚えておき、終わったあとで今回できた記録だけを消します。
+- `agy`: ログを `~/.gemini/antigravity-cli/log/` に1つ、コマンド履歴 `~/.gemini/antigravity-cli/history.jsonl` に `/usage` と `/exit` を残します。ログは今回できたものだけを消します。履歴は、ディレクトリがこのツールの場所・コマンドが `/usage` か `/exit`・時刻が今回の実行の間、のすべてに当てはまる行だけを取り除きます（履歴は最新2000行までしか残らないため、放っておくと利用者の履歴が押し出されます）。書き戻す直前に履歴が変わっていたら（別の `agy` が書き込んだら）、その行を失わないよう、読み直してやり直し、3回変わり続けたら諦めます。
+- `codex`: `/status` を見るだけでは記録を残さないため、片付けは不要です。
 
 ## テスト
 

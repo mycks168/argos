@@ -174,3 +174,71 @@ def test_invalid_yaml_reports_configuration_error(tmp_path):
 
     with pytest.raises(ValueError, match="config.yaml"):
         load_yaml_environment(path)
+
+
+def test_audio_yield_settings_round_trip(tmp_path):
+    """他アプリの再生中に発話を保留する設定を、YAMLと環境変数名の間で往復できる。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("audio:\n  yield_to_apps:\n    - Waydroid\n    - Other\n  yield_release_seconds: 0.8\n", encoding="utf-8")
+
+    values = load_yaml_environment(path)
+
+    assert values["AUDIO_YIELD_TO_APPS"] == "Waydroid,Other"
+    assert values["AUDIO_YIELD_RELEASE_SECONDS"] == "0.8"
+    rewritten = tmp_path / "rewritten.yaml"
+    write_yaml_from_environment(values, rewritten)
+    assert yaml.safe_load(rewritten.read_text(encoding="utf-8"))["audio"]["yield_to_apps"] == ["Waydroid", "Other"]
+
+
+def test_dashboard_sp_notice_seconds_from_yaml(tmp_path):
+    """dashboard.sp_notice_seconds が既存の設定名へ変換される。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("dashboard:\n  sp_notice_seconds: 12\n", encoding="utf-8")
+
+    assert load_yaml_environment(path)["ARGOS_DASHBOARD_SP_NOTICE_SECONDS"] == "12"
+
+
+def test_notice_speech_settings_from_yaml(tmp_path):
+    """notice セクションが、既存の設定名へ変換される。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("notice:\n  speak: false\n  speak_max_chars: 30\n  phrase_dir: /tmp/p\n", encoding="utf-8")
+
+    values = load_yaml_environment(path)
+
+    assert values["ARGOS_NOTICE_SPEAK"] == "false"
+    assert values["ARGOS_NOTICE_SPEAK_MAX_CHARS"] == "30"
+    assert values["ARGOS_NOTICE_PHRASE_DIR"] == "/tmp/p"
+
+
+def test_android_notice_lists_are_passed_as_json(tmp_path):
+    """notice.androidのappsとmuteは、JSONにして渡し、旧env値からの変換でも配列に戻す。"""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        """
+notice:
+  speak: true
+  android:
+    enabled: true
+    ollama_url: http://ollama.example:11434
+    apps:
+      - package: com.Slack
+        name: Slack
+    mute:
+      - conversation: "#監視通知"
+""",
+        encoding="utf-8",
+    )
+    values = load_yaml_environment(path)
+    assert values["ARGOS_NOTICE_SPEAK"] == "true"
+    assert values["ARGOS_NOTICE_ANDROID_ENABLED"] == "true"
+    assert values["ARGOS_NOTICE_ANDROID_OLLAMA_URL"] == "http://ollama.example:11434"
+    assert values["ARGOS_NOTICE_ANDROID_APPS_JSON"] == '[{"package": "com.Slack", "name": "Slack"}]'
+    assert values["ARGOS_NOTICE_ANDROID_MUTE_JSON"] == '[{"conversation": "#監視通知"}]'
+
+    output = tmp_path / "migrated.yaml"
+    write_yaml_from_environment(values, output)
+    data = yaml.safe_load(output.read_text(encoding="utf-8"))
+    assert data["notice"]["speak"] is True
+    assert data["notice"]["android"]["enabled"] is True
+    assert data["notice"]["android"]["apps"] == [{"package": "com.Slack", "name": "Slack"}]
+    assert data["notice"]["android"]["mute"] == [{"conversation": "#監視通知"}]
