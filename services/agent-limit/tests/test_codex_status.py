@@ -1,9 +1,11 @@
 from datetime import datetime
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+import codex_status
 
-from codex_status import _is_status_ready, parse_status
+from codex_status import _is_status_ready, parse_limit_row, parse_status
 
 FIXTURE = (Path(__file__).parent / "fixtures" / "codex_status_screen.txt").read_text()
 
@@ -88,3 +90,75 @@ Weekly limit:         [████████████████░░░
 def test_status_is_not_ready_for_incomplete_weekly_row() -> None:
     """週次枠の見出しだけでは取得完了と誤判定しない。"""
     assert not _is_status_ready("Weekly limit:")
+
+
+@pytest.mark.parametrize(
+    ("clock", "expected"),
+    [("9:41 PM", "21:41"), ("4:41 PM", "16:41"),
+     ("12:00 AM", "00:00"), ("12:00 PM", "12:00"),
+     ("9:41 am", "09:41"), ("21:41", "21:41"), ("9:41", "09:41")],
+)
+def test_limit_row_accepts_both_clock_formats(clock: str, expected: str) -> None:
+    """新旧の時刻表記と正午・深夜を同じ24時間表記へ正規化する。"""
+    screen = f"Weekly limit: [████] 99% left (resets {clock} on 20 Oct)"
+    result = parse_limit_row("Weekly limit", screen, datetime(2026, 10, 13, 17))
+    assert result == {"usage_pct": 1, "reset": f"10/20 {expected}"}
+    assert _is_status_ready(screen)
+
+
+@pytest.mark.parametrize("clock", ["0:00 AM", "13:00 PM", "24:00", "12:60"])
+def test_limit_row_rejects_invalid_clock(clock: str) -> None:
+    """不正な時刻を完成したステータスとして扱わない。"""
+    screen = f"Weekly limit: [████] 99% left (resets {clock} on 20 Oct)"
+    assert not _is_status_ready(screen)
+
+
+def test_parse_current_status_without_credits() -> None:
+    """実機の12時間表記をクレジットなしでも完了として解析する。"""
+    screen = """
+5h limit: [████] 91% left (resets 9:41 PM)
+Weekly limit: [████] 99% left (resets 4:41 PM on 20 Oct)
+"""
+    result = parse_status(screen, now=datetime(2026, 10, 13, 17))
+    assert result == {
+        "five_hour": {"usage_pct": 9, "reset": "10/13 21:41"},
+        "weekly": {"usage_pct": 1, "reset": "10/20 16:41"},
+    }
+
+
+@pytest.mark.parametrize("startup", ["OpenAI Codex", "Do you trust", "Update available"])
+def test_run_once_uses_weekly_completion_and_cleans_up(
+    monkeypatch: pytest.MonkeyPatch, startup: str
+) -> None:
+    """起動確認後に12時間表記で取得を完了し、一時セッションを閉じる。"""
+    final_screen = "Weekly limit: [████] 99% left (resets 4:41 PM on 20 Oct)"
+    screens = [startup]
+    if startup == "Update available":
+        screens.append("Do you trust")
+    if startup != "OpenAI Codex":
+        screens.append("OpenAI Codex")
+    screens.extend(["show current session configuration", final_screen])
+    cleaned_sessions: list[str] = []
+
+    def fake_wait_for(
+        session: str, predicate: Callable[[str], bool], timeout: float = 30
+    ) -> str:
+        """一時セッションへの操作を模擬する。"""
+        assert session.startswith("codex_status_")
+        assert timeout == 60
+        screen = screens.pop(0)
+        assert predicate(screen)
+        return screen
+
+    monkeypatch.setattr(codex_status, "wait_for", fake_wait_for)
+    monkeypatch.setattr(codex_status, "tmux", lambda *_args: None)
+    monkeypatch.setattr(codex_status, "send_keys", lambda *_keys: None)
+    monkeypatch.setattr(codex_status.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(codex_status, "cleanup", cleaned_sessions.append)
+    assert codex_status.run_once()["weekly"]["usage_pct"] == 1
+    assert len(cleaned_sessions) == 1
+
+
+def test_refresh_requested_is_ready() -> None:
+    """再取得要求は完了扱いで検出し、呼び出し元へ再試行判断を渡す。"""
+    assert _is_status_ready("refresh requested")

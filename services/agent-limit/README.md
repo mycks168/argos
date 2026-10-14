@@ -40,6 +40,7 @@ uv run ./codex_status.py
 
 - `usage_pct`: 使用率(%)
 - `reset`: リセット日時(`MM/DD HH:MM`形式)
+- Codex画面の24時間表記（`21:41`）と12時間表記（`9:41 PM`）の両方を受け付け、出力は24時間表記へ統一します。
 - `credits`: 残りクレジット数
 
 > [!NOTE]
