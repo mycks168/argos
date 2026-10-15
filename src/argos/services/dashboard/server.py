@@ -11,15 +11,16 @@ import ssl
 import subprocess
 import threading
 import uuid
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator
+from dataclasses import asdict, dataclass
 from http import HTTPStatus
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import parse_qs, urlparse
+from requests import RequestException
 
 from argos.services.dashboard.audio_devices import (
     list_audio_devices,
@@ -36,6 +37,7 @@ from argos.services.dashboard.settings_config import (
 from argos.services.dashboard.state import DashboardState
 from argos.services.dashboard.tls import ensure_self_signed_certificate
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
+from argos.services.agent.console_protocol import parse_console_command
 from argos.services.opus_codec import (
     OpusCodecError,
     decode_audio_to_wav,
@@ -43,6 +45,19 @@ from argos.services.opus_codec import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class TerminalTurnHandler(Protocol):
+    """既存ターンと送信済み端末回答をHTTP層から呼び出す契約。"""
+
+    def process_turn(self, wav_bytes: bytes | None = None, *, text: str | None = None, want_audio: bool = True,
+                     slot_name: str = "", slot_provider: str = "") -> Iterator[dict[str, object]]:
+        """入力を送信して会話イベントを生成する。"""
+
+    def observe_turn(self, text: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """送信済み入力の回答を取得する。"""
+
+
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
 DEFAULT_UPLOAD_DIR = Path("/tmp/argos/uploads")
@@ -211,6 +226,9 @@ class DashboardServer:
 
     def stop(self) -> None:
         """HTTPサーバーを停止する。"""
+        close_console = getattr(self._terminal_handler, "close_console", None)
+        if callable(close_console):
+            close_console()
         if self._server is None:
             return
         self._server.shutdown()
@@ -308,6 +326,15 @@ def _create_handler(
                 self._send_json(list_audio_devices())
             elif path == "/api/stream":
                 self._send_sse()
+            elif path == "/api/terminal/console":
+                query = parse_qs(urlparse(self.path).query)
+                try:
+                    offset = int(query.get("offset", ["0"])[0])
+                except ValueError:
+                    offset = -1
+                self._handle_console({
+                    "action": "read", "connection_id": query.get("connection_id", [""])[0], "offset": offset,
+                })
             elif path == "/api/terminal/slots":
                 if not self._require_token():
                     return
@@ -349,6 +376,16 @@ def _create_handler(
         def do_POST(self) -> None:
             """Bearer認証付き更新APIを処理する。"""
             path = urlparse(self.path).path
+            if path == "/api/terminal/console":
+                if not self._require_token():
+                    return
+                try:
+                    payload = self._read_json(MAX_BODY_BYTES)
+                except ValueError as error:
+                    self._send_json({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+                    return
+                self._handle_console(payload)
+                return
             if path in {"/api/config/test-microphone", "/api/config/test-speaker"}:
                 if not self._require_token():
                     return
@@ -475,6 +512,38 @@ def _create_handler(
                     "backup": backup_path.name,
                 }
             )
+
+        def _send_console_reply(self, payload: object, status: HTTPStatus = HTTPStatus.OK) -> None:
+            """タブ移動で長時間ポーリングが中断されても異常ログにしない。"""
+            try:
+                self._send_json(payload, status)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _handle_console(self, payload: object) -> None:
+            """閲覧権限だけでシェル操作を許可せず、同一オリジンを確認する。"""
+            if not self._require_token():
+                return
+            origin = self.headers.get("Origin", "")
+            if origin and urlparse(origin).netloc != self.headers.get("Host", ""):
+                self._send_console_reply({"error": "端末操作の接続元が不正です"}, HTTPStatus.FORBIDDEN)
+                return
+            if terminal_handler is None or not hasattr(terminal_handler, "console_request"):
+                self._send_console_reply({"error": "端末表示は無効です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return
+            try:
+                command = parse_console_command(payload)
+                response = terminal_handler.console_request(command)
+            except KeyError:
+                self._send_console_reply({"error": "端末接続がありません"}, HTTPStatus.NOT_FOUND)
+            except ValueError as error:
+                self._send_console_reply({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+            except RuntimeError as error:
+                self._send_console_reply({"error": str(error)}, HTTPStatus.CONFLICT)
+            except (OSError, RequestException):
+                self._send_console_reply({"error": "端末への接続が切れました"}, HTTPStatus.BAD_GATEWAY)
+            else:
+                self._send_console_reply(asdict(response))
 
         def log_message(self, format: str, *args: object) -> None:
             """標準HTTPログをアプリログへ流す。"""
@@ -709,6 +778,37 @@ def _create_handler(
             finally:
                 state.unsubscribe(subscriber)
 
+        def _terminal_events(self, handler: TerminalTurnHandler, source: tuple[bytes | None, str | None], want_audio: bool, target: tuple[str, str]) -> Iterator[dict[str, object]]:
+            """端末へ送信済みの入力はエージェントへ二度送らない。"""
+            wav_bytes, text_input = source
+            slot_name, slot_provider = target
+            mode = parse_qs(urlparse(self.path).query).get("input_mode", ["prompt"])[0]
+            if mode == "observe":
+                return handler.observe_turn(text_input or "", want_audio, slot_name, slot_provider)
+            if slot_name and slot_provider:
+                return handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio, slot_name=slot_name, slot_provider=slot_provider)
+            return handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio)
+
+        def _validate_terminal_input(self, handler: TerminalTurnHandler, text_input: str | None) -> bool:
+            """未対応の観測要求を通常入力へ変換せず拒否する。"""
+            input_mode = parse_qs(urlparse(self.path).query).get("input_mode", ["prompt"])[0]
+            if input_mode not in {"prompt", "observe"} or (input_mode == "observe" and text_input is None):
+                self._send_json({"error": "入力方式が不正です"}, HTTPStatus.BAD_REQUEST)
+                return False
+            if input_mode == "observe" and not callable(getattr(handler, "observe_turn", None)):
+                self._send_json({"error": "接続先は端末回答の取得に未対応です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return False
+            return True
+
+        def _start_terminal_response(self) -> None:
+            """有限の会話ストリームだけはEOFで完了を通知する。"""
+            self.close_connection = True
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Connection", "close")
+            self.end_headers()
+
         def _send_terminal_turn(
             self,
             handler: Any,
@@ -759,31 +859,14 @@ def _create_handler(
             else:
                 self._send_json({"error": "対応していない入力形式です"}, HTTPStatus.UNSUPPORTED_MEDIA_TYPE)
                 return
+            if not self._validate_terminal_input(handler, text_input):
+                return
             # X-Argos-Audio: opus のとき、応答音声チャンクをOpusへ変換して返す。
             wants_opus = want_audio and self.headers.get("X-Argos-Audio", "").strip().lower() == "opus"
             # 1ターン分の有限ストリームなので、返し終えたら接続を閉じてEOFを通知する。
-            self.close_connection = True
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "close")
-            self.end_headers()
+            self._start_terminal_response()
             try:
-                turn_events = (
-                    handler.process_turn(
-                        wav_bytes,
-                        text=text_input,
-                        want_audio=want_audio,
-                        slot_name=slot_name,
-                        slot_provider=slot_provider,
-                    )
-                    if slot_name and slot_provider
-                    else handler.process_turn(
-                        wav_bytes,
-                        text=text_input,
-                        want_audio=want_audio,
-                    )
-                )
+                turn_events = self._terminal_events(handler, (wav_bytes, text_input), want_audio, (slot_name, slot_provider))
                 for event in turn_events:
                     if wants_opus and event.get("event") == "audio" and event.get("format") == "wav":
                         event = _encode_audio_event_to_opus(event)

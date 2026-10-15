@@ -1276,6 +1276,7 @@
 
   <script src="/static/browser_audio.js"></script>
   <script src="/static/message_text.js"></script>
+  <script src="/static/tmux_embed.js"></script>
   <script src="/static/sp_notice_popup.js"></script>
   <script>
     const messages = document.getElementById("messages");
@@ -1345,6 +1346,11 @@
     const spNotificationSeenAtStorageKey = "argos-sp-notification-seen-at";
     const fontSizeOptions = new Set(["small", "medium", "large"]);
     let previousMessages = "";
+    const consoleView = new ArgosTmuxEmbed.ConsoleView(messages, dashboardToken, {
+      onVoice: () => voiceInputButton.click(),
+      onSubmitted: () => sendVoiceTurn(new Blob(["端末から入力"], {type:"text/plain"}), currentAgentSlotKey, voiceOperationSequence, voicePlayer.generation, "observe"),
+      onChange: () => { previousMessages = ""; },
+    });
     let previousNotifications = "";
     let followLatestMessage = true;
     let currentAgentSlotKey = "";
@@ -1626,6 +1632,7 @@
     }
     centerAlert.addEventListener("click", closeCenterAlert);
     function render(state) {
+      if (state.agent?.name && state.agent?.provider) consoleView.setSlot(state.agent);
       const activeAgentSlot = (state.slots || []).find(slot => slot.active);
       currentAgentSlotKey = activeAgentSlot
         ? `${activeAgentSlot.provider || ""}\u0000${activeAgentSlot.name || ""}` : "";
@@ -1692,7 +1699,7 @@
 
       const visibleMessages = state.messages;
       const nextMessages = JSON.stringify(visibleMessages);
-      if (nextMessages !== previousMessages) {
+      if (!consoleView.isEnabled && nextMessages !== previousMessages) {
         const shouldFollow = followLatestMessage || isNearLatestMessage();
         messages.innerHTML = visibleMessages.length ? visibleMessages.map(item => `
         <article class="message" data-role="${escapeHtml(item.role)}">
@@ -2085,14 +2092,15 @@
       }
       await sendVoiceTurn(audio, slotKey, operation, playbackGeneration);
     }
-    async function sendVoiceTurn(audio, slotKey, operation, playbackGeneration) {
+    async function sendVoiceTurn(audio, slotKey, operation, playbackGeneration, inputMode = "prompt") {
       beginSlotTurn(slotKey);
       setVoiceState("processing");
       setTextComposerError("");
       try {
         const headers = {"Content-Type": audio.type, "Accept": "text/event-stream, audio/wav"};
         if (dashboardToken) headers.Authorization = `Bearer ${dashboardToken}`;
-        const response = await fetch("/api/terminal/turn", {method: "POST", headers, body: audio});
+        const query = inputMode === "observe" ? "?input_mode=observe" : "";
+        const response = await fetch(`/api/terminal/turn${query}`, {method: "POST", headers, body: audio});
         if (!response.ok) throw new Error(await describeTurnResponseError(response));
         if (!response.body) throw new Error("応答ストリームを取得できませんでした");
         await consumeVoiceTurnEvents(response.body, playbackGeneration);

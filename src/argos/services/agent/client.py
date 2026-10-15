@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from argos.agent_slot_options import is_tmux_provider
+
 import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
@@ -300,19 +302,28 @@ def create_provider_client(settings: Settings, slot: AgentSlot) -> AgentClient:
     """1スロット分のproviderクライアントを作成する。"""
     provider = slot.provider.strip().lower()
     slot_settings = replace(settings, agent_provider=provider, agent_slots=(slot,))
-    if provider == "codex":
-        return CodexCliClient(slot_settings)
-    if provider == "antigravity":
-        return AntigravityCliClient(slot_settings)
-    if provider == "hermes":
-        return HermesCliClient(slot_settings)
-    if provider in {"claude", "claudecode"}:
-        return ClaudeCliClient(slot_settings)
-    if provider == "remote":
+    client: AgentClient
+    if slot.execution_mode == "tmux":
+        from argos.services.agent.claude_tmux_client import ClaudeTmuxClient
+
+        if not is_tmux_provider(provider) or slot.slot_type != "local":
+            raise ValueError("tmux試験はローカルのClaude・Codex・antigravityのみ対応しています")
+        client = ClaudeTmuxClient(settings, slot)
+    elif provider == "codex":
+        client = CodexCliClient(slot_settings)
+    elif provider == "antigravity":
+        client = AntigravityCliClient(slot_settings)
+    elif provider == "hermes":
+        client = HermesCliClient(slot_settings)
+    elif provider in {"claude", "claudecode"}:
+        client = ClaudeCliClient(slot_settings)
+    elif provider == "remote":
         from argos.services.agent.remote_argos import RemoteArgosClient
 
-        return RemoteArgosClient(settings, slot)
-    raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")
+        client = RemoteArgosClient(settings, slot)
+    else:
+        raise ValueError(f"未対応のエージェントプロバイダーです: {slot.provider}")
+    return client
 
 
 def build_agent_prompt(user_prompt: str, settings: Settings) -> str:

@@ -1,0 +1,6 @@
+{
+  "argos-tmux": {
+    "SessionStart": [{"type":"command","command":"if [ -n \"${ARGOS_TMUX_HOOK_DIRECTORY:-}\" ]; then \"$ARGOS_TMUX_PYTHON\" -m argos.tools.tmux_agent_hook \"$ARGOS_TMUX_HOOK_DIRECTORY\" \"$ARGOS_TMUX_GENERATION\" antigravity SessionStart; fi"}],
+    "Stop": [{"type":"command","command":"if [ -n \"${ARGOS_TMUX_HOOK_DIRECTORY:-}\" ]; then \"$ARGOS_TMUX_PYTHON\" -m argos.tools.tmux_agent_hook \"$ARGOS_TMUX_HOOK_DIRECTORY\" \"$ARGOS_TMUX_GENERATION\" antigravity Stop; fi"}]
+  }
+}

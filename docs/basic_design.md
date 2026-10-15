@@ -629,3 +629,7 @@ transcript にUTF-8として読めないバイトが混ざっている場合で�
 Hermes provider は `hermes chat -q <prompt> -Q --source <source>` を使う。`-Q` によりプログラム向けの出力にし、`ARGOS_HERMES_PASS_SESSION_ID=true` の場合は `--pass-session-id` を渡す。`ARGOS_HERMES_MODEL`、`ARGOS_HERMES_PROVIDER`、`ARGOS_HERMES_TOOLSETS`、`ARGOS_HERMES_SKILLS` はそれぞれ Hermes CLI の `--model`、`--provider`、`--toolsets`、`--skills` に対応する。追加オプションは `ARGOS_HERMES_EXTRA_ARGS` で指定する。
 
 Hermes の session ID は `ARGOS_AGENT_STATE_PATH` にスロットごとに保存する。`ARGOS_HERMES_RESUME_SAVED=true` の場合、保存済みsession IDを起動時に復元し、次回実行では `--resume <session_id>` を渡す。`/reset` では保存済みsession IDを削除し、次回から新規会話として扱う。Hermes側の会話履歴本体は Hermes の管理領域に保存され、ARGOS はsession IDだけを保持する。
+
+## 常駐tmuxスロット（試作）
+
+従来のCLI方式を残し、ローカルのClaude・Codex・antigravityスロットで `execution_mode: tmux` を選択できる試作を追加した。省略時は従来動作。通常/SP/Gridの会話領域に実ターミナルを表示する。詳細な追加設計は[基本設計書](basic-design.md)、実行方法と制限は[3CLIの試験手順](tmux-agents-trial.md)を参照。3CLIの実ブラウザ結合試験は成功しているが、Codex・agyの物理音声の実機確認は未実施。既存スロットを自動で置き換えない。

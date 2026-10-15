@@ -47,6 +47,7 @@ from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.agent.runner_client import RunnerSlotBusyError
+from argos.services.agent.console_protocol import ConsoleCommand, ConsoleResponse, ObservedTerminalInput, split_terminal_input
 from argos.services.agent_usage import AgentUsageProvider
 from argos.services.android_notice.rules import parse_apps, parse_mute_rules
 from argos.services.android_notice.summarizer import OllamaSummarizer
@@ -979,6 +980,7 @@ class ArgosApp:
                 "name": slot.name,
                 "provider": slot.provider,
                 "type": slot.slot_type,
+                "execution_mode": slot.execution_mode,
                 "model": resolve_agent_slot_model(self._settings, slot),
                 "usage_provider": slot.remote_provider.strip().lower() if slot.slot_type == "remote" and slot.remote_provider.strip() else slot.provider.strip().lower(),
                 "active": slot.name == current_name and slot.provider == current_provider,
@@ -1141,7 +1143,7 @@ class ArgosApp:
         self,
         wav_bytes: bytes | None = None,
         *,
-        text: str | None = None,
+        text: str | ObservedTerminalInput | None = None,
         want_audio: bool = True,
         slot_name: str = "",
         slot_provider: str = "",
@@ -1154,6 +1156,7 @@ class ArgosApp:
         ときは応答テキストの差分だけを返す（母艦のスピーカーでは再生しない）。
         発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
         """
+        text, agent_stream = split_terminal_input(text)
         has_explicit_slot = bool(slot_name or slot_provider)
         if has_explicit_slot and (not slot_name or not slot_provider):
             yield {"event": "error", "message": "スロット名とproviderが必要です"}
@@ -1230,12 +1233,15 @@ class ArgosApp:
             try:
                 target_name = slot_name if has_explicit_slot else ""
                 target_provider = slot_provider if has_explicit_slot else ""
-                deltas, stream_state = yield from self._terminal_agent_deltas_with_progress(
-                    transcript,
-                    slot_key,
-                    (target_name, target_provider),
-                    want_audio,
-                )
+                if agent_stream is None:
+                    deltas, stream_state = yield from self._terminal_agent_deltas_with_progress(
+                        transcript,
+                        slot_key,
+                        (target_name, target_provider),
+                        want_audio,
+                    )
+                else:
+                    deltas, stream_state = iter(agent_stream), None
                 if want_audio:
                     # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
                     for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
@@ -1761,10 +1767,26 @@ class _TerminalGateway:
     def __init__(self, app: "ArgosApp") -> None:
         """委譲先のARGOS本体を保持する。"""
         self._app = app
+        from argos.services.agent.console_registry import ConsoleRegistry
+
+        self._console = ConsoleRegistry(app._settings)
 
     def list_slots(self) -> dict[str, object]:
         """エージェントスロット一覧と現在スロットを返す。"""
-        return self._app._terminal_list_slots()
+        payload = self._app._terminal_list_slots()
+        for slot in cast(list[dict[str, object]], payload["slots"]):
+            slot["execution_mode"] = self._console.execution_mode(str(slot["name"]), str(slot["provider"]))
+        return payload
+
+    def console_request(self, command: ConsoleCommand) -> ConsoleResponse:
+        """型付きの端末搬送操作を登録簿へ委譲する。"""
+        if self._app._auth_coord.is_locked():
+            raise RuntimeError("本人確認が必要です。ARGOSの音声入力で本人確認してください")
+        return self._console.execute(command)
+
+    def close_console(self) -> None:
+        """サーバー終了時にattachクライアントだけを回収する。"""
+        self._console.close()
 
     def next_slot(self) -> dict[str, object]:
         """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
@@ -1803,6 +1825,13 @@ class _TerminalGateway:
             slot_name=slot_name,
             slot_provider=slot_provider,
         )
+
+    def observe_turn(self, text: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """端末に送信済みの回答を既存の履歴・読み上げ経路へ接続する。"""
+        name = slot_name or self._app._agent.current_name
+        provider = slot_provider or self._app._agent.current_provider
+        source = ObservedTerminalInput(text, self._console.observe(name, provider))
+        return self._app._terminal_process_turn(text=source, want_audio=want_audio, slot_name=name, slot_provider=provider)
 
 
 def _build_android_notice_watcher(

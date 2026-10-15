@@ -63,9 +63,20 @@ class RemoteArgosClient:
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """リモートArgosのSSEからテキスト差分を返す。"""
+        yield from self._turn_stream(prompt, False)
+
+    def observe_stream(self) -> Iterable[str]:
+        """新しい発言を送らず、接続先の端末入力の回答を中継する。"""
+        yield from self._turn_stream("端末から入力", True)
+
+    def _turn_stream(self, prompt: str, is_observing: bool) -> Iterable[str]:
+        """端末入力の回収でも既存の認証・SSE処理を共用する。"""
         self._select_remote_slot()
+        query = ""
+        if is_observing:
+            query = "?" + urlencode({"name": self._slot.remote_name, "provider": self._slot.remote_provider, "input_mode": "observe"})
         response = requests.post(
-            f"{self._slot.remote_url}/api/terminal/turn",
+            f"{self._slot.remote_url}/api/terminal/turn{query}",
             headers=self._headers(text_content=True),
             data=prompt.encode("utf-8"),
             stream=True,

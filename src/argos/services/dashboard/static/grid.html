@@ -79,6 +79,7 @@
   </dialog>
   <script src="/static/browser_audio.js"></script>
   <script src="/static/message_text.js"></script>
+  <script src="/static/tmux_embed.js"></script>
   <script>
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
     const grid = document.getElementById("grid");
@@ -168,6 +169,14 @@
         if (!event.target.closest("textarea, button, input, select, a")) toggleMaximize(tile);
       });
       slotElements.set(key, tile);
+      if (slot.execution_mode === "tmux") {
+        tile.consoleView = new ArgosTmuxEmbed.ConsoleView(tile.querySelector(".messages"), dashboardToken, {
+          onSubmitted: () => sendTurn(slot, new Blob(["端末から入力"], {type:"text/plain"}), audioPlayer.generation, "observe"),
+          onFocus: () => { clearAttention(tile); playPendingAudio(key); },
+          onVoice: () => toggleRecording(slot, false),
+        });
+        tile.consoleView.setSlot(slot);
+      }
       return tile;
     }
 
@@ -207,6 +216,7 @@
       const expectedKeys = new Set(localSlots.map(slotKey));
       for (const [key, tile] of slotElements) {
         if (!expectedKeys.has(key)) {
+          tile.consoleView?.dispose();
           tile.remove();
           slotElements.delete(key);
         }
@@ -219,6 +229,7 @@
     }
 
     function renderMessages(slot, messages) {
+      if (slot.execution_mode === "tmux") return;
       const container = slotElements.get(slotKey(slot))?.querySelector(".messages");
       if (!container) return;
       const signature = JSON.stringify(messages);
@@ -296,13 +307,14 @@
       else usageDialog.setAttribute("open", "");
     }
 
-    async function sendTurn(slot, body, playbackGeneration = audioPlayer.generation) {
+    async function sendTurn(slot, body, playbackGeneration = audioPlayer.generation, inputMode = "prompt") {
       const tile = slotElements.get(slotKey(slot));
       const key = slotKey(slot);
       clearAttention(tile);
       tile.dataset.busy = "true";
       tile.querySelector(".tile-status").textContent = "実行中";
       const query = new URLSearchParams({name: slot.name, provider: slot.provider});
+      if (inputMode === "observe") query.set("input_mode", inputMode);
       let didComplete = false;
       try {
         const response = await fetch(`/api/terminal/turn?${query}`, {

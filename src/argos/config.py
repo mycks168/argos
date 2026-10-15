@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from argos.yaml_config import apply_yaml_environment
+from argos.agent_slot_options import slot_execution_mode, slot_tmux_timeout
 
 _PROCESS_ENVIRONMENT = set(os.environ)
 apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
@@ -116,6 +117,8 @@ class AgentSlot:
     ptt_cycle: bool = True
     command: str = ""
     extra_args: tuple[str, ...] = ()
+    execution_mode: str = "cli"
+    tmux_timeout_seconds: float = 1800.0
 
 
 @dataclass(frozen=True)
@@ -469,6 +472,8 @@ def _parse_unified_agent_slots(raw: str, default_provider: str) -> tuple[AgentSl
                 ptt_cycle=bool(item.get("ptt_cycle", True)),
                 command=str(item.get("command", "")).strip(),
                 extra_args=_slot_extra_args(item.get("extra_args", []), name),
+                execution_mode=slot_execution_mode(item, name, default_provider),
+                tmux_timeout_seconds=slot_tmux_timeout(item, name),
             )
         )
     return tuple(slots)
