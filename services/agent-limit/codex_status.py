@@ -113,7 +113,7 @@ def _is_status_ready(screen: str) -> bool:
 def run_once() -> StatusDataWithCredits:
     """1回 tmux セッションを立ち上げて /status を取得する。"""
     session = f"codex_status_{os.getpid()}_{int(time.time())}"
-    tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "codex")
+    tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "codex --no-daemon")
     try:
         screen = wait_for(
             session,

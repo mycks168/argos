@@ -28,7 +28,7 @@ uv run ./update_limits.py
 uv run ./codex_status.py
 ```
 
-`codex`を起動して`/status`を実行し、結果を以下の形式のJSONで標準出力に出力します。
+`codex --no-daemon`を起動して`/status`を実行し、結果を以下の形式のJSONで標準出力に出力します。共有デーモンとは接続せず、別バージョンのCodexによる設定確認や共有デーモンの再起動を避けます。
 
 ```json
 {

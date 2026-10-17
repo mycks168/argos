@@ -139,6 +139,7 @@ def test_run_once_uses_weekly_completion_and_cleans_up(
         screens.append("OpenAI Codex")
     screens.extend(["show current session configuration", final_screen])
     cleaned_sessions: list[str] = []
+    tmux_calls: list[tuple[str, ...]] = []
 
     def fake_wait_for(
         session: str, predicate: Callable[[str], bool], timeout: float = 30
@@ -151,11 +152,14 @@ def test_run_once_uses_weekly_completion_and_cleans_up(
         return screen
 
     monkeypatch.setattr(codex_status, "wait_for", fake_wait_for)
-    monkeypatch.setattr(codex_status, "tmux", lambda *_args: None)
+    monkeypatch.setattr(codex_status, "tmux", lambda *args: tmux_calls.append(args))
     monkeypatch.setattr(codex_status, "send_keys", lambda *_keys: None)
     monkeypatch.setattr(codex_status.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(codex_status, "cleanup", cleaned_sessions.append)
     assert codex_status.run_once()["weekly"]["usage_pct"] == 1
+    assert len(tmux_calls) == 1
+    assert tmux_calls[0][:3] == ("new-session", "-d", "-s")
+    assert tmux_calls[0][4:] == ("-x", "220", "-y", "50", "codex --no-daemon")
     assert len(cleaned_sessions) == 1
 
 
