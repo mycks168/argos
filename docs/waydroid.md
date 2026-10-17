@@ -51,6 +51,8 @@ uv run python -m argos.tools.window_layout status
 uv run python -m argos.tools.window_layout boot
 ```
 
+画面配置の単体テストは実機の`config.yaml`を読まないよう、テストごとに空の設定ファイルを使います。`android_view`の既定値は`app`として検証し、`full`の動作は各テストで明示します。これにより、実機の表示方式を変えてもテスト結果は変わりません。
+
 #### 表示方式とAndroidの大きさ
 
 表示方式は2つあり、`config.yaml` の `window_layout.style` で最初に使うものを決めます（実行のたびに `pane` や `split` で切り替えられます）。

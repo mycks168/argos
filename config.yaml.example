@@ -51,6 +51,7 @@ notice:
     summary_timeout_seconds: 15
 ptt:
   gpio: ''
+  bluetooth_mac: ''  # Bluetoothメディアボタンのアドレス。空なら無効
 network:
   wifi_status_refresh_seconds: 10
 runtime:

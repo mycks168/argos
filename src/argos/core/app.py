@@ -42,6 +42,7 @@ from argos.hardware.audio import (
 )
 from argos.hardware.audio_priority import PriorityStreamWatcher
 from argos.hardware.button import ButtonPtt
+from argos.hardware.bluetooth_media import BluetoothMediaInput
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
@@ -58,6 +59,8 @@ from argos.services.dashboard.server import DashboardServer, DashboardTlsConfig
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
+from argos.services.bluetooth_chime import BluetoothConnectionChime, build_bluetooth_chime
+from argos.services.bluetooth_devices import read_connected_bluetooth_types
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
@@ -295,6 +298,13 @@ class ArgosApp:
             on_cancel=self._on_cancel,
             should_record_short_press=self._is_auth_locked,
         )
+        self._bluetooth_button = ButtonPtt(
+            on_press=self._on_ptt_press,
+            on_release=self._on_ptt_release,
+            on_double_click=self._on_double_click,
+            on_cancel=self._on_cancel,
+            should_record_short_press=self._is_auth_locked,
+        )
         self._shutdown = threading.Event()
         self._restart_requested = False
         # 再起動を求められてから止まるまでの秒数。ダッシュボードへ応答を返す時間を残す。
@@ -355,11 +365,13 @@ class ArgosApp:
         self._agent_delivery_thread: threading.Thread | None = None
         self._agent_usage_monitor: PeriodicMonitor | None = None
         self._wifi_status_monitor: PeriodicMonitor | None = None
+        self._bluetooth_status_monitor: PeriodicMonitor | None = None
         self._worker: threading.Thread | None = None
         self._wakeword_listener: WakeWordListener | None = None
         self._wakeword_recording = threading.Event()
         self._wakeword_ptt_hold = threading.Event()
         self._gpio: GpioPttInput | None = None
+        self._bluetooth_media: BluetoothMediaInput | None = None
         self._wakeword_pattern = build_wakeword_pattern(settings.wakeword_aliases)
         self._dashboard_state.set_audio_muted(initial_muted)
 
@@ -435,12 +447,25 @@ class ArgosApp:
             self._gpio = GpioPttInput(self._settings.ptt_gpio, self._button.handle_press, self._button.handle_release)
         elif not self._settings.dry_run:
             log.info("ARGOS_PTT_GPIO が未設定のためGPIO PTT入力を無効化します")
+        if not self._settings.dry_run and self._settings.ptt_bluetooth_mac:
+            self._bluetooth_chime = BluetoothConnectionChime(self._play_bluetooth_chime, self._shutdown)
+            self._bluetooth_media = BluetoothMediaInput(
+                self._settings.ptt_bluetooth_mac,
+                self._bluetooth_button.handle_press,
+                self._bluetooth_button.handle_release,
+                self._on_double_click,
+                self._on_previous_slot,
+                self._bluetooth_button.cancel,
+                self._shutdown,
+                self._bluetooth_chime.update,
+            )
         self._start_wakeword_listener()
         self._auth_coord.announce_required()
         self._auth_coord.start_status_monitor()
         self._start_agent_delivery_monitor()
         self._start_agent_usage_monitor()
         self._start_wifi_status_monitor()
+        self._start_bluetooth_status_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -699,6 +724,31 @@ class ArgosApp:
         except Exception:
             log.exception("Wi-Fi状態の取得に失敗しました")
 
+    def _start_bluetooth_status_monitor(self) -> None:
+        """接続中Bluetooth機器の種類を定期的に更新する。"""
+        if self._dashboard_server is None:
+            return
+        self._bluetooth_status_monitor = PeriodicMonitor(
+            "bluetooth-status", 5.0, self._refresh_bluetooth_status, self._shutdown
+        )
+        self._bluetooth_status_monitor.start()
+
+    def _refresh_bluetooth_status(self) -> None:
+        """OSが認識するBluetooth接続種別をダッシュボードへ反映する。"""
+        try:
+            self._dashboard_state.set_bluetooth_devices(read_connected_bluetooth_types())
+        except Exception:
+            log.exception("Bluetooth接続状態の取得に失敗しました")
+
+    def _play_bluetooth_chime(self, connected: bool) -> None:
+        """発話ミュート・録音・他アプリ優先中は避けて短い接続音を鳴らす。"""
+        if self._settings.dry_run or self._speech.is_muted() or self._recorder.is_recording or self._audio.is_held:
+            return
+        try:
+            self._audio.play_wav(build_bluetooth_chime(connected, self._settings.voicevox_sample_rate))
+        except Exception:
+            log.exception("Bluetoothボタンの%s音を再生できませんでした", "接続" if connected else "切断")
+
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
         if not self._is_microphone_enabled():
@@ -752,6 +802,27 @@ class ArgosApp:
         self._sync_agent_display()
         self._set_ready_or_locked()
         log.info("エージェントスロット切替: %s", name)
+        self._speech.speak_status(f"{name}に切り替えました")
+        self._start_pending_slot_response()
+
+    def _on_previous_slot(self) -> None:
+        """PTT巡回対象のうち前の会話スロットへ切り替える。"""
+        candidates = [slot for slot in self._settings.agent_slots if slot.ptt_cycle]
+        if not candidates:
+            candidates = list(self._settings.agent_slots)
+        if not candidates:
+            return
+        current = (self._agent.current_name, self._agent.current_provider)
+        current_index = next(
+            (index for index, slot in enumerate(candidates) if (slot.name, slot.provider) == current),
+            0,
+        )
+        previous = candidates[(current_index - 1) % len(candidates)]
+        self._audio.cancel()
+        name = self._agent.select_slot(previous.name, previous.provider)
+        self._sync_agent_display()
+        self._set_ready_or_locked()
+        log.info("エージェントスロット逆順切替: %s", name)
         self._speech.speak_status(f"{name}に切り替えました")
         self._start_pending_slot_response()
 
@@ -1453,6 +1524,7 @@ class ArgosApp:
             if wav_path:
                 self._remove_recording_file(wav_path)
             self._button.mark_idle()
+            self._bluetooth_button.mark_idle()
             self._status.finish(token)
 
     def _remove_recording_file(self, wav_path: str) -> None:

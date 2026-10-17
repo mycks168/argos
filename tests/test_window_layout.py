@@ -13,6 +13,13 @@ from argos.tools import window_layout as layout
 PACKAGE = "com.google.android.apps.maps"
 
 
+@pytest.fixture(autouse=True)
+def isolate_window_layout_settings(tmp_path, monkeypatch):
+    """実機のconfig.yamlと環境変数に依存せず、各テストを既定設定から始める。"""
+    monkeypatch.setenv("ARGOS_CONFIG_FILE", str(tmp_path / "config.yaml"))
+    monkeypatch.delenv(layout.VIEW_SETTING, raising=False)
+
+
 @pytest.mark.parametrize("side", ["left", "right"])
 @pytest.mark.parametrize("ratio", [20, 40, 50, 80])
 def test_geometry(side, ratio):

@@ -55,6 +55,7 @@ class DashboardState:
                 "updated_at": _now_iso(),
             }
         }
+        self._bluetooth_devices: list[str] = []
         self._agent_usage: dict[str, dict[str, Any]] = {}
         self._center_alert = {"active": False, "updated_at": _now_iso()}
         self._overlay = {"active": False, "updated_at": _now_iso()}
@@ -79,6 +80,7 @@ class DashboardState:
                 "audio": deepcopy(self._audio),
                 "microphone": deepcopy(self._microphone),
                 "network": deepcopy(self._network),
+                "bluetooth_devices": self._bluetooth_devices.copy(),
                 "center_alert": deepcopy(self._center_alert),
                 "overlay": deepcopy(self._overlay),
                 "display_activity": deepcopy(self._display_activity),
@@ -195,6 +197,16 @@ class DashboardState:
                     "updated_at": _now_iso(),
                 },
             }
+            self._publish_locked()
+
+    def set_bluetooth_devices(self, devices: list[str]) -> None:
+        """接続中のBluetooth機器種別が変わったときだけ画面へ通知する。"""
+        allowed = {"keyboard", "mouse", "headphones", "speaker", "bluetooth"}
+        normalized = list(dict.fromkeys(kind for kind in devices if kind in allowed))
+        with self._lock:
+            if normalized == self._bluetooth_devices:
+                return
+            self._bluetooth_devices = normalized
             self._publish_locked()
 
     def set_agent_usage(self, provider: str, usage: dict[str, Any]) -> None:

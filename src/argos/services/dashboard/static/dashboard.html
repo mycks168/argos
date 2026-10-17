@@ -296,6 +296,11 @@
     .eyebrow { margin: 0 0 8px; color: #8ca0ad; font-size: 12px; font-weight: 700; }
     .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
     .brand { margin: 0; font-size: 34px; line-height: 1; }
+    .brand-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .bluetooth-devices { display: inline-flex; align-items: center; gap: 4px; flex: none; color: #69b7e4; font-size: 19px; line-height: 1; }
+    .bluetooth-devices[hidden] { display: none; }
+    .bluetooth-devices .device-icon { display: inline-block; min-width: 20px; text-align: center; }
+    .sp-toolbar .bluetooth-devices { font-size: 16px; }
     .brand-controls {
       display: grid;
       grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -974,13 +979,17 @@
     }
     .sp-toolbar-title {
       overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
       color: #edf3f7;
       font-size: 16px;
       font-weight: 800;
       text-align: center;
-      text-overflow: ellipsis;
       white-space: nowrap;
     }
+    #sp-toolbar-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sp-toolbar-button {
       position: relative;
       width: 44px;
@@ -1180,7 +1189,7 @@
 
   <header class="sp-toolbar" aria-label="SPダッシュボード操作">
     <button id="sp-status-button" class="sp-toolbar-button" type="button" aria-label="左枠を固定/解除" aria-expanded="false" aria-pressed="false">&#9776;</button>
-    <div id="sp-toolbar-title" class="sp-toolbar-title">ARGOS</div>
+    <div class="sp-toolbar-title"><span id="sp-toolbar-title">ARGOS</span><span id="sp-bluetooth-devices" class="bluetooth-devices" aria-label="Bluetooth接続機器" hidden></span></div>
     <button id="sp-notifications-button" class="sp-toolbar-button" type="button" aria-label="通知を開く" aria-expanded="false">
       &#128276;<span id="sp-notification-count" class="sp-notification-count" hidden>0</span>
     </button>
@@ -1195,7 +1204,7 @@
       </div>
       <p class="eyebrow">VOICE AGENT</p>
       <div class="brand-row">
-        <h1 class="brand">ARGOS</h1>
+        <div class="brand-identity"><h1 class="brand">ARGOS</h1><span id="bluetooth-devices" class="bluetooth-devices" aria-label="Bluetooth接続機器" hidden></span></div>
         <div id="network-status" class="network-status" data-connected="false" data-level="0" title="Wi-Fi未接続" aria-hidden="true">
           <span class="wifi-icon" aria-hidden="true"><span></span><span></span><span></span><span></span></span>
           <span id="network-label" class="network-label">Wi-Fi未接続</span>
@@ -1312,6 +1321,8 @@
     const agentUsage = document.getElementById("agent-usage");
     const networkStatus = document.getElementById("network-status");
     const networkLabel = document.getElementById("network-label");
+    const bluetoothDevices = document.getElementById("bluetooth-devices");
+    const spBluetoothDevices = document.getElementById("sp-bluetooth-devices");
     const agentSelector = document.getElementById("agent-selector");
     const slotMenu = document.getElementById("slot-menu");
     const muteButton = document.getElementById("mute-button");
@@ -1667,6 +1678,7 @@
       agentProvider.textContent = model ? `${provider} · ${model}` : provider;
       spToolbarTitle.textContent = state.agent?.name ? `ARGOS · ${state.agent.name}` : "ARGOS";
       renderNetworkStatus(state.network?.wifi);
+      renderBluetoothDevices(state.bluetooth_devices);
       renderAgentUsage(state.agent_usage?.current);
       availableSlots = state.slots || [];
       slotMenu.innerHTML = availableSlots.map((slot, index) => `
@@ -1771,6 +1783,22 @@
       networkStatus.title = label;
       networkStatus.setAttribute("aria-hidden", connected ? "false" : "true");
       networkLabel.textContent = label;
+    }
+    function renderBluetoothDevices(devices) {
+      const icons = {keyboard: ["⌨", "キーボード"], mouse: ["🖱", "マウス"], headphones: ["🎧", "ヘッドホン"], speaker: ["🔊", "スピーカー"], bluetooth: ["ᛒ", "Bluetooth機器"]};
+      const kinds = Array.isArray(devices) ? [...new Set(devices)].filter(kind => Object.hasOwn(icons, kind)) : [];
+      for (const container of [bluetoothDevices, spBluetoothDevices]) {
+        container.replaceChildren();
+        container.hidden = kinds.length === 0;
+        container.title = kinds.map(kind => icons[kind][1]).join("・");
+        for (const kind of kinds) {
+          const icon = document.createElement("span");
+          icon.className = "device-icon";
+          icon.textContent = icons[kind][0];
+          icon.setAttribute("aria-label", icons[kind][1]);
+          container.appendChild(icon);
+        }
+      }
     }
     function renderAgentUsage(usage) {
       if (!usage || !usage.provider) {

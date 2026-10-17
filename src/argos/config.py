@@ -178,6 +178,7 @@ class Settings:
     antigravity_command: str
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
+    ptt_bluetooth_mac: str = ""
     claude_model: str = ""
     # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
     dashboard_view_key: str = ""
@@ -690,6 +691,7 @@ def load_settings() -> Settings:
         remote_location_timeout_seconds=float(os.environ.get("ARGOS_REMOTE_LOCATION_TIMEOUT_SECONDS", "2")),
         remote_location_token=os.environ.get("ARGOS_REMOTE_LOCATION_TOKEN", ""),
         ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
+        ptt_bluetooth_mac=os.environ.get("ARGOS_PTT_BLUETOOTH_MAC", "").strip(),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),

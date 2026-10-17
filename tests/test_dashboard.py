@@ -293,6 +293,9 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "state.agent?.provider" in html
         assert "state.agent?.model" in html
         assert 'class="brand-row"' in html
+        assert 'id="bluetooth-devices"' in html
+        assert 'id="sp-bluetooth-devices"' in html
+        assert "renderBluetoothDevices(state.bluetooth_devices)" in html
         assert 'class="brand-controls"' in html
         assert "grid-template-columns: repeat(3, minmax(0, 1fr))" in html
         assert "@media (min-width: 761px) and (max-width: 900px)" in html
