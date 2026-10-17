@@ -43,6 +43,7 @@ class BluetoothMediaInput:
         on_previous: Callable[[], None],
         on_cancel: Callable[[], None],
         shutdown: threading.Event,
+        on_connection_change: Callable[[bool], None] | None = None,
     ) -> None:
         """監視する機器と各操作のコールバックを受け取る。"""
         self._mac = mac
@@ -52,6 +53,7 @@ class BluetoothMediaInput:
         self._on_previous = on_previous
         self._on_cancel = on_cancel
         self._shutdown = shutdown
+        self._on_connection_change = on_connection_change or (lambda _connected: None)
         self._pressed = False
         self._thread = threading.Thread(target=self._run, daemon=True, name="bluetooth-media-input")
         self._thread.start()
@@ -74,6 +76,7 @@ class BluetoothMediaInput:
         """機器が切断されるか終了するまで入力イベントを読む。"""
         fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK)
         try:
+            self._on_connection_change(True)
             pending = b""
             while not self._shutdown.is_set():
                 readable, _, _ = select.select([fd], [], [], 1)
@@ -90,6 +93,7 @@ class BluetoothMediaInput:
                         self._handle_key(code, value)
         finally:
             os.close(fd)
+            self._on_connection_change(False)
             if self._pressed:
                 self._pressed = False
                 self._on_cancel()

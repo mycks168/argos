@@ -17,6 +17,7 @@ def _input():
     device._on_cancel = lambda: events.append("cancel")
     device._shutdown = threading.Event()
     device._mac = "DC:2C:26:08:75:08"
+    device._on_connection_change = lambda _connected: None
     return device, events
 
 
@@ -67,6 +68,19 @@ def test_read_device_cancels_recording_on_disconnect(tmp_path):
     device._read_device(path)
 
     assert events == ["press", "cancel"]
+
+
+def test_read_device_reports_connection_until_input_disappears(tmp_path):
+    """入力を開けた間だけ接続中として通知する。"""
+    device, _ = _input()
+    states = []
+    device._on_connection_change = states.append
+    path = tmp_path / "events"
+    path.write_bytes(b"")
+
+    device._read_device(path)
+
+    assert states == [True, False]
 
 
 def test_monitor_retries_after_read_error(monkeypatch):
