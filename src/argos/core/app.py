@@ -32,6 +32,7 @@ from argos.core.notice_speaker import BUSY_STATUS_CODES, CONVERSATION_STATUS_COD
 from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
+from argos.services.agent.background_text import background_text
 from argos.hardware.audio import (
     AudioInputStream,
     AudioPlayer,
@@ -507,27 +508,40 @@ class ArgosApp:
         """Agent Runnerの未配信結果を定期的に回収する。"""
         while not self._shutdown.is_set():
             try:
-                list_undelivered = getattr(self._agent, "list_undelivered")
-                mark_delivered = getattr(self._agent, "mark_delivered")
-                for job in list_undelivered():
-                    if not isinstance(job, dict):
-                        continue
-                    job_id = str(job.get("job_id", ""))
-                    slot_name = str(job.get("slot_name", ""))
-                    provider = str(job.get("provider", ""))
-                    status = str(job.get("status", ""))
-                    result = str(job.get("result", "")).strip()
-                    error = str(job.get("error", "")).strip()
-                    response_target = str(job.get("response_target", "local"))
-                    if status == "completed" and result:
-                        self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
-                        mark_delivered(job_id)
-                    elif status == "failed":
-                        self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
-                        mark_delivered(job_id)
+                self._recover_runner_results()
+                if not self._is_speech_busy() and not (self._pending_speech_thread and self._pending_speech_thread.is_alive()):
+                    self._start_pending_slot_response()
             except Exception:
                 log.exception("Agent Runner未配信ジョブの確認に失敗しました")
             self._shutdown.wait(5)
+
+    def _recover_runner_results(self) -> None:
+        """一回分の未配信結果を、履歴保存後だけ既読にする。"""
+        list_undelivered = getattr(self._agent, "list_undelivered", None)
+        mark_delivered = getattr(self._agent, "mark_delivered", None)
+        if not callable(list_undelivered) or not callable(mark_delivered):
+            raise RuntimeError("Agent Runnerの未配信回収機能がありません")
+        for job in list_undelivered():
+            if not isinstance(job, dict):
+                continue
+            job_id = str(job.get("job_id", ""))
+            slot_name = str(job.get("slot_name", ""))
+            provider = str(job.get("provider", ""))
+            status = str(job.get("status", ""))
+            result = str(job.get("result", "")).strip()
+            error = str(job.get("error", "")).strip()
+            response_target = str(job.get("response_target", "local"))
+            generation = str(job.get("session_id", ""))
+            if response_target in {"background", "background_local"} and generation and not self._matches_reply_generation(slot_name, provider, generation):
+                log.info("以前の会話の後続回答を再生対象外にしました: job_id=%s", job_id)
+                mark_delivered(job_id)
+                continue
+            if status == "completed" and result:
+                self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
+                mark_delivered(job_id)
+            elif status == "failed":
+                self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
+                mark_delivered(job_id)
 
     def _deliver_runner_result(
         self,
@@ -538,6 +552,9 @@ class ArgosApp:
         response_target: str = "local",
     ) -> None:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        if response_target in {"background", "background_local"}:
+            self._deliver_background_result(job_id, (slot_name, provider), result, response_target == "background_local")
+            return
         if response_target == "terminal":
             slot_key = _app_slot_key(slot_name, provider)
             was_reconciled = self._dashboard_state.reconcile_runner_result(
@@ -584,6 +601,33 @@ class ArgosApp:
         )
         self._save_conversation_history()
         log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
+
+    def _deliver_background_result(self, job_id: str, slot: tuple[str, str], result: str, is_local: bool) -> None:
+        """後続回答の履歴IDをブラウザとそろえ、再回収でも表示を重ねない。"""
+        name, provider = slot
+        message_id = "subagent-" + job_id
+        has_message = any(item.get("id") == message_id for item in self._dashboard_state.slot_messages(name, provider))
+        if not has_message:
+            self._dashboard_state.merge_slot_messages(name, provider, [{
+                "id":message_id, "role":"assistant", "text":result, "streaming":False, "created_at":"",
+            }])
+            self._dashboard_state.set_slot_unread(name, provider, not self._is_current_slot_key(_app_slot_key(name, provider)))
+            self._dashboard_state.add_notification(f"{name} 後続応答完了", "後から届いた回答を回収しました。", source="ARGOS")
+        if is_local and not has_message:
+            key = _app_slot_key(name, provider)
+            previous = self._pending_slot_speech.get(key, "")
+            self._pending_slot_speech[key] = previous + "\n" + result if previous else result
+        self._conversation_store.save_histories(self._dashboard_state.export_histories())
+
+    def _matches_reply_generation(self, name: str, provider: str, generation: str) -> bool:
+        """会話リセット後に旧世代の回答を新しい会話へ混ぜない。"""
+        from argos.services.agent.claude_tmux_client import ClaudeTmuxClient
+
+        slot = next((slot for slot in self._settings.agent_slots if slot.name == name and slot.provider == provider), None)
+        if slot is None or slot.slot_type == "remote" or slot.execution_mode != "tmux":
+            return False
+        state = ClaudeTmuxClient(self._settings, slot)._session.saved_state()
+        return state is not None and state.session_id == generation
 
     def _deliver_runner_error(
         self,
@@ -1912,8 +1956,7 @@ class _TerminalGateway:
             return
         try:
             with self._console.background(slot_name, slot_provider, event_id) as answer:
-                prefix = "子エージェントの回答です。\n"
-                text = answer if answer.startswith(prefix) else prefix + answer
+                text = background_text(answer)
                 message_id = "subagent-" + event_id
                 existing = self._app._dashboard_state.slot_messages(slot_name, slot_provider)
                 if not any(item.get("id") == message_id for item in existing):

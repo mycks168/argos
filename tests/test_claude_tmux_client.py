@@ -38,23 +38,26 @@ def append_event(path: Path, event: str, text: str = "", session_id: str = "sess
     record_event(path, json.dumps({"hook_event_name": event, "session_id": session_id, "last_assistant_message": text}))
 
 
-def test_background_read_without_start(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+@pytest.mark.parametrize("provider", ["claude", "codex", "antigravity"])
+def test_background_read_without_start(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState], provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """子の照会は新しいCLIを立ち上げず、親の入力ロック中にも配信する。"""
     client, session, state = client_setup
+    client._slot = replace(client._slot, provider=provider)
+    refresh = Mock()
+    monkeypatch.setattr("argos.services.agent.agy_subagents.refresh_agy_children", refresh)
     session.saved_state.return_value = None
     assert client.background_ids() == ()
-    with pytest.raises(ValueError, match="親セッション"):
-        with client.background_answer("a" * 64):
-            pytest.fail("親がない回答を配信してはいけない")
+    with pytest.raises(ValueError, match="親セッション"), client.background_answer("a" * 64):
+        pytest.fail("親がない回答を配信してはいけない")
     session.saved_state.return_value = state
     store = BackgroundAnswers(session.directory)
     store.record(state.session_id, "child", "worker", "子の回答")
     event_id, = client.background_ids()
-    with client._exclusive_turn():
-        with client.background_answer(event_id) as answer:
-            assert answer == "子の回答"
+    with client._exclusive_turn(), client.background_answer(event_id) as answer:
+        assert answer == "子の回答"
     assert client.background_ids() == ()
     session.open.assert_not_called()
+    assert refresh.called is (provider == "antigravity")
 
 
 @pytest.mark.parametrize("notification", [b"\x1b[I", b"\x1b[O"])
@@ -125,10 +128,11 @@ def test_answer_failure(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxSt
         client._wait_answer(state, 0)
 
 
-def test_agy_late_completion_is_recovered_without_resend(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+@pytest.mark.parametrize("provider", ["claude", "codex", "antigravity"])
+def test_late_completion_is_recovered_without_resend(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState], provider: str) -> None:
     """失敗通知の後に届いた正常完了を、元の世代・台帳位置で回収する。"""
     client, session, state = client_setup
-    client._slot = replace(client._slot, provider="antigravity")
+    client._slot = replace(client._slot, provider=provider)
     session.saved_state.return_value = state
     pending = session.directory / "pending.json"
     pending.write_text(json.dumps({"offset":0, "session_id":state.session_id}))

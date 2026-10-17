@@ -9,6 +9,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from argos.services.agent.hook_text import optional_hook_text
+
 
 MAX_EVENT_BYTES = 1024 * 1024
 MAX_JOURNAL_BYTES = 16 * MAX_EVENT_BYTES
@@ -21,6 +23,7 @@ class ClaudeHookEvent:
     event: str
     session_id: str
     text: str
+    end_offset: int = 0
 
 
 def completed_answer(events: Iterable[ClaudeHookEvent], session_id: str) -> str:
@@ -38,8 +41,8 @@ def record_event(path: Path, payload: str) -> None:
     record = json.dumps({
         "event": received.get("hook_event_name", ""),
         "session_id": received.get("session_id", ""),
-        "prompt_id": received.get("prompt_id", ""),
-        "text": received.get("last_assistant_message", ""),
+        "prompt_id": optional_hook_text(received.get("prompt_id", ""), "prompt_id"),
+        "text": optional_hook_text(received.get("last_assistant_message", ""), "last_assistant_message"),
     }, ensure_ascii=False) + "\n"
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     with os.fdopen(descriptor, "a", encoding="utf-8") as output:
@@ -64,9 +67,11 @@ def read_events(path: Path, offset: int) -> tuple[list[ClaudeHookEvent], int]:
             payload = json.loads(line)
             if not isinstance(payload, dict):
                 raise ValueError(f"Claudeフック記録がJSONオブジェクトではありません: {path}")
-            fields = [payload.get(key, "") for key in ("event", "session_id", "text")]
-            if not all(isinstance(value, str) for value in fields):
+            event_name = payload.get("event", "")
+            session_id = payload.get("session_id", "")
+            text = optional_hook_text(payload.get("text", ""), "text")
+            if not isinstance(event_name, str) or not isinstance(session_id, str):
                 raise ValueError(f"Claudeフック記録の項目が文字列ではありません: {path}")
-            events.append(ClaudeHookEvent(*fields))
+            events.append(ClaudeHookEvent(event_name, session_id, text, end_offset=source.tell()))
             offset = source.tell()
     return events, offset

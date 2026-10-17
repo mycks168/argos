@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from argos.services.agent.claude_tmux_events import MAX_EVENT_BYTES, record_event
+from argos.services.agent.hook_text import optional_hook_text
 from argos.services.agent.claude_tmux_session import write_private_json
 
 
@@ -60,10 +61,7 @@ def parse_native_event(payload: object, provider: str, event: str) -> NativeEven
 
 def _text_field(payload: dict[str, object], name: str) -> str:
     """文字列以外の本文やパスを下位層へ渡さない。"""
-    value = payload.get(name, "")
-    if not isinstance(value, str):
-        raise ValueError(f"フックの{name}は文字列にしてください")
-    return value
+    return optional_hook_text(payload.get(name, ""), name)
 
 
 def agy_answer(event: NativeEvent, last_step: int) -> tuple[str, int]:
@@ -140,18 +138,20 @@ def _record_bound_event(directory: Path, generation: str, provider: str, event: 
     if event.event == "SessionStart":
         write_private_json(path, json.dumps(saved))
         return
-    if event.event == "Stop" and event.turn_id and saved["turn_id"] == event.turn_id:
-        return
     try:
         kind, text, saved["last_step"] = _completion(event, provider, saved["last_step"])
     except DuplicateStopError:
         return
     except (OSError, ValueError, RuntimeError):
         kind, text = "StopFailure", ""
+    if kind == "Stop" and event.turn_id and saved.get("completed_turn_id") == event.turn_id:
+        return
     if not saved["is_ready"] and kind == "Stop":
         _append_normalized(directory, generation, "SessionStart", "")
     _append_normalized(directory, generation, kind, text)
     saved.update({"turn_id": event.turn_id, "is_ready": True})
+    if kind == "Stop" and event.turn_id:
+        saved["completed_turn_id"] = event.turn_id
     write_private_json(path, json.dumps(saved))
 
 

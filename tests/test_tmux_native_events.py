@@ -132,3 +132,34 @@ def test_incomplete_stop_is_failure(directory: Path, monkeypatch: pytest.MonkeyP
     assert events[-1].event == "StopFailure"
     record_native(directory, "generation", "antigravity", replace(_event("Stop"), transcript="/tmp/invalid", turn_id="other"))
     assert read_events(directory / "events.jsonl", offset)[0][-1].event == "StopFailure"
+
+
+@pytest.mark.parametrize("provider", ["codex", "antigravity"])
+@pytest.mark.parametrize("failed_event", ["Stop", "Interrupt"])
+def test_failed_turn_can_later_complete(directory: Path, failed_event: str, provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """同じturnの失敗・中断後の正常回答を失敗通知との重複で捨てない。"""
+    failed = replace(_event(failed_event), error="failed")
+    monkeypatch.setattr("argos.services.agent.tmux_native_events.agy_answer", lambda _event, _step: ("回答", 1))
+    record_native(directory, "generation", provider, failed)
+    record_native(directory, "generation", provider, _event("Stop"))
+    record_native(directory, "generation", provider, _event("Stop"))
+    events, _offset = read_events(directory / "events.jsonl", 0)
+    assert [event.text for event in events if event.event == "Stop"] == ["回答"]
+    assert sum(event.event == "StopFailure" for event in events) == 1
+
+
+def test_null_optional_fields_are_empty(directory: Path) -> None:
+    """任意の本文・turn・エラーがnullでも、待機を解除する失敗を記録する。"""
+    event = parse_native_event({"session_id":"native", "last_assistant_message":None,
+        "turn_id":None, "error":None, "transcriptPath":None}, "codex", "Stop")
+    assert event.text == event.turn_id == event.error == event.transcript == ""
+    record_native(directory, "generation", "codex", event)
+    assert read_events(directory / "events.jsonl", 0)[0][-1].event == "StopFailure"
+
+
+def test_failure_after_completed_turn_is_not_completion_duplicate(directory: Path) -> None:
+    """正常完了の再通知だけを除外し、後続の失敗通知は隠さない。"""
+    record_native(directory, "generation", "codex", _event("Stop"))
+    record_native(directory, "generation", "codex", replace(_event("Stop"), error="later failure"))
+    events, _offset = read_events(directory / "events.jsonl", 0)
+    assert events[-1].event == "StopFailure"

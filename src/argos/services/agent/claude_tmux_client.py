@@ -13,6 +13,8 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from argos.services.agent.background_answers import BackgroundAnswers
+from argos.services.agent.parent_replies import ParentReplies
+from argos.services.agent.background_text import background_text
 
 from argos.config import AgentSlot, Settings, resolve_agent_slot_command, resolve_agent_slot_model
 from argos.services.agent.claude_tmux_session import (
@@ -53,6 +55,7 @@ class ClaudeTmuxClient:
         """スロットの起動仕様と所有ファイルの場所を決定する。"""
         self._slot = slot
         self._console_ready_session_id = ""
+        self._response_target = "terminal"
         self.current_model = resolve_agent_slot_model(settings, slot)
         key = hashlib.sha256(json.dumps([slot.name, slot.provider, slot.cwd]).encode()).hexdigest()
         directory = Path(settings.agent_state_path).expanduser().parent / "tmux-slots" / key
@@ -107,6 +110,12 @@ class ClaudeTmuxClient:
         state, _is_created = self._session.open()
         return state
 
+    def set_response_target(self, target: str) -> None:
+        """Runnerからの通常依頼と、後続回答の出力先をそろえる。"""
+        if target not in {"local", "terminal"}:
+            raise ValueError("応答先が不正です")
+        self._response_target = target
+
     def background_ids(self) -> tuple[str, ...]:
         """子の完了照会で親CLIを起動したりターンロックを奪ったりしない。"""
         state = self._session.saved_state()
@@ -123,7 +132,7 @@ class ClaudeTmuxClient:
         if state is None:
             raise ValueError("子エージェントの親セッションがありません")
         with BackgroundAnswers(self._session.directory).consume(event_id, state.session_id) as answer:
-            yield answer.text
+            yield background_text(answer.text, "parent") if answer.agent_type == "parent" else answer.text
 
     def console_input(self, data: bytes, write: Callable[[], None]) -> None:
         """音声ターンへの割込みと、端末の入力途中への音声の混入を防ぐ。"""
@@ -149,6 +158,8 @@ class ClaudeTmuxClient:
             if pending["is_submitted"]:
                 journal = self._session.journal_path
                 pending["offset"] = journal.stat().st_size if journal.exists() else 0
+                self._remember_response_target(state, "terminal")
+            ParentReplies(self._session.directory, state.session_id).initialize(pending["offset"])
             write_private_json(path, json.dumps(pending))
             if data == b"\r":
                 # CLIごとの拡張キー交渉に左右されず、表示済み本文を確実に送信する。
@@ -212,7 +223,7 @@ class ClaudeTmuxClient:
     def _has_completed_voice_turn(self) -> bool:
         """失敗後に届いた同じ世代の確定回答だけを回収対象にする。"""
         path = self._session.directory / "pending.json"
-        if self._slot.provider != "antigravity" or not path.exists():
+        if not path.exists():
             return False
         pending = json.loads(path.read_text())
         state = self._session.saved_state()
@@ -253,6 +264,8 @@ class ClaudeTmuxClient:
         self._wait_ready(state)
         journal = self._session.journal_path
         offset = journal.stat().st_size
+        ParentReplies(self._session.directory, state.session_id).initialize(offset)
+        self._remember_response_target(state, self._response_target)
         write_private_json(pending_path, json.dumps({"offset": offset, "session_id": state.session_id}))
         transport = self._session.transport(state)
         transport.send_text(prompt)
@@ -284,17 +297,21 @@ class ClaudeTmuxClient:
         started = time.monotonic()
         while timeout_seconds == 0 or time.monotonic() - started < timeout_seconds:
             events, offset = read_events(self._session.journal_path, offset)
-            if self._slot.provider == "antigravity":
-                recovered = completed_answer(events, state.session_id)
-                if recovered:
-                    return recovered
+            recovered = completed_answer(events, state.session_id)
+            if recovered:
+                answer_event = next(event for event in events if event.session_id == state.session_id and event.event == "Stop" and event.text.strip())
+                ParentReplies(self._session.directory, state.session_id).taken(answer_event.end_offset)
+                return recovered
             for event in events:
                 if event.session_id != state.session_id:
                     continue
                 if event.event == "StopFailure" or (event.event == "Stop" and not event.text.strip()):
                     raise RuntimeError("エージェントが回答を確定できませんでした。ターミナルを確認してください")
-                if event.event == "Stop":
-                    return event.text
             self._session.verify(state)
             time.sleep(POLL_INTERVAL_SECONDS)
         raise RuntimeError("エージェントの応答待ちが設定時間を超えました。処理は再送していません")
+
+    def _remember_response_target(self, state: ClaudeTmuxState, target: str) -> None:
+        """フックに本文や認証値を渡さず、同じ世代の配送先だけ記録する。"""
+        write_private_json(self._session.directory / "response-target.json",
+            json.dumps({"generation":state.session_id, "target":target}))

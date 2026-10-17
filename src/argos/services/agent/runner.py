@@ -18,6 +18,9 @@ from urllib.parse import urlparse
 from argos.config import AgentSlot, Settings, resolve_agent_slot_model
 from argos.services.agent.client import AgentClient, create_provider_client
 from argos.services.http_base import JsonRequestHandler, bearer_header_matches
+from argos.services.agent.background_answers import BackgroundAnswer
+from argos.services.agent.background_text import background_text
+from argos.services.agent.claude_tmux_session import write_private_json
 
 
 log = logging.getLogger(__name__)
@@ -46,6 +49,7 @@ class AgentJob:
     delivered_at: float | None = None
     delivery_owner: str = ""
     delivery_lease_until: float | None = None
+    session_id: str = ""
 
 
 class AgentJobStore:
@@ -99,12 +103,29 @@ class AgentJobStore:
         with self._lock:
             self._state_dir.mkdir(parents=True, exist_ok=True)
             job_dir = self._jobs_dir / job.job_id
-            job_dir.mkdir(parents=True, exist_ok=True)
+            job_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
             job.updated_at = time.time()
             path = job_dir / "job.json"
-            tmp_path = path.with_suffix(".json.tmp")
-            tmp_path.write_text(json.dumps(asdict(job), ensure_ascii=False, indent=2), encoding="utf-8")
-            tmp_path.replace(path)
+            write_private_json(path, json.dumps(asdict(job), ensure_ascii=False, indent=2))
+
+    def accept_reply(self, slot: AgentSlot, answer: BackgroundAnswer) -> None:
+        """生成済み回答だけを完了ジョブへ保存し、エージェントを再実行しない。"""
+        with self._lock:
+            if self.load(answer.event_id) is not None:
+                return
+            directory = self._jobs_dir / answer.event_id
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            text = background_text(answer.text, answer.agent_type)
+            for name, content in (("prompt", ""), ("output", text), ("result", text)):
+                write_private_json(directory / f"{name}.txt", content)
+            now = time.time()
+            job = AgentJob(job_id=answer.event_id, slot_name=slot.name, provider=slot.provider,
+                cwd=slot.cwd, status="completed", prompt_path=str(directory / "prompt.txt"),
+                output_path=str(directory / "output.txt"), error_path=str(directory / "error.txt"),
+                result_path=str(directory / "result.txt"), created_at=now, updated_at=now, model=slot.model,
+                response_target="background_local" if answer.response_target == "local" else "background",
+                session_id=answer.generation)
+            write_private_json(directory / "job.json", json.dumps(asdict(job), ensure_ascii=False))
 
     def prune_delivered(self, max_age_seconds: float, now: float | None = None) -> list[str]:
         """ARGOSへ届け終わってから max_age_seconds 以上たったジョブを消し、消したジョブIDを返す。
@@ -281,6 +302,12 @@ class AgentRunner:
             log.info("届け終わった古いジョブを削除しました: count=%s", len(removed))
         return removed
 
+    def start_reply_collection(self, stop: threading.Event | None = None) -> threading.Thread:
+        """既存の未配信APIで届ける回答を、フック台帳から定期回収する。"""
+        from argos.services.agent.tmux_reply_collector import TmuxReplyCollector
+
+        return TmuxReplyCollector(self._settings, self._store).start(stop)
+
     def start_job_pruning(self, interval_seconds: float = 3600.0, stop: threading.Event | None = None) -> threading.Thread:
         """古いジョブの削除を、すぐに1回と、そのあと interval_seconds ごとに行うスレッドを開始する。"""
         stop_event = stop or threading.Event()
@@ -365,6 +392,10 @@ class AgentRunner:
         slot_settings = _settings_for_slot(self._settings, slot)
         try:
             client = self._client_factory(slot_settings, slot)
+            from argos.services.agent.claude_tmux_client import ClaudeTmuxClient
+
+            if isinstance(client, ClaudeTmuxClient):
+                client.set_response_target(job.response_target)
             chunks: list[str] = []
             with Path(job.output_path).open("w", encoding="utf-8") as output:
                 for chunk in client.ask_stream(Path(job.prompt_path).read_text(encoding="utf-8")):

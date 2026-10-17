@@ -50,7 +50,7 @@ def test_full_journal(tmp_path: Path) -> None:
         record_event(path, "{}")
 
 
-@pytest.mark.parametrize("payload", [b"[]\n", b'{"text":1}\n', b"a" * (MAX_EVENT_BYTES + 1)])
+@pytest.mark.parametrize("payload", [b"[]\n", b'{"text":1}\n', b'{"event":1}\n', b"a" * (MAX_EVENT_BYTES + 1)])
 def test_invalid_journal(tmp_path: Path, payload: bytes) -> None:
     """壊れた行を成功の回答へ変換しない。"""
     path = tmp_path / "events"
@@ -69,3 +69,15 @@ def test_hook_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
     runpy.run_path(str(claude_tmux_hook.__file__), run_name="__main__")
     assert capsys.readouterr().out == "{}\n"
+
+
+def test_null_assistant_text_is_empty(tmp_path: Path) -> None:
+    """本文と任意IDがnullでも、イベントの読込自体を壊さない。"""
+    path = tmp_path / "events"
+    record_event(path, json.dumps({"hook_event_name":"Stop", "session_id":"session",
+        "last_assistant_message":None, "prompt_id":None}))
+    events, _offset = read_events(path, 0)
+    assert events[0].event == "Stop" and events[0].text == ""
+    with path.open("a") as source:
+        source.write('{"event":"Stop","session_id":"session","text":null}\n')
+    assert read_events(path, 0)[0][-1].text == ""
