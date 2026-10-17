@@ -461,6 +461,42 @@ def test_double_click_updates_agent_and_clears_listening_status(monkeypatch):
     assert snapshot["status"]["label"] == "待機中"
 
 
+def test_bluetooth_previous_slot_uses_ptt_cycle_order(monkeypatch):
+    """巻き戻しキーで巡回対象の前のスロットを選ぶ。"""
+    _patch_app(monkeypatch)
+    settings = Settings(
+        **{
+            **_settings().__dict__,
+            "agent_slots": (
+                AgentSlot("作業", "codex", "/tmp"),
+                AgentSlot("除外", "claude", "/tmp", ptt_cycle=False),
+                AgentSlot("前", "antigravity", "/tmp"),
+            ),
+        }
+    )
+    app = ArgosApp(settings)
+
+    app._on_previous_slot()
+
+    assert app._agent.current_name == "前"
+    assert app._agent.current_provider == "antigravity"
+
+
+def test_bluetooth_short_press_uses_gpio_ptt_cancel_behavior(monkeypatch):
+    """Bluetooth再生キーの短押しは送信せず録音を破棄する。"""
+    _patch_app(monkeypatch)
+    times = iter([1.0, 1.1])
+    monkeypatch.setattr("argos.hardware.button.time.monotonic", lambda: next(times))
+    app = ArgosApp(_settings())
+
+    app._bluetooth_button.handle_press()
+    app._bluetooth_button.handle_release()
+
+    assert app._recorder.cancelled is True
+    assert app._worker is None
+    assert app._dashboard_state.snapshot()["status"]["code"] == "ready"
+
+
 def test_cancel_clears_listening_status(monkeypatch):
     """短押しキャンセル後は録音中表示を待機中へ戻す。"""
     _patch_app(monkeypatch)

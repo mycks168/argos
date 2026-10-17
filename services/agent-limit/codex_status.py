@@ -41,18 +41,27 @@ def parse_limit_row(
     """5h limit または Weekly limit の行を解析する。"""
     pattern = re.compile(
         re.escape(pattern_label) +
-        r":\s*\[[^\]]*\]\s*(\d+)% left \(resets (\d{2}):(\d{2})(?: on (\d{1,2}) (\w{3}))?\)"
+        r":\s*\[[^\]]*\]\s*(\d+)% left \(resets "
+        r"(?P<hour>\d{1,2}):(?P<minute>\d{2})(?:\s+(?P<period>AM|PM))?"
+        r"(?: on (?P<day>\d{1,2}) (?P<month>\w{3}))?\)",
+        re.IGNORECASE,
     )
     m = pattern.search(screen)
     if not m:
         return None
     left = int(m.group(1))
-    hour = int(m.group(2))
-    minute = int(m.group(3))
+    hour = int(m.group("hour"))
+    minute = int(m.group("minute"))
+    period = m.group("period")
+    if minute > 59 or (period and not 1 <= hour <= 12) or (not period and hour > 23):
+        return None
+    if period:
+        # 正午と深夜の12時は、単純に12を足すと誤った時刻になる。
+        hour = hour % 12 + (12 if period.upper() == "PM" else 0)
 
-    if m.group(4) and m.group(5):
-        day = int(m.group(4))
-        mon = m.group(5)
+    if m.group("day") and m.group("month"):
+        day = int(m.group("day"))
+        mon = m.group("month")
         reset = datetime.strptime(f"{day} {mon} {now.year}", "%d %b %Y").replace(
             hour=hour, minute=minute, second=0, microsecond=0
         )
@@ -104,7 +113,7 @@ def _is_status_ready(screen: str) -> bool:
 def run_once() -> StatusDataWithCredits:
     """1回 tmux セッションを立ち上げて /status を取得する。"""
     session = f"codex_status_{os.getpid()}_{int(time.time())}"
-    tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "codex")
+    tmux("new-session", "-d", "-s", session, "-x", "220", "-y", "50", "codex --no-daemon")
     try:
         screen = wait_for(
             session,
