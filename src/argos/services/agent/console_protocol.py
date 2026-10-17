@@ -83,6 +83,7 @@ class ConsoleRead:
     offset: int
     data: str
     is_closed: bool
+    has_pending_turn: bool = False
 
 
 @dataclass(frozen=True)

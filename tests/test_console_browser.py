@@ -19,7 +19,7 @@ from argos.services.dashboard.server import DashboardServer
 from test_app import _patch_app, _settings
 
 if TYPE_CHECKING:
-    from playwright.sync_api import Page
+    from playwright.sync_api import Page, Route
 
 
 def _verify_layouts(page: Page, base_url: str) -> None:
@@ -49,6 +49,47 @@ def _verify_microphone(page: Page) -> None:
     body = response.value.text()
     assert '"event": "transcript"' in body and "こんにちは" in body
     assert '"event": "done"' in body and '"event": "audio"' in body
+
+
+def _verify_recording_reentry(page: Page, base_url: str) -> None:
+    """通常・SPで録音状態を解除し、同じ画面で次の録音も送れる。"""
+    for route in ["/", "/sp"]:
+        page.goto(base_url + route)
+        page.frame_locator("iframe.argos-console-frame").locator("#status").filter(has_text="接続済み").wait_for(timeout=30000)
+        for _attempt in range(2):
+            _verify_microphone(page)
+            page.wait_for_function("voiceState !== 'recording' && voiceRecorder === null")
+
+
+def _verify_lost_submit_notification(page: Page, client: ClaudeTmuxClient) -> None:
+    """回収要求の切断後に次の入力が来ても、再接続で最終回答を回収する。"""
+    should_block = True
+
+    def intercept_observation(route: Route) -> None:
+        """音声API以外は通し、回答回収だけを一時的に切断する。"""
+        if should_block and "input_mode=observe" in route.request.url:
+            route.abort()
+        else:
+            route.continue_()
+
+    pattern = "**/api/terminal/turn?*"
+    page.route(pattern, intercept_observation)
+    frame = page.frame_locator("iframe.argos-console-frame")
+    offset = client._session.journal_path.stat().st_size
+    frame.locator(".xterm-helper-textarea").focus()
+    page.keyboard.type("Reply with exactly RECOVERY_OK and nothing else.")
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(1000)
+    assert "RECOVERY_OK" in client._wait_answer(client.terminal_target(), offset)
+    page.keyboard.type("draft")
+    page.keyboard.press("Control+u")
+    page.wait_for_timeout(500)
+    assert client.has_pending_manual_turn()
+    should_block = False
+    with page.expect_response(lambda response: "input_mode=observe" in response.url, timeout=20000) as response:
+        frame.locator("#reconnect").click()
+    assert "RECOVERY_OK" in response.value.text()
+    page.unroute(pattern, intercept_observation)
 
 
 def _verify_ptt(page: Page) -> None:
@@ -103,8 +144,11 @@ def test_browser_console(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, provid
             page = browser.new_page(viewport={"width": 1400, "height": 1000})
             page.on("pageerror", lambda error: errors.append(str(error)))
             _verify_layouts(page, base_url)
+            _verify_lost_submit_notification(page, client)
             _verify_microphone(page)
             _verify_ptt(page)
+            if provider == "claude":
+                _verify_recording_reentry(page, base_url)
             state = client.terminal_target()
             before = run_tmux(["display-message", "-p", "-t", state.pane_id, "#{pane_width}"])
             page.set_viewport_size({"width": 1000, "height": 800})

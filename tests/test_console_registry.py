@@ -37,6 +37,7 @@ def test_registry_local(registry: ConsoleRegistry, monkeypatch: pytest.MonkeyPat
     terminal.is_closed = False
     terminal.read.return_value = TerminalChunk(b"abc", 3, False)
     client.observe_stream.return_value = iter(["回答"])
+    client.has_pending_manual_turn.return_value = False
     monkeypatch.setattr("argos.services.agent.console_registry.ClaudeTmuxClient", Mock(return_value=client))
     monkeypatch.setattr("argos.services.agent.console_registry.TerminalPty", Mock(return_value=terminal))
     monkeypatch.setattr("argos.services.agent.console_registry.run_tmux", Mock())

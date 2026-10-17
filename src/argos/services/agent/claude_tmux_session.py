@@ -148,6 +148,7 @@ class ClaudeTmuxSession:
         self._state_path.unlink()
         (self.directory / "pending.json").unlink(missing_ok=True)
         (self.directory / "manual.json").unlink(missing_ok=True)
+        (self.directory / "completed-manual.json").unlink(missing_ok=True)
 
     def _start(self) -> ClaudeTmuxState:
         """プロンプト本文をシェルへ渡さず、専用Claudeを対話起動する。"""

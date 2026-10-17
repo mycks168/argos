@@ -124,7 +124,6 @@
     _enqueuePlayback(playback, generation) {
       if (generation !== this._generation) return Promise.resolve(false);
       this._pendingCount += 1;
-      this._setState("playing");
       const queued = this._chain
         .catch(() => false)
         .then(playback);
@@ -219,6 +218,7 @@
         source.addEventListener("ended", finish, {once: true});
         this._activePlayback = {source, finish};
         source.start();
+        this._setState("playing");
       });
     }
 

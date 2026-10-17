@@ -66,7 +66,7 @@
     receive(event) {
       if (!this.isOwnMessage(event)) return;
       if (event.data.type === "ready") this.sendConfiguration();
-      const callback = {focus:"onFocus", voice:"onVoice", submitted:"onSubmitted"}[event.data.type];
+      const callback = {focus:"onFocus", voice:"onVoice", submitted:"onSubmitted", cancel:"onCancel"}[event.data.type];
       this.callbacks[callback]?.();
       if (event.data.type === "ptt") this.forwardPtt(event.data);
     }

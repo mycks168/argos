@@ -17,7 +17,7 @@ from argos.config import AgentSlot, Settings, resolve_agent_slot_command, resolv
 from argos.services.agent.claude_tmux_session import (
     ClaudeTmuxSession, ClaudeTmuxSpec, ClaudeTmuxState, write_private_json,
 )
-from argos.services.agent.claude_tmux_events import read_events
+from argos.services.agent.claude_tmux_events import completed_answer, read_events
 from argos.services.agent.tmux_input import encode_terminal_text
 from argos.services.agent.tmux_commands import interactive_command
 
@@ -25,6 +25,7 @@ from argos.services.agent.tmux_commands import interactive_command
 POLL_INTERVAL_SECONDS = 0.2
 STARTUP_TIMEOUT_SECONDS = 60.0
 PASTE_SETTLE_SECONDS = 0.3
+INPUT_LOCK_WAIT_SECONDS = 1.0
 
 
 def claude_command(settings: Settings, slot: AgentSlot) -> tuple[str, ...]:
@@ -107,10 +108,12 @@ class ClaudeTmuxClient:
 
     def console_input(self, data: bytes, write: Callable[[], None]) -> None:
         """音声ターンへの割込みと、端末の入力途中への音声の混入を防ぐ。"""
-        if re.fullmatch(rb"\x1b\[[?>0-9;]*[cnRt]|\x1b\](10|11);rgb:[0-9a-fA-F/]+\x1b\\", data):
+        if re.fullmatch(rb"\x1b\[[?>0-9;]*[cnRtIO]|\x1b\](10|11);rgb:[0-9a-fA-F/]+\x1b\\", data):
             write()
             return
         with self._exclusive_turn():
+            if (self._session.directory / "pending.json").exists():
+                raise RuntimeError("前のtmuxターンが未確定です。回答回収を待ってください")
             state = self.terminal_target()
             if self._console_ready_session_id != state.session_id:
                 self._wait_ready(state)
@@ -124,6 +127,9 @@ class ClaudeTmuxClient:
             if pending["is_submitted"]:
                 raise RuntimeError("端末から送った応答を待っています。入力は再送しません")
             pending["is_submitted"] = data.endswith(b"\r")
+            if pending["is_submitted"]:
+                journal = self._session.journal_path
+                pending["offset"] = journal.stat().st_size if journal.exists() else 0
             write_private_json(path, json.dumps(pending))
             if data == b"\r":
                 # CLIごとの拡張キー交渉に左右されず、表示済み本文を確実に送信する。
@@ -135,14 +141,20 @@ class ClaudeTmuxClient:
                 path.unlink()
 
     def _finish_manual_input(self, state: ClaudeTmuxState) -> None:
-        """端末から送った応答を、次の音声ターンの回答と取り違えない。"""
+        """回収前の完了記録を消さず、次の入力とは別に保持する。"""
         path = self._session.directory / "manual.json"
         if not path.exists():
             return
-        offset = json.loads(path.read_text())["offset"]
+        pending = json.loads(path.read_text())
+        if not pending["is_submitted"]:
+            return
+        offset = pending["offset"]
         events, _next_offset = read_events(self._session.journal_path, offset)
         if any(event.session_id == state.session_id and event.event in {"Stop", "StopFailure"} for event in events):
-            path.unlink()
+            completed_path = self._session.directory / "completed-manual.json"
+            if completed_path.exists():
+                raise RuntimeError("前の端末回答を回収中です。入力は再送していません")
+            path.rename(completed_path)
 
     def ask_stream(self, prompt: str) -> Iterable[str]:
         """別Runnerプロセスからの同時入力もファイルロックで拒否する。"""
@@ -152,28 +164,63 @@ class ClaudeTmuxClient:
 
     def observe_stream(self) -> Iterable[str]:
         """端末で既に送信された発言の回答だけを受け取り、再送しない。"""
-        with self._exclusive_turn():
+        with self._exclusive_turn(should_wait_for_input=True):
             state = self.terminal_target()
-            path = self._session.directory / "manual.json"
+            path = self._session.directory / "completed-manual.json"
+            if not path.exists():
+                path = self._session.directory / "manual.json"
+            if not path.exists() and self._has_completed_voice_turn():
+                path = self._session.directory / "pending.json"
             if not path.exists():
                 raise RuntimeError("端末からの送信が見つかりません")
             pending = json.loads(path.read_text())
-            if not pending["is_submitted"]:
+            if path.name != "pending.json" and not pending["is_submitted"]:
                 raise RuntimeError("端末の入力はまだ送信されていません")
             answer = self._wait_answer(state, pending["offset"])
             path.unlink()
             yield answer
 
+    def has_pending_manual_turn(self) -> bool:
+        """送信通知が失われても、ブラウザ再接続後に未回収回答を発見する。"""
+        if (self._session.directory / "completed-manual.json").exists():
+            return True
+        path = self._session.directory / "manual.json"
+        try:
+            return json.loads(path.read_text())["is_submitted"] is True
+        except FileNotFoundError:
+            return self._has_completed_voice_turn()
+
+    def _has_completed_voice_turn(self) -> bool:
+        """失敗後に届いた同じ世代の確定回答だけを回収対象にする。"""
+        path = self._session.directory / "pending.json"
+        if self._slot.provider != "antigravity" or not path.exists():
+            return False
+        pending = json.loads(path.read_text())
+        state = self._session.saved_state()
+        if state is None or pending["session_id"] != state.session_id:
+            return False
+        events, _next_offset = read_events(self._session.journal_path, pending["offset"])
+        return bool(completed_answer(events, state.session_id))
+
     @contextmanager
-    def _exclusive_turn(self) -> Iterator[None]:
+    def _exclusive_turn(self, should_wait_for_input: bool = False) -> Iterator[None]:
         """会話とリセットで同じロックを使い、実行中の破棄を防ぐ。"""
         descriptor = os.open(self._session.directory / "turn.lock", os.O_CREAT | os.O_RDWR, 0o600)
         with os.fdopen(descriptor, "a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise RuntimeError("このtmuxスロットは応答処理中です") from error
+            self._acquire_turn_lock(lock.fileno(), should_wait_for_input)
             yield
+
+    def _acquire_turn_lock(self, descriptor: int, should_wait_for_input: bool) -> None:
+        """観測だけはEnterの短い送信処理を待ち、文字入力のロックを奪わない。"""
+        deadline = time.monotonic() + INPUT_LOCK_WAIT_SECONDS if should_wait_for_input else 0.0
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError as error:
+                if not should_wait_for_input or time.monotonic() >= deadline:
+                    raise RuntimeError("このtmuxスロットは応答処理中です") from error
+                time.sleep(POLL_INTERVAL_SECONDS)
 
     def _ask_locked(self, prompt: str) -> Iterable[str]:
         """中断した入力を再送せず、人の確認が必要な状態として残す。"""
@@ -218,6 +265,10 @@ class ClaudeTmuxClient:
         started = time.monotonic()
         while timeout_seconds == 0 or time.monotonic() - started < timeout_seconds:
             events, offset = read_events(self._session.journal_path, offset)
+            if self._slot.provider == "antigravity":
+                recovered = completed_answer(events, state.session_id)
+                if recovered:
+                    return recovered
             for event in events:
                 if event.session_id != state.session_id:
                     continue

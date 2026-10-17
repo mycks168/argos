@@ -78,6 +78,7 @@
     <div id="usage-list" class="usage-list"></div>
   </dialog>
   <script src="/static/browser_audio.js"></script>
+  <script src="/static/slot_audio.js"></script>
   <script src="/static/message_text.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script>
@@ -91,7 +92,6 @@
     const usageList = document.getElementById("usage-list");
     const slotElements = new Map();
     const previousUnread = new Map();
-    const pendingAudio = new Map();
     let localSlots = [];
     let recorder = null;
     let recorderStream = null;
@@ -108,6 +108,7 @@
         if (focusedTile) focusedTile.querySelector(".tile-status").textContent = "音声再生エラー";
       },
     });
+    const slotAudio = new ArgosSlotAudio.SlotAudio(audioPlayer);
     let latestState = null;
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
@@ -171,9 +172,12 @@
       slotElements.set(key, tile);
       if (slot.execution_mode === "tmux") {
         tile.consoleView = new ArgosTmuxEmbed.ConsoleView(tile.querySelector(".messages"), dashboardToken, {
-          onSubmitted: () => sendTurn(slot, new Blob(["端末から入力"], {type:"text/plain"}), audioPlayer.generation, "observe"),
+          onSubmitted: () => {
+            if (tile.dataset.busy !== "true") sendTurn(slot, new Blob(["端末から入力"], {type:"text/plain"}), slotAudio.generation, "observe");
+          },
           onFocus: () => { clearAttention(tile); playPendingAudio(key); },
           onVoice: () => toggleRecording(slot, false),
+          onCancel: () => cancelGridAudio(),
         });
         tile.consoleView.setSlot(slot);
       }
@@ -307,7 +311,7 @@
       else usageDialog.setAttribute("open", "");
     }
 
-    async function sendTurn(slot, body, playbackGeneration = audioPlayer.generation, inputMode = "prompt") {
+    async function sendTurn(slot, body, playbackGeneration = slotAudio.generation, inputMode = "prompt") {
       const tile = slotElements.get(slotKey(slot));
       const key = slotKey(slot);
       clearAttention(tile);
@@ -370,8 +374,7 @@
         if (status) status.textContent = "録音中";
       }
       try {
-        pendingAudio.clear();
-        recordingPlaybackGeneration = audioPlayer.cancel();
+        recordingPlaybackGeneration = slotAudio.cancel();
         await audioPlayer.activate();
         recorderStream = await navigator.mediaDevices.getUserMedia({
           audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
@@ -410,50 +413,20 @@
     function queueAudio(key, base64Data, playbackGeneration) {
       if (isMuted) return;
       const tile = slotElements.get(key);
-      if (tile?.matches(":focus-within")) {
-        queueAudioPlayback(base64Data, playbackGeneration);
-        return;
-      }
-      const chunks = pendingAudio.get(key) || [];
-      chunks.push({base64Data, playbackGeneration});
-      pendingAudio.set(key, chunks);
+      if (tile?.matches(":focus-within")) slotAudio.select(key);
+      slotAudio.enqueue(key, {data:base64Data}, playbackGeneration);
     }
 
     function queueAudioUrl(key, audioUrl, playbackGeneration) {
       if (isMuted) return;
       const tile = slotElements.get(key);
-      if (tile?.matches(":focus-within")) {
-        queueAudioUrlPlayback(audioUrl, playbackGeneration);
-        return;
-      }
-      const chunks = pendingAudio.get(key) || [];
-      chunks.push({audioUrl, playbackGeneration});
-      pendingAudio.set(key, chunks);
+      if (tile?.matches(":focus-within")) slotAudio.select(key);
+      slotAudio.enqueue(key, {url:audioUrl, options:{headers:authHeaders({}), cache:"force-cache"}}, playbackGeneration);
     }
 
     function playPendingAudio(key) {
       if (isMuted) return;
-      const chunks = pendingAudio.get(key) || [];
-      pendingAudio.delete(key);
-      chunks.forEach(chunk => {
-        if (chunk.audioUrl) {
-          queueAudioUrlPlayback(chunk.audioUrl, chunk.playbackGeneration);
-        } else {
-          queueAudioPlayback(chunk.base64Data, chunk.playbackGeneration);
-        }
-      });
-    }
-
-    function queueAudioPlayback(base64Data, playbackGeneration) {
-      audioPlayer.enqueueBase64(base64Data, playbackGeneration);
-    }
-
-    function queueAudioUrlPlayback(audioUrl, playbackGeneration) {
-      audioPlayer.enqueueUrl(
-        audioUrl,
-        {headers: authHeaders({}), cache: "force-cache"},
-        playbackGeneration,
-      );
+      slotAudio.select(key);
     }
 
     function applyMuteState() {
@@ -463,8 +436,7 @@
 
     function updateMuteState(nextMuted) {
       if (nextMuted && !isMuted) {
-        pendingAudio.clear();
-        audioPlayer.cancel();
+        slotAudio.cancel();
       }
       isMuted = nextMuted;
       applyMuteState();
@@ -491,8 +463,7 @@
     }
 
     function cancelGridAudio() {
-      pendingAudio.clear();
-      audioPlayer.cancel();
+      slotAudio.cancel();
       fetch("/api/control", {
         method: "POST",
         headers: authHeaders({"Content-Type": "application/json"}),

@@ -11,7 +11,7 @@ function setup() {
   const sent = [];
   const requests = [];
   const timers = [];
-  const elements = Object.fromEntries(["status", "terminal", "voice", "discard", "reconnect"].map(name =>
+  const elements = Object.fromEntries(["status", "terminal", "voice", "cancel-audio", "discard", "reconnect"].map(name =>
     [name, {clientWidth:800, clientHeight:600, addEventListener(type, callback) {this[type] = callback;}}]));
   const controls = {shouldFail:false, isClosed:false, errorStatus:0, output:"", shouldDelayOpen:false};
   class Terminal {
@@ -41,7 +41,7 @@ function setup() {
       if (payload.action !== "read") return {ok:true, json:async () => ({})};
       if (controls.errorStatus) return {ok:false, status:controls.errorStatus, json:async () => ({error:"接続期限切れ"})};
       if (controls.output || controls.isClosed) {
-        const output = {data:controls.output, offset:1, is_closed:controls.isClosed};
+        const output = {data:controls.output, offset:1, is_closed:controls.isClosed, has_pending_turn:controls.hasPendingTurn};
         controls.output = ""; controls.isClosed = false;
         return {ok:true, json:async () => output};
       }
@@ -71,6 +71,8 @@ test("初期化失敗を表示し、音声ボタンと再接続で復旧でき�
   assert.match(state.elements.status.textContent, /端末初期化エラー.*描画失敗/);
   state.elements.voice.click();
   assert.equal(state.sent.at(-1).type, "voice");
+  state.elements["cancel-audio"].click();
+  assert.equal(state.sent.at(-1).type, "cancel");
   state.elements.reconnect.click();
   await flush();
   assert.match(state.elements.status.textContent, /端末初期化エラー/);
@@ -121,8 +123,10 @@ test("接続開始途中のページ離脱は遅着した接続も閉じる", as
 test("端末出力、入力取消、PTTを既存経路へ送る", async () => {
   const state = setup();
   state.controls.output = btoa("ready");
+  state.controls.hasPendingTurn = true;
   state.configure(); await flush();
   assert.match(state.elements.status.textContent, /接続済み/);
+  assert.equal(state.sent.at(-1).type, "submitted");
   state.elements.discard.click(); await flush();
   assert.equal(atob(state.requests.at(-1).data), "\x15");
   state.controls.input("hello\r"); await flush();

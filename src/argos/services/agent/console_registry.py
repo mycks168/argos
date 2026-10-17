@@ -63,7 +63,7 @@ class LocalConsole:
     def read(self, offset: int) -> ConsoleRead:
         """UTF-8途中の切断を壊さない形式へ変換する。"""
         chunk = self.terminal.read(offset)
-        return ConsoleRead(chunk.offset, base64.b64encode(chunk.data).decode("ascii"), chunk.is_closed)
+        return ConsoleRead(chunk.offset, base64.b64encode(chunk.data).decode("ascii"), chunk.is_closed, self.client.has_pending_manual_turn())
 
     def write(self, data: bytes) -> None:
         """音声処理中には生のキー入力を混入させない。"""

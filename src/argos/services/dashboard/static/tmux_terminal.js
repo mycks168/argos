@@ -42,6 +42,7 @@
 
   /** PTTだけを親画面へ渡し、端末の通常入力を維持する。 */
   function forwardPtt(event) {
+    if (event.code === "Escape" && event.type === "keydown") notify("cancel");
     if (!/^F(1[3-9]|2[0-4])$/.test(event.code)) return true;
     if (!event.repeat) notify("ptt", {eventType:event.type, code:event.code});
     event.preventDefault();
@@ -134,6 +135,7 @@
     if (bytes.length) await new Promise(resolve => terminal.write(bytes, resolve));
     offset = output.offset;
     status.textContent = "接続済み · 端末内のSpaceは文字入力";
+    if (output.has_pending_turn) notify("submitted");
     if (output.is_closed) {
       closeConnection();
       status.textContent = "端末へ再接続しています";
@@ -206,6 +208,7 @@
     startConnection();
   });
   document.getElementById("voice").addEventListener("click", () => notify("voice"));
+  document.getElementById("cancel-audio").addEventListener("click", () => notify("cancel"));
   document.getElementById("discard").addEventListener("click", () => sendInput("\x15"));
   document.getElementById("reconnect").addEventListener("click", reconnect);
   if (typeof ResizeObserver !== "undefined") new ResizeObserver(resize).observe(holder);

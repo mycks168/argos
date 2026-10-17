@@ -5,6 +5,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,11 @@ class ClaudeHookEvent:
     event: str
     session_id: str
     text: str
+
+
+def completed_answer(events: Iterable[ClaudeHookEvent], session_id: str) -> str:
+    """先行する失敗通知があっても、同じ世代の確定本文を見つける。"""
+    return next((event.text for event in events if event.session_id == session_id and event.event == "Stop" and event.text.strip()), "")
 
 
 def record_event(path: Path, payload: str) -> None:

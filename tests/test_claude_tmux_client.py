@@ -37,6 +37,16 @@ def append_event(path: Path, event: str, text: str = "", session_id: str = "sess
     record_event(path, json.dumps({"hook_event_name": event, "session_id": session_id, "last_assistant_message": text}))
 
 
+@pytest.mark.parametrize("notification", [b"\x1b[I", b"\x1b[O"])
+def test_focus_notification_is_not_draft(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState], notification: bytes) -> None:
+    """フォーカス通知で音声入力を禁止する手動ドラフトを作らない。"""
+    client, session, _state = client_setup
+    write = Mock()
+    client.console_input(notification, write)
+    write.assert_called_once()
+    assert not (session.directory / "manual.json").exists()
+
+
 def test_turn_and_routing(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
     """貼り付け後の新しいStopだけを既存のaskインターフェースへ返す。"""
     client, session, _state = client_setup
@@ -65,10 +75,25 @@ def test_pending_and_lock(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmux
     (session.directory / "pending.json").write_text("{}")
     with pytest.raises(RuntimeError, match="未確定"):
         client.ask("再送しない")
+    with pytest.raises(RuntimeError, match="回答回収"):
+        client.console_input(b"next", Mock())
     monkeypatch.setattr(fcntl, "flock", Mock(side_effect=BlockingIOError))
     with pytest.raises(RuntimeError, match="応答処理中"):
         client.ask("再送しない")
     session.open.assert_not_called()
+
+
+def test_observation_waits_for_enter_lock(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState], monkeypatch: pytest.MonkeyPatch) -> None:
+    """表示の照会は入力ロックを奪わず、観測側だけが短い入力完了を待つ。"""
+    client, _session, _state = client_setup
+    acquire = Mock(side_effect=[BlockingIOError, None])
+    monkeypatch.setattr(fcntl, "flock", acquire)
+    client._acquire_turn_lock(27, True)
+    assert acquire.call_count == 2
+    monkeypatch.setattr(fcntl, "flock", Mock(side_effect=BlockingIOError))
+    monkeypatch.setattr("argos.services.agent.claude_tmux_client.time.monotonic", Mock(side_effect=[0, 2]))
+    with pytest.raises(RuntimeError, match="応答処理中"):
+        client._acquire_turn_lock(27, True)
 
 
 @pytest.mark.parametrize("event,text", [("StopFailure", ""), ("Stop", " ")])
@@ -78,6 +103,41 @@ def test_answer_failure(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxSt
     append_event(session.journal_path, event, text)
     with pytest.raises(RuntimeError, match="確定できません"):
         client._wait_answer(state, 0)
+
+
+def test_agy_late_completion_is_recovered_without_resend(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """失敗通知の後に届いた正常完了を、元の世代・台帳位置で回収する。"""
+    client, session, state = client_setup
+    client._slot = replace(client._slot, provider="antigravity")
+    session.saved_state.return_value = state
+    pending = session.directory / "pending.json"
+    pending.write_text(json.dumps({"offset":0, "session_id":state.session_id}))
+    append_event(session.journal_path, "StopFailure")
+    assert not client.has_pending_manual_turn()
+    with pytest.raises(RuntimeError, match="確定できません"):
+        client._wait_answer(state, 0)
+    with pytest.raises(RuntimeError, match="未確定"):
+        client.ask("再送しない")
+    append_event(session.journal_path, "Stop", "別世代", "other")
+    assert not client.has_pending_manual_turn()
+    append_event(session.journal_path, "Stop", "遅れて届いた確定回答")
+    assert client.has_pending_manual_turn()
+    assert list(client.observe_stream()) == ["遅れて届いた確定回答"]
+    assert not pending.exists()
+    assert not client.has_pending_manual_turn()
+    session.transport.assert_not_called()
+
+
+def test_agy_pending_generation_must_match(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """別世代のpendingや終了したセッションを自動成功扱いにしない。"""
+    client, session, state = client_setup
+    client._slot = replace(client._slot, provider="antigravity")
+    (session.directory / "pending.json").write_text(json.dumps({"offset":0, "session_id":"other"}))
+    session.saved_state.return_value = state
+    append_event(session.journal_path, "Stop", "本文")
+    assert not client.has_pending_manual_turn()
+    session.saved_state.return_value = None
+    assert not client.has_pending_manual_turn()
 
 
 def test_wait_timeouts(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState], monkeypatch: pytest.MonkeyPatch) -> None:
@@ -164,6 +224,51 @@ def test_terminal_reports_during_voice(client_setup: tuple[ClaudeTmuxClient, Moc
             client.console_input(b"x", write)
     write.assert_called_once()
     assert not (session.directory / "manual.json").exists()
+
+
+def test_completed_manual_survives_next_input(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """完了直後に次の文字が来ても最終回答の回収記録を消さない。"""
+    client, session, _state = client_setup
+    assert not client.has_pending_manual_turn()
+    client.console_input(b"first", Mock())
+    assert not client.has_pending_manual_turn()
+    client.console_input(b"\r", Mock())
+    append_event(session.journal_path, "Stop", "最終回答")
+    client.console_input(b"next draft", Mock())
+    assert client.has_pending_manual_turn()
+    assert list(client.observe_stream()) == ["最終回答"]
+    assert not client.has_pending_manual_turn()
+    assert not json.loads((session.directory / "manual.json").read_text())["is_submitted"]
+
+
+def test_submitted_turn_is_detected_for_reconnection(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """Enter直後の切断でも再接続時に回収対象を発見できる。"""
+    client, _session, _state = client_setup
+    client.console_input(b"\r", Mock())
+    assert client.has_pending_manual_turn()
+    with client._exclusive_turn():
+        assert client.has_pending_manual_turn()
+
+
+def test_submission_excludes_older_completion(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """書きかけ中に届いた古いStopを今回の最終回答として返さない。"""
+    client, session, _state = client_setup
+    client.console_input(b"draft", Mock())
+    append_event(session.journal_path, "Stop", "以前の完了")
+    client.console_input(b"\r", Mock())
+    append_event(session.journal_path, "Stop", "今回の最終回答")
+    assert list(client.observe_stream()) == ["今回の最終回答"]
+
+
+def test_completed_marker_is_not_overwritten(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """未回収の回答が残る場合は破棄せず入力を拒否する。"""
+    client, session, _state = client_setup
+    client.console_input(b"\r", Mock())
+    append_event(session.journal_path, "Stop", "前の回答")
+    (session.directory / "completed-manual.json").write_text("{}")
+    with pytest.raises(RuntimeError, match="回収中"):
+        client.console_input(b"x", Mock())
+    assert (session.directory / "manual.json").exists()
 
 
 def test_discard_manual_draft(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
