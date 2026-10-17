@@ -58,6 +58,7 @@ from argos.services.dashboard.server import DashboardServer, DashboardTlsConfig
 from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
+from argos.services.bluetooth_chime import BluetoothConnectionChime, build_bluetooth_chime
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
@@ -444,6 +445,7 @@ class ArgosApp:
         elif not self._settings.dry_run:
             log.info("ARGOS_PTT_GPIO が未設定のためGPIO PTT入力を無効化します")
         if not self._settings.dry_run and self._settings.ptt_bluetooth_mac:
+            self._bluetooth_chime = BluetoothConnectionChime(self._play_bluetooth_chime, self._shutdown)
             self._bluetooth_media = BluetoothMediaInput(
                 self._settings.ptt_bluetooth_mac,
                 self._bluetooth_button.handle_press,
@@ -452,6 +454,7 @@ class ArgosApp:
                 self._on_previous_slot,
                 self._bluetooth_button.cancel,
                 self._shutdown,
+                self._bluetooth_chime.update,
             )
         self._start_wakeword_listener()
         self._auth_coord.announce_required()
@@ -716,6 +719,15 @@ class ArgosApp:
             self._dashboard_state.set_wifi_status(read_wifi_status().to_dict())
         except Exception:
             log.exception("Wi-Fi状態の取得に失敗しました")
+
+    def _play_bluetooth_chime(self, connected: bool) -> None:
+        """発話ミュート・録音・他アプリ優先中は避けて短い接続音を鳴らす。"""
+        if self._settings.dry_run or self._speech.is_muted() or self._recorder.is_recording or self._audio.is_held:
+            return
+        try:
+            self._audio.play_wav(build_bluetooth_chime(connected, self._settings.voicevox_sample_rate))
+        except Exception:
+            log.exception("Bluetoothボタンの%s音を再生できませんでした", "接続" if connected else "切断")
 
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
