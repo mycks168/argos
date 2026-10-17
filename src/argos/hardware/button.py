@@ -60,6 +60,19 @@ class ButtonPtt:
             if self._state == PttState.BUSY:
                 self._state = PttState.IDLE
 
+    def cancel(self) -> None:
+        """入力機器の切断時に録音を破棄し、次の押下を受けられる状態へ戻す。"""
+        with self._lock:
+            active = self._state == PttState.LISTENING or self._pending_short_release_timer is not None
+            if self._pending_short_release_timer is not None:
+                self._pending_short_release_timer.cancel()
+                self._pending_short_release_timer = None
+            self._double_click_candidate_without_recording = False
+            self._last_quick_release_at = 0.0
+            self._state = PttState.IDLE
+        if active:
+            self._on_cancel()
+
     def handle_press(self) -> None:
         """物理ボタン押下イベントを処理する。"""
         callback = None

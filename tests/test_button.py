@@ -82,6 +82,24 @@ def test_short_press_cancels_recording(monkeypatch):
     assert button.state == PttState.IDLE
 
 
+def test_disconnect_cancels_active_press_and_resets_state():
+    """接続断後は録音を破棄し、次の押下を受けられる。"""
+    events = []
+    button = ButtonPtt(
+        on_press=lambda: events.append("press"),
+        on_release=lambda: events.append("release"),
+        on_double_click=lambda: events.append("double"),
+        on_cancel=lambda: events.append("cancel"),
+    )
+
+    button.handle_press()
+    button.cancel()
+    button.handle_press()
+
+    assert events == ["press", "cancel", "press"]
+    assert button.state == PttState.LISTENING
+
+
 def test_short_press_can_be_recorded_when_requested(monkeypatch):
     """本人確認中などは短い押下でも録音として処理できる。"""
     events = []

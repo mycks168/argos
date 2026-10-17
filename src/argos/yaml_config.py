@@ -70,6 +70,7 @@ EXACT_MAPPINGS = {
     ("audio", "listen_mode"): "ARGOS_LISTEN_MODE",
     ("audio", "silence_rms_threshold"): "SILENCE_RMS_THRESHOLD",
     ("ptt", "gpio"): "ARGOS_PTT_GPIO",
+    ("ptt", "bluetooth_mac"): "ARGOS_PTT_BLUETOOTH_MAC",
     ("tts", "delimiters"): "ARGOS_TTS_DELIMITERS",
     ("tts.cache", "enabled"): "ARGOS_TTS_CACHE_ENABLED",
     ("tts.cache", "max_chars"): "ARGOS_TTS_CACHE_MAX_CHARS",

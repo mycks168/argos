@@ -136,6 +136,13 @@ def test_load_ptt_gpio_number(monkeypatch):
     assert settings.ptt_gpio == 17
 
 
+def test_load_bluetooth_media_address(monkeypatch):
+    """Bluetoothメディアボタンの機器アドレスを読み込む。"""
+    monkeypatch.setenv("ARGOS_PTT_BLUETOOTH_MAC", " DC:2C:26:08:75:08 ")
+
+    assert load_settings().ptt_bluetooth_mac == "DC:2C:26:08:75:08"
+
+
 def test_load_agent_system_prompt_settings(monkeypatch):
     """エージェント共通システムプロンプト設定を読み込む。"""
     monkeypatch.setenv("ARGOS_AGENT_SYSTEM_PROMPT", "追加指示")

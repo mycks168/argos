@@ -28,6 +28,7 @@ tts:
     max_chars: 40
 ptt:
   gpio: 17
+  bluetooth_mac: DC:2C:26:08:75:08
 network:
   wifi_status_refresh_seconds: 15
 runtime:
@@ -63,6 +64,7 @@ agent:
     assert values["ARGOS_AUDIO_STATE_PATH"] == "~/.local/state/argos/audio.json"
     assert values["ARGOS_LISTEN_MODE"] == "vad"
     assert values["SILENCE_RMS_THRESHOLD"] == "180"
+    assert values["ARGOS_PTT_BLUETOOTH_MAC"] == "DC:2C:26:08:75:08"
     assert values["ARGOS_TTS_DELIMITERS"] == "。！？"
     assert values["ARGOS_TTS_CACHE_ENABLED"] == "false"
     assert values["ARGOS_TTS_CACHE_MAX_CHARS"] == "40"
