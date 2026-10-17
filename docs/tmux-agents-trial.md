@@ -41,6 +41,10 @@ Enterはtmuxの送信キーへ正規化し、Codexの拡張キー交渉の違い
 
 実行コマンドとモデルは既存の設定解決を使う。`execution_mode`未指定は従来の`cli`。
 Codexの`codex_home`を指定している場合は、このtmuxセッションだけの`CODEX_HOME`へ引き継ぐ。
+常駐Codexの起動には`--config check_for_update_on_startup=false`を追加し、更新案内による入力待ちを防ぐ。
+個人のconfig.toml・従来CLI方式・他providerには適用しない。更新は運用側で明示的に行う。
+起動済みの常駐Codexには再起動・同じ会話IDでの再開が必要。Enter専用ボタンは追加しない。
+既存台帳の設定指紋を変えないよう、ユーザー指定コマンドではなく起動時に引数を付加する。
 権限とsandboxも既存設定に従う。tmux方式でprint/exec/resume等を指定する追加引数は拒否する。
 試作では`-c`による追加設定も拒否する。共通設定や別セッションへの接続でフックや所有権を崩さないため。
 
@@ -79,6 +83,15 @@ ARGOS_TEST_CONSOLE_BROWSER=1 uv run --with playwright pytest tests/test_console_
 
 ## 仕様確認元
 
+更新案内の抑止は起動・provider分離の21件で確認し、起動制御モジュールの行カバレッジは100%。
+全体pytestは1,166件成功・10件スキップ、カバレッジ88.01%。
+品質ゲートcheckでは対象2ファイルのRuff・strict mypy成功、重複0、新規未使用コードなし。
+vultureが検出した既存試験のMock.return_value属性3件はモック設定として利用されるため削除しない。
+依存の追加やサービス層から上位へのimport追加はない。
+実運用のCodexは同じ会話ID・paneで再開し、更新確認無効の引数と更新案内の非表示を確認した。
+Runner・本体の再読込は返事終了後の`argos-codex-no-update-20261018.timer`で実施する。
+
 - [Codex公式フック仕様](https://learn.chatgpt.com/docs/hooks)
+- [Codex公式設定仕様](https://developers.openai.com/codex/config-reference/)
 - [agy公式フック仕様](https://www.agy.dev/docs/hooks/)
 - 搭載CLIの`--help`と、隔離セッションでの実測を併用。公式にない環境変数でagyのホームを差し替える方式は採らない。

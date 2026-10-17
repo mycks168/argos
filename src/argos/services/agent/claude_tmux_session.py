@@ -170,7 +170,9 @@ class ClaudeTmuxSession:
         """CLI固有のフック設定を、同じ所有セッションの管理から分離する。"""
         bootstrap = "接続確認です。ツールを使わず『準備完了』とだけ回答してください。"
         if self._spec.provider == "codex":
-            return (*self._spec.command, *codex_hooks(self.directory, session_id), bootstrap), ()
+            # 常駐端末を更新案内で止めず、CLI更新は運用側で行う。
+            return (*self._spec.command, "--config", "check_for_update_on_startup=false",
+                    *codex_hooks(self.directory, session_id), bootstrap), ()
         if self._spec.provider == "antigravity":
             return (*self._spec.command, "--prompt-interactive", bootstrap), agy_environment(self.directory, session_id, self._spec.cwd)
         hook_command = shlex.join([

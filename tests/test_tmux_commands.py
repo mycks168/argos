@@ -43,6 +43,24 @@ def test_codex_inline_hooks(tmp_path: Path) -> None:
         assert "hooks" in tomllib.loads(arguments[index + 1])
 
 
+@pytest.mark.parametrize("provider", ["claude", "codex", "antigravity"])
+def test_update_check_is_disabled_only_for_codex_startup(tmp_path: Path, provider: str) -> None:
+    """常駐Codex以外の起動や設定指紋を変えず、更新案内を抑止する。"""
+    settings = replace(load_settings(), agent_state_path=str(tmp_path / "state"))
+    slot = AgentSlot("試験", provider, str(tmp_path), execution_mode="tmux")
+    client = ClaudeTmuxClient(settings, slot)
+    hooks = tmp_path / ".agents"
+    hooks.mkdir()
+    (hooks / "hooks.json").write_text(json.dumps({"argos-tmux": {}}))
+    command, _environment = client._session._launch_arguments("generation")
+    override = "check_for_update_on_startup=false"
+    assert (override in command) is (provider == "codex")
+    assert override not in client._session._spec.command
+    if provider == "codex":
+        assert command[command.index(override) - 1] == "--config"
+        assert command.count(override) == 1
+
+
 def test_agy_environment(tmp_path: Path) -> None:
     """未導入のworkspaceを勝手に変更せず、明示的な設定を要求する。"""
     with pytest.raises(ValueError, match="workspace"):
