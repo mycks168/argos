@@ -1833,6 +1833,36 @@ class _TerminalGateway:
         source = ObservedTerminalInput(text, self._console.observe(name, provider))
         return self._app._terminal_process_turn(text=source, want_audio=want_audio, slot_name=name, slot_provider=provider)
 
+    def background_turn(self, event_id: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """子の完了通知はスロットの入力状態や親ターンのロックを変更しない。"""
+        if self._app._auth_coord.is_locked():
+            yield {"event":"error", "message":"本人確認が必要です"}
+            return
+        try:
+            with self._console.background(slot_name, slot_provider, event_id) as answer:
+                prefix = "子エージェントの回答です。\n"
+                text = answer if answer.startswith(prefix) else prefix + answer
+                message_id = "subagent-" + event_id
+                existing = self._app._dashboard_state.slot_messages(slot_name, slot_provider)
+                if not any(item.get("id") == message_id for item in existing):
+                    self._app._dashboard_state.merge_slot_messages(slot_name, slot_provider, [{
+                        "id":message_id, "role":"assistant", "text":text,
+                        "streaming":False, "created_at":"",
+                    }])
+                self._app._save_conversation_history()
+                if want_audio:
+                    for kind, payload in self._app._speech.synthesize_response_stream([text], _app_slot_key(slot_name, slot_provider)):
+                        if kind == "text":
+                            yield {"event":"text", "delta":str(payload)}
+                        elif isinstance(payload, bytes):
+                            yield {"event":"audio", "format":"wav", "data":base64.b64encode(payload).decode("ascii")}
+                else:
+                    yield {"event":"text", "delta":text}
+                yield {"event":"done", "text":text}
+        except (OSError, ValueError, RuntimeError):
+            log.exception("子エージェント回答の回収に失敗しました")
+            yield {"event":"error", "message":"子エージェント回答を回収できませんでした"}
+
 
 def _build_android_notice_watcher(
     settings: Settings, post: Callable[[dict[str, Any]], None]

@@ -6,7 +6,8 @@ import base64
 import threading
 import time
 import uuid
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -63,7 +64,8 @@ class LocalConsole:
     def read(self, offset: int) -> ConsoleRead:
         """UTF-8途中の切断を壊さない形式へ変換する。"""
         chunk = self.terminal.read(offset)
-        return ConsoleRead(chunk.offset, base64.b64encode(chunk.data).decode("ascii"), chunk.is_closed, self.client.has_pending_manual_turn())
+        return ConsoleRead(chunk.offset, base64.b64encode(chunk.data).decode("ascii"), chunk.is_closed,
+                           self.client.has_pending_manual_turn(), self.client.background_ids())
 
     def write(self, data: bytes) -> None:
         """音声処理中には生のキー入力を混入させない。"""
@@ -128,6 +130,18 @@ class ConsoleRegistry:
             yield from RemoteArgosClient(self._settings, slot).observe_stream()
         else:
             yield from ClaudeTmuxClient(self._settings, slot).observe_stream()
+
+    @contextmanager
+    def background(self, name: str, provider: str, event_id: str) -> Iterator[str]:
+        """子の回答回収を、通常入力や親の完了待ちから独立させる。"""
+        slot = self._find_slot(name, provider)
+        if self.execution_mode(name, provider) != "tmux":
+            raise ValueError("このスロットは子の回答回収に未対応です")
+        if slot.slot_type == "remote":
+            yield "".join(RemoteArgosClient(self._settings, slot).background_stream(event_id))
+        else:
+            with ClaudeTmuxClient(self._settings, slot).background_answer(event_id) as answer:
+                yield answer
 
     def _execute_connected(self, command: ReadConsole | WriteConsole | ResizeConsole | CloseConsole, connection: ConsoleConnection) -> ConsoleResponse:
         """読込をロック外で待ち、入力や他スロットを停止させない。"""

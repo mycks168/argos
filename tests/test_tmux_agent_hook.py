@@ -16,7 +16,9 @@ def test_hook_entrypoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
     (tmp_path / "session.json").write_text('{"session_id":"generation"}')
     monkeypatch.setattr(sys, "argv", ["hook", str(tmp_path), "generation", "codex", "SessionStart"])
     monkeypatch.setattr(sys, "stdin", io.StringIO('{"session_id":"native"}'))
-    runpy.run_module("argos.tools.tmux_agent_hook", run_name="__main__")
+    from argos.tools import tmux_agent_hook
+
+    runpy.run_path(str(tmux_agent_hook.__file__), run_name="__main__")
     output = json.loads(capsys.readouterr().out)
     assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 

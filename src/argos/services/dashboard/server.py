@@ -57,6 +57,9 @@ class TerminalTurnHandler(Protocol):
     def observe_turn(self, text: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
         """送信済み入力の回答を取得する。"""
 
+    def background_turn(self, event_id: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """通常入力と独立して子の完了回答を取得する。"""
+
 
 MAX_BODY_BYTES = 256 * 1024
 DEFAULT_CAMERA_SNAPSHOT_PATH = Path("/tmp/argos/camera-latest.jpg")
@@ -785,6 +788,8 @@ def _create_handler(
             mode = parse_qs(urlparse(self.path).query).get("input_mode", ["prompt"])[0]
             if mode == "observe":
                 return handler.observe_turn(text_input or "", want_audio, slot_name, slot_provider)
+            if mode == "background":
+                return handler.background_turn(text_input or "", want_audio, slot_name, slot_provider)
             if slot_name and slot_provider:
                 return handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio, slot_name=slot_name, slot_provider=slot_provider)
             return handler.process_turn(wav_bytes, text=text_input, want_audio=want_audio)
@@ -792,11 +797,14 @@ def _create_handler(
         def _validate_terminal_input(self, handler: TerminalTurnHandler, text_input: str | None) -> bool:
             """未対応の観測要求を通常入力へ変換せず拒否する。"""
             input_mode = parse_qs(urlparse(self.path).query).get("input_mode", ["prompt"])[0]
-            if input_mode not in {"prompt", "observe"} or (input_mode == "observe" and text_input is None):
+            if input_mode not in {"prompt", "observe", "background"} or (input_mode != "prompt" and text_input is None):
                 self._send_json({"error": "入力方式が不正です"}, HTTPStatus.BAD_REQUEST)
                 return False
             if input_mode == "observe" and not callable(getattr(handler, "observe_turn", None)):
                 self._send_json({"error": "接続先は端末回答の取得に未対応です"}, HTTPStatus.SERVICE_UNAVAILABLE)
+                return False
+            if input_mode == "background" and not callable(getattr(handler, "background_turn", None)):
+                self._send_json({"error": "接続先は子の回答取得に未対応です"}, HTTPStatus.SERVICE_UNAVAILABLE)
                 return False
             return True
 

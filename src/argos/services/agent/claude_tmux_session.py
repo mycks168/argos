@@ -179,7 +179,7 @@ class ClaudeTmuxSession:
         settings_path = self.directory / "hooks.json"
         handler = [{"hooks": [{"type": "command", "command": hook_command}]}]
         write_private_json(settings_path, json.dumps({
-            "hooks": {event: handler for event in ("SessionStart", "Stop", "StopFailure")},
+            "hooks": {event: handler for event in ("SessionStart", "Stop", "StopFailure", "SubagentStop")},
         }))
         command = (
             *self._spec.command, "--session-id", session_id,

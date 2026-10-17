@@ -73,7 +73,10 @@ class RemoteConsole:
         if not isinstance(payload.get("data"), str) or type(payload.get("offset")) is not int or type(payload.get("is_closed")) is not bool:
             raise RuntimeError("リモートARGOSの端末出力が不正です")
         self._is_closed = payload["is_closed"]
-        return ConsoleRead(payload["offset"], payload["data"], self._is_closed, payload.get("has_pending_turn") is True)
+        ids = payload.get("background_ids", [])
+        if not isinstance(ids, list) or not all(isinstance(item, str) for item in ids):
+            raise RuntimeError("リモートARGOSの子エージェント回答一覧が不正です")
+        return ConsoleRead(payload["offset"], payload["data"], self._is_closed, payload.get("has_pending_turn") is True, tuple(ids))
 
     def write(self, data: bytes) -> None:
         """端末入力はコードとして解釈せず中継する。"""

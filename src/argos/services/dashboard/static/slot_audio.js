@@ -10,6 +10,7 @@
       this.queues = new Map();
       this.revision = 0;
       this.isDraining = false;
+      this.isPaused = false;
     }
     /** 非選択スロットの音声は戻るまで保持する。 */
     select(key) {
@@ -35,13 +36,24 @@
       this.player.cancel();
       return this.generation;
     }
+    /** マイクへ回答音声を混ぜず、到着した子の回答は保持する。 */
+    pause() {
+      this.isPaused = true;
+      this.revision += 1;
+      this.player.cancel();
+    }
+    /** 録音終了後に保留していた回答を順に再生する。 */
+    resume() {
+      this.isPaused = false;
+      this.drain();
+    }
     /** 切替中に止めた文はキューに残し、戻った時に文頭から再生する。 */
     async drain() {
-      if (this.isDraining) return;
+      if (this.isDraining || this.isPaused) return;
       this.isDraining = true;
       try {
         let queue = this.queues.get(this.key);
-        while (queue?.length) {
+        while (queue?.length && !this.isPaused) {
           const revision = this.revision;
           const item = queue[0];
           if (item.url) await this.player.enqueueUrl(item.url, item.options, this.player.generation);

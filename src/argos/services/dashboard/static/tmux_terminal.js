@@ -136,6 +136,7 @@
     offset = output.offset;
     status.textContent = "接続済み · 端末内のSpaceは文字入力";
     if (output.has_pending_turn) notify("submitted");
+    if (output.background_ids?.length) notify("background", {ids:output.background_ids});
     if (output.is_closed) {
       closeConnection();
       status.textContent = "端末へ再接続しています";

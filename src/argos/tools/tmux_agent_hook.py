@@ -8,6 +8,8 @@ from pathlib import Path
 from argos.services.agent.claude_tmux_events import MAX_EVENT_BYTES
 from argos.services.agent.claude_tmux_session import QUESTION_INSTRUCTION
 from argos.services.agent.tmux_native_events import parse_native_event, record_native
+from argos.services.agent.subagent_hooks import record_subagent
+from argos.services.agent.agy_subagents import record_agy_child_event
 
 
 def main() -> None:
@@ -16,13 +18,19 @@ def main() -> None:
     parser.add_argument("directory", type=Path)
     parser.add_argument("generation")
     parser.add_argument("provider", choices=["codex", "antigravity"])
-    parser.add_argument("event", choices=["SessionStart", "Stop", "Interrupt"])
+    parser.add_argument("event", choices=["SessionStart", "Stop", "Interrupt", "SubagentStop", "SubagentLink"])
     arguments = parser.parse_args()
     raw = sys.stdin.read(MAX_EVENT_BYTES + 1)
     if len(raw.encode()) > MAX_EVENT_BYTES:
         raise ValueError("フック入力が1MiBを超えています")
-    event = parse_native_event(json.loads(raw), arguments.provider, arguments.event)
-    record_native(arguments.directory, arguments.generation, arguments.provider, event)
+    payload = json.loads(raw)
+    if arguments.provider == "antigravity" and record_agy_child_event(arguments.directory, arguments.generation, arguments.event, payload):
+        pass
+    elif arguments.event == "SubagentStop":
+        record_subagent(arguments.directory, arguments.generation, payload)
+    else:
+        event = parse_native_event(payload, arguments.provider, arguments.event)
+        record_native(arguments.directory, arguments.generation, arguments.provider, event)
     output: dict[str, object] = {}
     if arguments.event == "SessionStart":
         output = {"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": QUESTION_INSTRUCTION}}

@@ -1,6 +1,7 @@
 """ローカル・リモートの端末登録簿とHTTP認証を検証する。"""
 
 import json
+from contextlib import nullcontext
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock
@@ -38,6 +39,8 @@ def test_registry_local(registry: ConsoleRegistry, monkeypatch: pytest.MonkeyPat
     terminal.read.return_value = TerminalChunk(b"abc", 3, False)
     client.observe_stream.return_value = iter(["回答"])
     client.has_pending_manual_turn.return_value = False
+    client.background_ids.return_value = ()
+    client.background_answer.return_value = nullcontext("子の結果")
     monkeypatch.setattr("argos.services.agent.console_registry.ClaudeTmuxClient", Mock(return_value=client))
     monkeypatch.setattr("argos.services.agent.console_registry.TerminalPty", Mock(return_value=terminal))
     monkeypatch.setattr("argos.services.agent.console_registry.run_tmux", Mock())
@@ -51,6 +54,8 @@ def test_registry_local(registry: ConsoleRegistry, monkeypatch: pytest.MonkeyPat
     terminal.write.assert_called_once_with(b"x")
     registry.execute(ResizeConsole(opened.connection_id, TerminalSize(120, 40)))
     assert list(registry.observe("試験", "claude")) == ["回答"]
+    with registry.background("試験", "claude", "a" * 64) as answer:
+        assert answer == "子の結果"
     assert registry.execute(CloseConsole(opened.connection_id)) == ConsoleAck()
     terminal.close.assert_called_once()
     with pytest.raises(KeyError):
@@ -68,6 +73,9 @@ def test_registry_limits_and_modes(registry: ConsoleRegistry, monkeypatch: pytes
         registry.execute(OpenConsole("試験", "claude", TerminalSize(80, 24)))
     with pytest.raises(ValueError):
         list(registry.observe("試験", "claude"))
+    with pytest.raises(ValueError):
+        with registry.background("試験", "claude", "a" * 64):
+            pytest.fail("従来方式へ子回答を送ってはいけない")
     monkeypatch.setattr("argos.services.agent.console_registry.MAX_CONNECTIONS", 0)
     with pytest.raises(RuntimeError, match="上限"):
         registry.execute(OpenConsole("試験", "claude", TerminalSize(80, 24)))
@@ -88,12 +96,15 @@ def test_remote_registry(registry: ConsoleRegistry, monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr("argos.services.agent.console_registry.RemoteConsole", Mock(return_value=connection))
     client = Mock()
     client.observe_stream.return_value = iter(["遠隔回答"])
+    client.background_stream.return_value = iter(["遠隔の子回答"])
     monkeypatch.setattr("argos.services.agent.console_registry.RemoteArgosClient", Mock(return_value=client))
     assert registry.execution_mode("遠隔", "remote") == "tmux"
     assert registry.execution_mode("遠隔", "remote") == "tmux"
     lookup.assert_called_once()
     registry.execute(OpenConsole("遠隔", "remote", TerminalSize(80, 24)))
     assert list(registry.observe("遠隔", "remote")) == ["遠隔回答"]
+    with registry.background("遠隔", "remote", "a" * 64) as answer:
+        assert answer == "遠隔の子回答"
     registry.close()
     connection.close.assert_called_once()
 
@@ -111,6 +122,11 @@ def test_remote_console(monkeypatch: pytest.MonkeyPatch) -> None:
     response.json.return_value = {"offset": 3, "data": "YWJj", "is_closed": True}
     monkeypatch.setattr("argos.services.agent.remote_console.requests.get", Mock(return_value=response))
     assert console.read(0) == ConsoleRead(3, "YWJj", True)
+    response.json.return_value["background_ids"] = ["a" * 64]
+    assert console.read(0).background_ids == ("a" * 64,)
+    response.json.return_value["background_ids"] = [1]
+    with pytest.raises(RuntimeError, match="回答一覧"):
+        console.read(0)
     assert console.is_closed
     response.status_code = 404
     with pytest.raises(RuntimeError, match="失効"):

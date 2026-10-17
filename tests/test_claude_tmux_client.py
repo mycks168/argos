@@ -13,6 +13,7 @@ from argos.services.agent.claude_tmux_client import ClaudeTmuxClient, claude_com
 from argos.services.agent.claude_tmux_events import record_event
 from argos.services.agent.claude_tmux_session import ClaudeTmuxState
 from argos.services.agent.client import create_provider_client
+from argos.services.agent.background_answers import BackgroundAnswers
 
 
 @pytest.fixture
@@ -35,6 +36,25 @@ def client_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Claud
 def append_event(path: Path, event: str, text: str = "", session_id: str = "session") -> None:
     """フック受信を外部プロセスなしで再現する。"""
     record_event(path, json.dumps({"hook_event_name": event, "session_id": session_id, "last_assistant_message": text}))
+
+
+def test_background_read_without_start(client_setup: tuple[ClaudeTmuxClient, Mock, ClaudeTmuxState]) -> None:
+    """子の照会は新しいCLIを立ち上げず、親の入力ロック中にも配信する。"""
+    client, session, state = client_setup
+    session.saved_state.return_value = None
+    assert client.background_ids() == ()
+    with pytest.raises(ValueError, match="親セッション"):
+        with client.background_answer("a" * 64):
+            pytest.fail("親がない回答を配信してはいけない")
+    session.saved_state.return_value = state
+    store = BackgroundAnswers(session.directory)
+    store.record(state.session_id, "child", "worker", "子の回答")
+    event_id, = client.background_ids()
+    with client._exclusive_turn():
+        with client.background_answer(event_id) as answer:
+            assert answer == "子の回答"
+    assert client.background_ids() == ()
+    session.open.assert_not_called()
 
 
 @pytest.mark.parametrize("notification", [b"\x1b[I", b"\x1b[O"])

@@ -69,12 +69,18 @@ class RemoteArgosClient:
         """新しい発言を送らず、接続先の端末入力の回答を中継する。"""
         yield from self._turn_stream("端末から入力", True)
 
-    def _turn_stream(self, prompt: str, is_observing: bool) -> Iterable[str]:
+    def background_stream(self, event_id: str) -> Iterable[str]:
+        """リモートの子回答を通常入力として再送しない。"""
+        yield from self._turn_stream(event_id, True, is_background=True)
+
+    def _turn_stream(self, prompt: str, is_observing: bool, is_background: bool = False) -> Iterable[str]:
         """端末入力の回収でも既存の認証・SSE処理を共用する。"""
-        self._select_remote_slot()
+        if not is_background:
+            self._select_remote_slot()
         query = ""
         if is_observing:
-            query = "?" + urlencode({"name": self._slot.remote_name, "provider": self._slot.remote_provider, "input_mode": "observe"})
+            query = "?" + urlencode({"name": self._slot.remote_name, "provider": self._slot.remote_provider,
+                                      "input_mode": "background" if is_background else "observe"})
         response = requests.post(
             f"{self._slot.remote_url}/api/terminal/turn{query}",
             headers=self._headers(text_content=True),
@@ -86,20 +92,27 @@ class RemoteArgosClient:
         # requestsはcharset未指定のtext/*をISO-8859-1とみなすため、SSEはUTF-8へ固定する。
         response.encoding = "utf-8"
         try:
-            for raw_line in response.iter_lines(decode_unicode=True):
-                line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
-                if not line.startswith("data: "):
-                    continue
-                payload = json.loads(line[6:])
-                event = str(payload.get("event", ""))
-                if event == "text":
-                    delta = str(payload.get("delta", ""))
-                    if delta:
-                        yield delta
-                elif event == "error":
-                    raise RuntimeError(str(payload.get("message", "リモートArgosでエラーが発生しました")))
+            yield from self._response_deltas(response, should_require_done=is_background)
         finally:
             response.close()
+
+    @staticmethod
+    def _response_deltas(response: requests.Response, should_require_done: bool) -> Iterable[str]:
+        """子の通知は途中切断を成功にせず、既存の通常応答とは互換に読む。"""
+        did_complete = False
+        for raw_line in response.iter_lines(decode_unicode=True):
+            line = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
+            if not line.startswith("data: "):
+                continue
+            payload = json.loads(line[6:])
+            event = str(payload.get("event", ""))
+            if event == "text" and payload.get("delta"):
+                yield str(payload["delta"])
+            elif event == "error":
+                raise RuntimeError(str(payload.get("message", "リモートArgosでエラーが発生しました")))
+            did_complete = did_complete or event == "done"
+        if should_require_done and not did_complete:
+            raise RuntimeError("リモートの子回答が完了前に切断されました")
 
     def load_current_history(self) -> list[dict[str, object]]:
         """リモート側の対象スロットから会話履歴を取得する。"""

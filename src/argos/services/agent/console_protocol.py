@@ -84,6 +84,7 @@ class ConsoleRead:
     data: str
     is_closed: bool
     has_pending_turn: bool = False
+    background_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

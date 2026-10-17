@@ -12,6 +12,7 @@ import time
 from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from argos.services.agent.background_answers import BackgroundAnswers
 
 from argos.config import AgentSlot, Settings, resolve_agent_slot_command, resolve_agent_slot_model
 from argos.services.agent.claude_tmux_session import (
@@ -105,6 +106,24 @@ class ClaudeTmuxClient:
         """表示の接続では会話のロックを奪わず、同じClaudeへattachする。"""
         state, _is_created = self._session.open()
         return state
+
+    def background_ids(self) -> tuple[str, ...]:
+        """子の完了照会で親CLIを起動したりターンロックを奪ったりしない。"""
+        state = self._session.saved_state()
+        if state and self._slot.provider == "antigravity":
+            from argos.services.agent.agy_subagents import refresh_agy_children
+
+            refresh_agy_children(self._session.directory, state.session_id)
+        return BackgroundAnswers(self._session.directory).pending(state.session_id) if state else ()
+
+    @contextmanager
+    def background_answer(self, event_id: str) -> Iterator[str]:
+        """通常ターンとは別のロックで、子の回答だけを一度配信する。"""
+        state = self._session.saved_state()
+        if state is None:
+            raise ValueError("子エージェントの親セッションがありません")
+        with BackgroundAnswers(self._session.directory).consume(event_id, state.session_id) as answer:
+            yield answer.text
 
     def console_input(self, data: bytes, write: Callable[[], None]) -> None:
         """音声ターンへの割込みと、端末の入力途中への音声の混入を防ぐ。"""

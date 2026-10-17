@@ -39,7 +39,7 @@ def hook_command(directory: Path, generation: str, provider: str, event: str) ->
 def codex_hooks(directory: Path, generation: str) -> tuple[str, ...]:
     """ユーザーのconfig.tomlは変更せず、この起動だけにフックを指定する。"""
     arguments: list[str] = []
-    for event in ("SessionStart", "Stop", "Interrupt"):
+    for event in ("SessionStart", "Stop", "Interrupt", "SubagentStop"):
         handlers = [{"hooks": [{"type": "command", "command": hook_command(directory, generation, "codex", event)}]}]
         encoded_command = json.dumps(handlers[0]["hooks"][0]["command"])
         arguments.extend(["--config", f'hooks.{event}=[{{hooks=[{{type="command",command={encoded_command}}}]}}]'])

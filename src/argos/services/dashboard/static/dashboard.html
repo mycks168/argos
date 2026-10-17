@@ -1276,6 +1276,7 @@
 
   <script src="/static/browser_audio.js"></script>
   <script src="/static/slot_audio.js"></script>
+  <script src="/static/background_receiver.js"></script>
   <script src="/static/message_text.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script src="/static/sp_notice_popup.js"></script>
@@ -1353,6 +1354,7 @@
         if (!isSlotTurnInFlight(currentAgentSlotKey)) sendVoiceTurn(new Blob(["端末から入力"], {type:"text/plain"}), currentAgentSlotKey, voiceOperationSequence, slotAudio.generation, "observe");
       },
       onCancel: () => cancelBrowserAudio(),
+      onBackground: (slot, ids) => backgroundReceiver.receive(slot, ids),
       onChange: () => { previousMessages = ""; },
     });
     let previousNotifications = "";
@@ -1381,6 +1383,11 @@
       },
     });
     const slotAudio = new ArgosSlotAudio.SlotAudio(voicePlayer);
+    const backgroundReceiver = new ArgosBackgroundReceiver.BackgroundReceiver({
+      token:dashboardToken,
+      onAudio:(slot, data) => queueVoiceAudio(data, slotAudio.generation, `${slot.provider}\u0000${slot.name}`),
+      onError:error => setTextComposerError(error.message),
+    });
     let spNotificationSeenAt = localStorage.getItem(spNotificationSeenAtStorageKey) || "";
     let latestNotifications = [];
     // SP表示では、新しい通知が来たら通知欄を数秒だけ自動で開く。バッジだけでは小さくて気づけないため。
@@ -2048,6 +2055,7 @@
         return;
       }
       const playbackGeneration = slotAudio.cancel();
+      slotAudio.pause();
       setTextComposerError("");
       // 物理PTTと同じく、マイク許可待ちの間も押下を認識したことを表示する。
       setVoiceState("recording");
@@ -2083,6 +2091,7 @@
     function stopVoiceStream() {
       voiceStream?.getTracks().forEach(track => track.stop());
       voiceStream = null;
+      slotAudio.resume();
     }
     async function stopVoiceRecording(isPushToTalk = false) {
       if (!voiceRecorder || voiceRecorder.state === "inactive") {

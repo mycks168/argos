@@ -157,7 +157,7 @@ def _record_bound_event(directory: Path, generation: str, provider: str, event: 
 
 def _completion(event: NativeEvent, provider: str, last_step: int) -> tuple[str, str, int]:
     """処理完了と中断を区別し、空回答を成功にしない。"""
-    if event.event == "Interrupt" or event.error or not event.is_idle:
+    if event.event == "Interrupt" or event.error or (not event.is_idle and provider != "antigravity"):
         return "StopFailure", "", last_step
     text = event.text
     if provider == "antigravity":

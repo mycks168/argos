@@ -79,6 +79,7 @@
   </dialog>
   <script src="/static/browser_audio.js"></script>
   <script src="/static/slot_audio.js"></script>
+  <script src="/static/background_receiver.js"></script>
   <script src="/static/message_text.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script>
@@ -109,6 +110,11 @@
       },
     });
     const slotAudio = new ArgosSlotAudio.SlotAudio(audioPlayer);
+    const backgroundReceiver = new ArgosBackgroundReceiver.BackgroundReceiver({
+      token:dashboardToken,
+      onAudio:(slot, data) => queueAudio(slotKey(slot), data, slotAudio.generation),
+      onError:error => console.error("子の回答取得に失敗しました", error),
+    });
     let latestState = null;
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
@@ -178,6 +184,7 @@
           onFocus: () => { clearAttention(tile); playPendingAudio(key); },
           onVoice: () => toggleRecording(slot, false),
           onCancel: () => cancelGridAudio(),
+          onBackground: (target, ids) => backgroundReceiver.receive(target, ids),
         });
         tile.consoleView.setSlot(slot);
       }
@@ -375,6 +382,7 @@
       }
       try {
         recordingPlaybackGeneration = slotAudio.cancel();
+        slotAudio.pause();
         await audioPlayer.activate();
         recorderStream = await navigator.mediaDevices.getUserMedia({
           audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true},
@@ -394,6 +402,7 @@
             button.classList.remove("recording");
           }
           recordingSlotKey = "";
+          slotAudio.resume();
           sendTurn(slot, audio, recordingPlaybackGeneration);
         }, {once: true});
         recorder.start();
@@ -406,6 +415,7 @@
         }
       } catch (error) {
         pttReleasePending = false;
+        slotAudio.resume();
         slotElements.get(key).querySelector(".tile-status").textContent = "マイクを利用できません";
       }
     }

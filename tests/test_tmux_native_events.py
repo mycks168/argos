@@ -90,6 +90,15 @@ def test_agy_delayed_log(directory: Path, monkeypatch: pytest.MonkeyPatch) -> No
     assert agy_answer(replace(_event("Stop"), transcript=str(path)), -1) == ("回答", 1)
 
 
+def test_agy_parent_reply_does_not_wait_for_children(directory: Path) -> None:
+    """子が動作中でも、確定した親の返事は取得して次の入力を許す。"""
+    path = _transcript(directory, _answer())
+    event = replace(_event("Stop"), transcript=str(path), is_idle=False)
+    record_native(directory, "generation", "antigravity", event)
+    events, _offset = read_events(directory / "events.jsonl", 0)
+    assert events[-1].event == "Stop" and events[-1].text == "回答"
+
+
 def test_agy_bad_logs(directory: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """不正パス・異常データ・過大なログを正常な回答としない。"""
     monkeypatch.setattr("argos.services.agent.tmux_native_events.time.sleep", Mock())

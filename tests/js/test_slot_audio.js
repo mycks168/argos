@@ -54,3 +54,16 @@ test("停止すると後着した古い回答も再生せず、新しい回答�
   assert.deepEqual(played, ["途中", "新しい回答"]);
   end(); await flush();
 });
+
+test("録音中に到着した子の回答は保留し、録音終了後に一つずつ鳴らす", async () => {
+  const {audio, played, end} = setup();
+  audio.select("A"); audio.pause();
+  audio.enqueue("A", {data:"子1"}, audio.generation);
+  audio.enqueue("A", {data:"子2"}, audio.generation);
+  assert.deepEqual(played, []);
+  audio.resume();
+  assert.deepEqual(played, ["子1"]);
+  end(); await flush();
+  assert.deepEqual(played, ["子1", "子2"]);
+  end(); await flush();
+});
