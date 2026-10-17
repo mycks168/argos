@@ -59,6 +59,7 @@ from argos.services.dashboard.state import DashboardState
 from argos.services.face_auth import FaceAuthVerifier
 from argos.services.greeting import GreetingManager
 from argos.services.bluetooth_chime import BluetoothConnectionChime, build_bluetooth_chime
+from argos.services.bluetooth_devices import read_connected_bluetooth_types
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
@@ -363,6 +364,7 @@ class ArgosApp:
         self._agent_delivery_thread: threading.Thread | None = None
         self._agent_usage_monitor: PeriodicMonitor | None = None
         self._wifi_status_monitor: PeriodicMonitor | None = None
+        self._bluetooth_status_monitor: PeriodicMonitor | None = None
         self._worker: threading.Thread | None = None
         self._wakeword_listener: WakeWordListener | None = None
         self._wakeword_recording = threading.Event()
@@ -462,6 +464,7 @@ class ArgosApp:
         self._start_agent_delivery_monitor()
         self._start_agent_usage_monitor()
         self._start_wifi_status_monitor()
+        self._start_bluetooth_status_monitor()
         if self._settings.dry_run:
             self._run_text_loop()
             return
@@ -719,6 +722,22 @@ class ArgosApp:
             self._dashboard_state.set_wifi_status(read_wifi_status().to_dict())
         except Exception:
             log.exception("Wi-Fi状態の取得に失敗しました")
+
+    def _start_bluetooth_status_monitor(self) -> None:
+        """接続中Bluetooth機器の種類を定期的に更新する。"""
+        if self._dashboard_server is None:
+            return
+        self._bluetooth_status_monitor = PeriodicMonitor(
+            "bluetooth-status", 5.0, self._refresh_bluetooth_status, self._shutdown
+        )
+        self._bluetooth_status_monitor.start()
+
+    def _refresh_bluetooth_status(self) -> None:
+        """OSが認識するBluetooth接続種別をダッシュボードへ反映する。"""
+        try:
+            self._dashboard_state.set_bluetooth_devices(read_connected_bluetooth_types())
+        except Exception:
+            log.exception("Bluetooth接続状態の取得に失敗しました")
 
     def _play_bluetooth_chime(self, connected: bool) -> None:
         """発話ミュート・録音・他アプリ優先中は避けて短い接続音を鳴らす。"""
