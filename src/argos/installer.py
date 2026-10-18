@@ -34,6 +34,11 @@ QUIET_LXC_SUDOERS_CONTENT = (
     "# ARGOS: Waydroidへ頻繁に送るlxc-attachの実行記録を残さない（SDカードへの書き込みを減らす）\n"
     "Defaults!/usr/bin/lxc-attach !log_allowed, !pam_session\n"
 )
+# BluetoothメディアボタンのPTTに使うキー。ARGOSは入力デバイスを直接読むが、同じキーが
+# labwc経由でフォーカス中のWaydroidにも届き、再生ボタンの長押しでGeminiが起動してしまう。
+# labwcのキー割り当てにすると、labwcがキーを受け取ってアプリへ渡さなくなる。
+PTT_BLUETOOTH_MAC_KEY = "ARGOS_PTT_BLUETOOTH_MAC"
+MEDIA_KEYS = ("XF86AudioPlay", "XF86AudioNext", "XF86AudioPrev")
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -1188,6 +1193,8 @@ def _apply_window_layout_choice(
                 output_func(f"警告: {tool}が見つかりません。画面分割にはWaydroidとlabwcが必要です")
         _run_user_systemctl(plan, ["enable", "--now", unit], runner=runner)
         _enable_multitouch(plan, runner=runner, output_func=output_func)
+        if load_yaml_environment(config_path).get(PTT_BLUETOOTH_MAC_KEY, "").strip():
+            _block_media_keys_for_apps(plan, runner=runner, output_func=output_func)
     else:
         # 画面分割を使わない端末でも毎回通る後始末なので、失敗してもインストールは止めない。
         for name in ((watchdog,) if has_watchdog else ()) + (unit,):
@@ -1247,6 +1254,54 @@ def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func:
     # labwcはSIGHUPで設定を再読み込みする。起動していなければ次回起動時に反映される。
     runner(["pkill", "-HUP", "-u", plan.service_user, "-x", "labwc"], check=False)
     output_func(f"タッチをマウス変換から外しました（ピンチ操作用）。元の設定: {backup}")
+
+
+def _block_media_keys_for_apps(
+    plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print
+) -> None:
+    """再生・次・前のキーをlabwcで受け取り、Waydroidなどのアプリへ渡さないようにする。
+
+    何もしないコマンドを割り当てたキーは、labwcが受け取ってアプリへ渡さない。
+    labwcはキー割り当てが1つもないと標準の割り当てを使うため、割り当てがない場合は
+    標準を残す<default/>も足す。割り当て済みのキーは変えず、変更前にバックアップを残す。
+    """
+    config = Path(plan.service_home) / ".config/labwc/rc.xml"
+    if not config.is_file():
+        return
+    text = config.read_text(encoding="utf-8")
+    try:
+        root = ET.fromstring(text)
+    except ET.ParseError:
+        output_func(f"警告: {config}を解析できないため、メディアキーの設定は変更しません")
+        return
+    nodes = [node for node in root.iter() if str(node.tag).rpartition("}")[2] in {"keybind", "default"}]
+    bound = {node.get("key") for node in nodes}
+    keys = [key for key in MEDIA_KEYS if key not in bound]
+    if not keys:
+        return
+    lines = [] if nodes else ["\t\t<default />"]
+    lines += [f'\t\t<keybind key="{key}"><action name="Execute" command="true" /></keybind>' for key in keys]
+    block = "\n".join(["\t\t<!-- ARGOS: PTTのメディアキーをWaydroidへ渡さない -->", *lines]) + "\n"
+    keyboard = re.search(r"<keyboard\s*/>|</keyboard>", text)
+    if keyboard is None:
+        closing = text.rfind("</openbox_config>")
+        if closing < 0:
+            output_func(f"警告: {config}の構成が想定と違うため、メディアキーの設定は変更しません")
+            return
+        text = text[:closing] + "\t<keyboard>\n" + block + "\t</keyboard>\n" + text[closing:]
+    elif keyboard.group(0) == "</keyboard>":
+        text = text[: keyboard.start()] + block + "\t" + text[keyboard.start() :]
+    else:
+        text = text[: keyboard.start()] + "<keyboard>\n" + block + "\t</keyboard>" + text[keyboard.end() :]
+    backup = config.with_name(config.name + ".before-argos-media-keys")
+    if not backup.exists():
+        shutil.copy2(config, backup)
+        if os.geteuid() == 0:
+            shutil.chown(backup, plan.service_user, plan.service_group)
+    config.write_text(text, encoding="utf-8")
+    # labwcはSIGHUPで設定を再読み込みする。起動していなければ次回起動時に反映される。
+    runner(["pkill", "-HUP", "-u", plan.service_user, "-x", "labwc"], check=False)
+    output_func(f"メディアキーをWaydroidへ渡さないようにしました。元の設定: {backup}")
 
 
 def _restart_service(service: BundledService, plan: InstallPlan, *, runner=subprocess.run) -> None:
