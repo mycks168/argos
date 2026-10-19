@@ -32,6 +32,7 @@ from argos.core.notice_speaker import BUSY_STATUS_CODES, CONVERSATION_STATUS_COD
 from argos.core.periodic_monitor import PeriodicMonitor
 from argos.core.speech_controller import SpeechController
 from argos.core.status_controller import StatusController
+from argos.services.agent.background_text import background_text
 from argos.hardware.audio import (
     AudioInputStream,
     AudioPlayer,
@@ -48,6 +49,7 @@ from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.agent.runner_client import RunnerSlotBusyError
+from argos.services.agent.console_protocol import ConsoleCommand, ConsoleResponse, ObservedTerminalInput, split_terminal_input
 from argos.services.agent_usage import AgentUsageProvider
 from argos.services.android_notice.rules import parse_apps, parse_mute_rules
 from argos.services.android_notice.summarizer import OllamaSummarizer
@@ -506,27 +508,40 @@ class ArgosApp:
         """Agent Runnerの未配信結果を定期的に回収する。"""
         while not self._shutdown.is_set():
             try:
-                list_undelivered = getattr(self._agent, "list_undelivered")
-                mark_delivered = getattr(self._agent, "mark_delivered")
-                for job in list_undelivered():
-                    if not isinstance(job, dict):
-                        continue
-                    job_id = str(job.get("job_id", ""))
-                    slot_name = str(job.get("slot_name", ""))
-                    provider = str(job.get("provider", ""))
-                    status = str(job.get("status", ""))
-                    result = str(job.get("result", "")).strip()
-                    error = str(job.get("error", "")).strip()
-                    response_target = str(job.get("response_target", "local"))
-                    if status == "completed" and result:
-                        self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
-                        mark_delivered(job_id)
-                    elif status == "failed":
-                        self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
-                        mark_delivered(job_id)
+                self._recover_runner_results()
+                if not self._is_speech_busy() and not (self._pending_speech_thread and self._pending_speech_thread.is_alive()):
+                    self._start_pending_slot_response()
             except Exception:
                 log.exception("Agent Runner未配信ジョブの確認に失敗しました")
             self._shutdown.wait(5)
+
+    def _recover_runner_results(self) -> None:
+        """一回分の未配信結果を、履歴保存後だけ既読にする。"""
+        list_undelivered = getattr(self._agent, "list_undelivered", None)
+        mark_delivered = getattr(self._agent, "mark_delivered", None)
+        if not callable(list_undelivered) or not callable(mark_delivered):
+            raise RuntimeError("Agent Runnerの未配信回収機能がありません")
+        for job in list_undelivered():
+            if not isinstance(job, dict):
+                continue
+            job_id = str(job.get("job_id", ""))
+            slot_name = str(job.get("slot_name", ""))
+            provider = str(job.get("provider", ""))
+            status = str(job.get("status", ""))
+            result = str(job.get("result", "")).strip()
+            error = str(job.get("error", "")).strip()
+            response_target = str(job.get("response_target", "local"))
+            generation = str(job.get("session_id", ""))
+            if response_target in {"background", "background_local"} and generation and not self._matches_reply_generation(slot_name, provider, generation):
+                log.info("以前の会話の後続回答を再生対象外にしました: job_id=%s", job_id)
+                mark_delivered(job_id)
+                continue
+            if status == "completed" and result:
+                self._deliver_runner_result(job_id, slot_name, provider, result, response_target)
+                mark_delivered(job_id)
+            elif status == "failed":
+                self._deliver_runner_error(job_id, slot_name, provider, error, response_target)
+                mark_delivered(job_id)
 
     def _deliver_runner_result(
         self,
@@ -537,6 +552,9 @@ class ArgosApp:
         response_target: str = "local",
     ) -> None:
         """Runnerで完了した応答を会話履歴と通知へ反映する。"""
+        if response_target in {"background", "background_local"}:
+            self._deliver_background_result(job_id, (slot_name, provider), result, response_target == "background_local")
+            return
         if response_target == "terminal":
             slot_key = _app_slot_key(slot_name, provider)
             was_reconciled = self._dashboard_state.reconcile_runner_result(
@@ -583,6 +601,33 @@ class ArgosApp:
         )
         self._save_conversation_history()
         log.info("Agent Runner未配信応答を反映しました: job_id=%s slot=%s provider=%s", job_id, slot_name, provider)
+
+    def _deliver_background_result(self, job_id: str, slot: tuple[str, str], result: str, is_local: bool) -> None:
+        """後続回答の履歴IDをブラウザとそろえ、再回収でも表示を重ねない。"""
+        name, provider = slot
+        message_id = "subagent-" + job_id
+        has_message = any(item.get("id") == message_id for item in self._dashboard_state.slot_messages(name, provider))
+        if not has_message:
+            self._dashboard_state.merge_slot_messages(name, provider, [{
+                "id":message_id, "role":"assistant", "text":result, "streaming":False, "created_at":"",
+            }])
+            self._dashboard_state.set_slot_unread(name, provider, not self._is_current_slot_key(_app_slot_key(name, provider)))
+            self._dashboard_state.add_notification(f"{name} 後続応答完了", "後から届いた回答を回収しました。", source="ARGOS")
+        if is_local and not has_message:
+            key = _app_slot_key(name, provider)
+            previous = self._pending_slot_speech.get(key, "")
+            self._pending_slot_speech[key] = previous + "\n" + result if previous else result
+        self._conversation_store.save_histories(self._dashboard_state.export_histories())
+
+    def _matches_reply_generation(self, name: str, provider: str, generation: str) -> bool:
+        """会話リセット後に旧世代の回答を新しい会話へ混ぜない。"""
+        from argos.services.agent.claude_tmux_client import ClaudeTmuxClient
+
+        slot = next((slot for slot in self._settings.agent_slots if slot.name == name and slot.provider == provider), None)
+        if slot is None or slot.slot_type == "remote" or slot.execution_mode != "tmux":
+            return False
+        state = ClaudeTmuxClient(self._settings, slot)._session.saved_state()
+        return state is not None and state.session_id == generation
 
     def _deliver_runner_error(
         self,
@@ -1050,6 +1095,7 @@ class ArgosApp:
                 "name": slot.name,
                 "provider": slot.provider,
                 "type": slot.slot_type,
+                "execution_mode": slot.execution_mode,
                 "model": resolve_agent_slot_model(self._settings, slot),
                 "usage_provider": slot.remote_provider.strip().lower() if slot.slot_type == "remote" and slot.remote_provider.strip() else slot.provider.strip().lower(),
                 "active": slot.name == current_name and slot.provider == current_provider,
@@ -1212,7 +1258,7 @@ class ArgosApp:
         self,
         wav_bytes: bytes | None = None,
         *,
-        text: str | None = None,
+        text: str | ObservedTerminalInput | None = None,
         want_audio: bool = True,
         slot_name: str = "",
         slot_provider: str = "",
@@ -1225,6 +1271,7 @@ class ArgosApp:
         ときは応答テキストの差分だけを返す（母艦のスピーカーでは再生しない）。
         発話・応答はダッシュボードにも記録し、後から追跡できるようにする。
         """
+        text, agent_stream = split_terminal_input(text)
         has_explicit_slot = bool(slot_name or slot_provider)
         if has_explicit_slot and (not slot_name or not slot_provider):
             yield {"event": "error", "message": "スロット名とproviderが必要です"}
@@ -1301,12 +1348,15 @@ class ArgosApp:
             try:
                 target_name = slot_name if has_explicit_slot else ""
                 target_provider = slot_provider if has_explicit_slot else ""
-                deltas, stream_state = yield from self._terminal_agent_deltas_with_progress(
-                    transcript,
-                    slot_key,
-                    (target_name, target_provider),
-                    want_audio,
-                )
+                if agent_stream is None:
+                    deltas, stream_state = yield from self._terminal_agent_deltas_with_progress(
+                        transcript,
+                        slot_key,
+                        (target_name, target_provider),
+                        want_audio,
+                    )
+                else:
+                    deltas, stream_state = iter(agent_stream), None
                 if want_audio:
                     # 応答テキストの差分と、文単位で合成したWAVを交互に返す。
                     for kind, payload in self._speech.synthesize_response_stream(deltas, slot_key):
@@ -1833,10 +1883,26 @@ class _TerminalGateway:
     def __init__(self, app: "ArgosApp") -> None:
         """委譲先のARGOS本体を保持する。"""
         self._app = app
+        from argos.services.agent.console_registry import ConsoleRegistry
+
+        self._console = ConsoleRegistry(app._settings)
 
     def list_slots(self) -> dict[str, object]:
         """エージェントスロット一覧と現在スロットを返す。"""
-        return self._app._terminal_list_slots()
+        payload = self._app._terminal_list_slots()
+        for slot in cast(list[dict[str, object]], payload["slots"]):
+            slot["execution_mode"] = self._console.execution_mode(str(slot["name"]), str(slot["provider"]))
+        return payload
+
+    def console_request(self, command: ConsoleCommand) -> ConsoleResponse:
+        """型付きの端末搬送操作を登録簿へ委譲する。"""
+        if self._app._auth_coord.is_locked():
+            raise RuntimeError("本人確認が必要です。ARGOSの音声入力で本人確認してください")
+        return self._console.execute(command)
+
+    def close_console(self) -> None:
+        """サーバー終了時にattachクライアントだけを回収する。"""
+        self._console.close()
 
     def next_slot(self) -> dict[str, object]:
         """次のエージェントスロットへ巡回切替し、切替後の状態を返す。"""
@@ -1875,6 +1941,42 @@ class _TerminalGateway:
             slot_name=slot_name,
             slot_provider=slot_provider,
         )
+
+    def observe_turn(self, text: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """端末に送信済みの回答を既存の履歴・読み上げ経路へ接続する。"""
+        name = slot_name or self._app._agent.current_name
+        provider = slot_provider or self._app._agent.current_provider
+        source = ObservedTerminalInput(text, self._console.observe(name, provider))
+        return self._app._terminal_process_turn(text=source, want_audio=want_audio, slot_name=name, slot_provider=provider)
+
+    def background_turn(self, event_id: str, want_audio: bool, slot_name: str, slot_provider: str) -> Iterator[dict[str, object]]:
+        """子の完了通知はスロットの入力状態や親ターンのロックを変更しない。"""
+        if self._app._auth_coord.is_locked():
+            yield {"event":"error", "message":"本人確認が必要です"}
+            return
+        try:
+            with self._console.background(slot_name, slot_provider, event_id) as answer:
+                text = background_text(answer)
+                message_id = "subagent-" + event_id
+                existing = self._app._dashboard_state.slot_messages(slot_name, slot_provider)
+                if not any(item.get("id") == message_id for item in existing):
+                    self._app._dashboard_state.merge_slot_messages(slot_name, slot_provider, [{
+                        "id":message_id, "role":"assistant", "text":text,
+                        "streaming":False, "created_at":"",
+                    }])
+                self._app._save_conversation_history()
+                if want_audio:
+                    for kind, payload in self._app._speech.synthesize_response_stream([text], _app_slot_key(slot_name, slot_provider)):
+                        if kind == "text":
+                            yield {"event":"text", "delta":str(payload)}
+                        elif isinstance(payload, bytes):
+                            yield {"event":"audio", "format":"wav", "data":base64.b64encode(payload).decode("ascii")}
+                else:
+                    yield {"event":"text", "delta":text}
+                yield {"event":"done", "text":text}
+        except (OSError, ValueError, RuntimeError):
+            log.exception("子エージェント回答の回収に失敗しました")
+            yield {"event":"error", "message":"子エージェント回答を回収できませんでした"}
 
 
 def _build_android_notice_watcher(

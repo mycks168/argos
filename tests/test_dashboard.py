@@ -355,7 +355,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert '"audio/mp4;codecs=mp4a.40.2"' in html
         assert "navigator.mediaDevices.getUserMedia" in html
         assert '\"Accept\": \"text/event-stream, audio/wav\"' in html
-        assert "consumeVoiceTurnEvents(response.body, playbackGeneration)" in html
+        assert "consumeVoiceTurnEvents(response.body, playbackGeneration, slotKey)" in html
         assert "const inFlightTextSlots = new Map();" in html
         assert "isSlotTurnInFlight(currentAgentSlotKey)" in html
         assert "textInput.disabled = false;" in html
@@ -376,8 +376,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'let pttReleasePending = false;' in html
         assert 'sendControl("cancel_audio")' in html
         assert "new ArgosBrowserAudio.AudioPlayer" in html
-        assert "voicePlayer.cancel()" in html
-        assert "voicePlayer.enqueueBase64(base64Data, playbackGeneration)" in html
+        assert "slotAudio.cancel()" in html
+        assert "slotAudio.enqueue(slotKey, {data:base64Data}, playbackGeneration)" in html
         assert "await voicePlaybackChain" not in html
         assert 'recording: {code: "listening", label: "録音中"}' in html
         assert 'playing: {code: "speaking", label: "回答を再生中"}' in html
@@ -460,7 +460,7 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert 'action: "cancel_audio"' in grid_html
         assert "function cancelGridAudio()" in grid_html
         assert "new ArgosBrowserAudio.AudioPlayer" in grid_html
-        assert "audioPlayer.enqueueBase64(base64Data, playbackGeneration)" in grid_html
+        assert "slotAudio.enqueue(key, {data:base64Data}, playbackGeneration)" in grid_html
         assert '<script src="/static/browser_audio.js"></script>' in grid_html
         assert '<script src="/static/message_text.js"></script>' in grid_html
         assert 'recordingSlotKey === key && recorder?.state === "recording"' in grid_html

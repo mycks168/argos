@@ -125,6 +125,25 @@ test("異なる世代の音声チャンクを受け付けない", async () => {
   assert.equal(player._context, null);
 });
 
+test("音声取得待ちを再生中と表示せず、実際の出力開始で通知する", async () => {
+  const states = [];
+  let completeFetch;
+  const player = new AudioPlayer({AudioContextClass:FakeAudioContext,
+    onStateChange:state => states.push(state),
+    fetch:() => new Promise(resolve => {completeFetch = resolve;}),
+  });
+  const pending = player.enqueueUrl("/audio");
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(states, []);
+  const wav = createPcmWav([0]);
+  completeFetch({ok:true, arrayBuffer:async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength)});
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(states, ["playing"]);
+  player.cancel();
+  await pending;
+  assert.equal(states.at(-1), "idle");
+});
+
 test("URL音声を指定したHTTPキャッシュ設定で取得して再生する", async () => {
   const wav = createPcmWav([0, 100]);
   const requests = [];

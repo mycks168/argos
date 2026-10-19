@@ -13,8 +13,8 @@ def test_dashboard_queues_progress_audio_url_with_browser_cache() -> None:
     dashboard_html = _static_html("dashboard.html")
 
     assert 'event.event === "progress" && event.url' in dashboard_html
-    assert "queueVoiceAudioUrl(event.url, playbackGeneration)" in dashboard_html
-    assert 'voicePlayer.enqueueUrl(audioUrl, {headers, cache: "force-cache"}' in dashboard_html
+    assert "queueVoiceAudioUrl(event.url, playbackGeneration, slotKey)" in dashboard_html
+    assert 'slotAudio.enqueue(slotKey, {url:audioUrl, options:{headers, cache:"force-cache"}}' in dashboard_html
 
 
 def test_grid_queues_progress_audio_for_target_tile() -> None:
@@ -23,7 +23,7 @@ def test_grid_queues_progress_audio_for_target_tile() -> None:
 
     assert 'event.event === "progress" && event.url' in grid_html
     assert "queueAudioUrl(key, event.url, playbackGeneration)" in grid_html
-    assert '{headers: authHeaders({}), cache: "force-cache"}' in grid_html
+    assert 'options:{headers:authHeaders({}), cache:"force-cache"}' in grid_html
 
 
 def test_dashboards_render_source_urls_as_safe_links() -> None:

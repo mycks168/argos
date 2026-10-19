@@ -1,6 +1,7 @@
 """リモートArgosクライアントのテスト。"""
 
 import json
+from collections.abc import Iterable
 
 from test_agent_client import _settings
 
@@ -11,7 +12,7 @@ from argos.services.agent.remote_argos import RemoteArgosClient
 class FakeResponse:
     """requestsレスポンスの最小スタブ。"""
 
-    def __init__(self, lines=(), payload=None):
+    def __init__(self, lines: Iterable[str | bytes] = (), payload: dict[str, object] | None = None) -> None:
         """SSE行を保持する。"""
         self._lines = list(lines)
         self._payload = payload or {}
