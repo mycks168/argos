@@ -298,6 +298,15 @@ Googleマップのピンチイン・ピンチアウトができない場合は�
 - 画面配置ツール（`window_layout`）は、実行時点の `rc.xml` を保存して復元するため、この設定を保ちます。
 - 位置のずれの改善や、走行中の操作性は、別途確認が必要です。
 
+## メディアキー（BluetoothのPTT）
+
+BluetoothメディアボタンをPTTに使うと、ARGOSは入力デバイスを直接読みますが、同じキーがlabwc経由でフォーカス中の窓にも届きます。Waydroidにフォーカスがあると、Androidは再生ボタンの長押しを音声アシスタントの起動として扱うため、録音のつもりの長押しでGeminiが立ち上がっていました（logcatに `MediaSessionService: voice-based interactions` が出る）。短押しや曲送りも、Android側の音楽の再生・停止・曲送りになります。
+
+- インストーラーの対話設定（`--configure`）で「Waydroidと画面を並べて使う」に `y` と答え、`ptt.bluetooth_mac` も設定しているときは、`rc.xml` の `<keyboard>` に `XF86AudioPlay`・`XF86AudioNext`・`XF86AudioPrev` を、何もしないコマンド（`true`）として割り当てます。labwcは割り当てたキーをアプリへ渡さないため、Waydroidにもダッシュボードにも届かず、ARGOSだけが受け取ります。
+- labwcはキー割り当てが1つもないと標準の割り当てを使うため、割り当てがない場合は `<default />` も足して標準を残します。割り当て済みのキーは変えません。変更前に `rc.xml.before-argos-media-keys` を残し、labwcへSIGHUPで再読み込みを通知します。
+- 音量キーは割り当てないので、これまでどおりOSの音量操作に使えます。入力デバイスを独占（`EVIOCGRAB`）しないのは、同じ機器の音量キーまでOSに届かなくなるためです。
+- 別のキーボードの再生・曲送りキーも、デスクトップのアプリには届かなくなります。戻すときは、この3つの `<keybind>` を消して `labwc -r` を実行します。
+
 ## アプリの通知の読み上げ
 
 Slackなど、Androidアプリの通知を、ARGOSの通知欄に出して読み上げられます（`notice.android`）。ARGOSが5秒ごとに `dumpsys notification` でAndroidの通知の一覧を読み、新しいメッセージだけを知らせます。長い本文は、LAN内のOllamaで要約して読みます。Waydroidが止まっている間や凍結中は、通知が届かないので、読みません。
