@@ -1665,7 +1665,7 @@
       const displayStatus = browserStatus || (
         currentAgentSlotBusy && state.status.code === "ready"
           ? {code: "thinking", label: "考え中"}
-          : (state.status.code === "speaking" || (
+          : ((state.status.code === "speaking" && !currentAgentSlotBusy) || (
               state.status.code === "thinking" && inFlightTextSlots.size > 0 && !isSlotTurnInFlight(currentAgentSlotKey))
             ? {code:"ready", label:"待機中"} : state.status)
       );

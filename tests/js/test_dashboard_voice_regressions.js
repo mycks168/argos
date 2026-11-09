@@ -7,8 +7,8 @@ const path = require("node:path");
 const html = fs.readFileSync(path.join(__dirname, "../../src/argos/services/dashboard/static/dashboard.html"), "utf8");
 
 /** 配布HTMLの状態選択式を、同じ評価環境で検証する。 */
-function displayCode(inFlightTextSlots) {
-  const context = {browserStatus:null, currentAgentSlotBusy:false, state:{status:{code:"thinking", label:"考え中"}},
+function displayCode(inFlightTextSlots, statusCode = "thinking", currentAgentSlotBusy = false) {
+  const context = {browserStatus:null, currentAgentSlotBusy, state:{status:{code:statusCode, label:"考え中"}},
     inFlightTextSlots, currentAgentSlotKey:"current", isSlotTurnInFlight:() => false};
   vm.createContext(context);
   const begin = html.indexOf("const displayStatus = browserStatus");
@@ -37,6 +37,12 @@ test("ブラウザ外で開始した処理のサーバーthinkingを隠さない
 
 test("別ブラウザスロットの実行中を現在スロットのthinkingへ流用しない", () => {
   assert.equal(displayCode(new Map([["other", 1]])), "ready");
+});
+
+test("PTT後の処理中はサーバーのspeakingを待機中へ変えない", () => {
+  assert.equal(displayCode(new Map(), "speaking", true), "speaking");
+  assert.equal(displayCode(new Map(), "ready", true), "thinking");
+  assert.equal(displayCode(new Map(), "speaking", false), "ready");
 });
 
 /** 配布HTMLの停止・送信・状態同期を録音済みデータで実行する。 */
