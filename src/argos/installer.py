@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
+from argos.hardware.input_profiles import parse_profiles, product_id
 
 
 WINDOW_LAYOUT_SERVICE = "argos-window-layout"
@@ -39,6 +40,10 @@ QUIET_LXC_SUDOERS_CONTENT = (
 # labwcのキー割り当てにすると、labwcがキーを受け取ってアプリへ渡さなくなる。
 PTT_BLUETOOTH_MAC_KEY = "ARGOS_PTT_BLUETOOTH_MAC"
 MEDIA_KEYS = ("XF86AudioPlay", "XF86AudioNext", "XF86AudioPrev")
+# USBメディアノブのキー。ARGOSが音量・録音・スロット切り替えに使うため、labwcの標準の
+# 音量操作やWaydroidへは渡さない。
+PTT_KNOB_DEVICE_KEY = "ARGOS_PTT_KNOB_DEVICE"
+KNOB_KEYS = ("XF86AudioMute", "XF86AudioRaiseVolume", "XF86AudioLowerVolume", "XF86AudioNext", "XF86AudioPrev")
 DEFAULT_MANIFEST = Path(__file__).resolve().parents[2] / "installer" / "services.json"
 DEFAULT_OS_PACKAGES = (
     "alsa-utils",
@@ -336,6 +341,7 @@ def apply_plan(
             _enable_service(service, plan, runner=runner)
         if configure:
             _apply_window_layout_choice(plan, project_dir / "config.yaml", runner=runner, output_func=output_func)
+            _apply_knob_key_choice(plan, project_dir / "config.yaml", runner=runner, output_func=output_func)
         if restart_services:
             for service in plan.services:
                 _restart_service(service, plan, runner=runner)
@@ -1204,6 +1210,24 @@ def _apply_window_layout_choice(
                 output_func(f"警告: {name}を無効化できませんでした。必要なら手動で確認してください: {exc}")
 
 
+def _apply_knob_key_choice(
+    plan: InstallPlan,
+    config_path: Path,
+    *,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
+) -> None:
+    """USBメディアノブを設定していれば、ノブのキーをlabwcで受け取ってアプリやOSへ渡さない。
+
+    labwcの標準の割り当てはミュート・音量キーでOSの音量を変えるため、画面分割の有無によらず止める。
+    """
+    values = load_yaml_environment(config_path)
+    knob_id = values.get(PTT_KNOB_DEVICE_KEY, "").strip()
+    profiles = parse_profiles(values.get("ARGOS_PTT_DEVICES_JSON", "[]"))
+    if knob_id and not any(profile.id == product_id(knob_id) for profile in profiles):
+        _block_media_keys_for_apps(plan, keys=KNOB_KEYS, runner=runner, output_func=output_func)
+
+
 def _install_quiet_lxc_sudoers(
     *,
     runner=subprocess.run,
@@ -1257,9 +1281,13 @@ def _enable_multitouch(plan: InstallPlan, *, runner=subprocess.run, output_func:
 
 
 def _block_media_keys_for_apps(
-    plan: InstallPlan, *, runner=subprocess.run, output_func: Callable[[str], None] = print
+    plan: InstallPlan,
+    *,
+    keys: tuple[str, ...] = MEDIA_KEYS,
+    runner=subprocess.run,
+    output_func: Callable[[str], None] = print,
 ) -> None:
-    """再生・次・前のキーをlabwcで受け取り、Waydroidなどのアプリへ渡さないようにする。
+    """メディアキー（既定は再生・次・前）をlabwcで受け取り、Waydroidなどのアプリへ渡さないようにする。
 
     何もしないコマンドを割り当てたキーは、labwcが受け取ってアプリへ渡さない。
     labwcはキー割り当てが1つもないと標準の割り当てを使うため、割り当てがない場合は
@@ -1276,12 +1304,12 @@ def _block_media_keys_for_apps(
         return
     nodes = [node for node in root.iter() if str(node.tag).rpartition("}")[2] in {"keybind", "default"}]
     bound = {node.get("key") for node in nodes}
-    keys = [key for key in MEDIA_KEYS if key not in bound]
-    if not keys:
+    missing = [key for key in keys if key not in bound]
+    if not missing:
         return
     lines = [] if nodes else ["\t\t<default />"]
-    lines += [f'\t\t<keybind key="{key}"><action name="Execute" command="true" /></keybind>' for key in keys]
-    block = "\n".join(["\t\t<!-- ARGOS: PTTのメディアキーをWaydroidへ渡さない -->", *lines]) + "\n"
+    lines += [f'\t\t<keybind key="{key}"><action name="Execute" command="true" /></keybind>' for key in missing]
+    block = "\n".join(["\t\t<!-- ARGOS: PTTのメディアキーをWaydroidやOSの音量操作へ渡さない -->", *lines]) + "\n"
     keyboard = re.search(r"<keyboard\s*/>|</keyboard>", text)
     if keyboard is None:
         closing = text.rfind("</openbox_config>")
@@ -1290,7 +1318,12 @@ def _block_media_keys_for_apps(
             return
         text = text[:closing] + "\t<keyboard>\n" + block + "\t</keyboard>\n" + text[closing:]
     elif keyboard.group(0) == "</keyboard>":
-        text = text[: keyboard.start()] + block + "\t" + text[keyboard.start() :]
+        # </keyboard>の前が字下げだけなら、行頭へ入れて字下げを二重にしない。
+        line_start = text.rfind("\n", 0, keyboard.start()) + 1
+        if text[line_start : keyboard.start()].strip():
+            text = text[: keyboard.start()] + block + "\t" + text[keyboard.start() :]
+        else:
+            text = text[:line_start] + block + text[line_start:]
     else:
         text = text[: keyboard.start()] + "<keyboard>\n" + block + "\t</keyboard>" + text[keyboard.end() :]
     backup = config.with_name(config.name + ".before-argos-media-keys")

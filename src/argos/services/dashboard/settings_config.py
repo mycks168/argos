@@ -180,6 +180,8 @@ DESCRIPTION_BY_KEY = {
     "audio.sample_rate": "録音音声の1秒あたりのサンプル数です。通常は16000のまま使います。",
     "ptt.gpio": "PTTボタンを接続したGPIOのBCM番号です。使わない場合は空にします。",
     "ptt.bluetooth_mac": "Bluetoothメディアボタンのアドレスです。再生の長押しは録音、短押しは音声キャンセル、曲送り・戻しはスロット切り替え。空なら使いません。",
+    "ptt.knob_device": "旧USBノブ設定です。同じ機器IDをptt.devicesへ登録するとそちらを優先します。空なら使いません。",
+    "ptt.devices": "USB・Bluetooth共通の製品ID別操作設定です。id、preset（media_knobまたはmedia_ptt）、bindingsを配列で指定します。exclusiveは専用機器だけtrueにしてください。記入例はdocs/input_devices.md。変更後は本体再起動が必要です。",
     "tts.delimiters": "ストリーミング回答を読み上げ単位へ区切る文字です。",
     "tts.url": "読み上げ前の辞書変換サービスのURLです。",
     "tts.cache.enabled": "同じ読み上げ音声を再利用して応答を速くします。",
@@ -479,6 +481,12 @@ def _fallback_description(key: str) -> str:
 
 def _validate_dynamic_value(key: str, current: Any, value: Any) -> Any:
     """既存値の型に合わせて全設定エディターの入力を検証する。"""
+    if key == "ptt.devices":
+        import json
+        from argos.hardware.input_profiles import parse_profiles
+
+        parse_profiles(json.dumps(value, ensure_ascii=False))
+        return value
     if key in FIELD_BY_KEY and FIELD_BY_KEY[key]["type"] not in {"audio-input", "audio-output", "audio-input-list"}:
         return _validate_value(FIELD_BY_KEY[key], value)
     if isinstance(current, bool):

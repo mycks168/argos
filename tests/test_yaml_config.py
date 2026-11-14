@@ -6,6 +6,17 @@ import yaml
 from argos.yaml_config import apply_yaml_environment, load_yaml_environment, write_yaml_from_environment
 
 
+def test_input_devices_json_round_trip(tmp_path):
+    """機器プロファイルの配列をJSONへ渡し、YAMLへ戻しても内容を保つ。"""
+    path = tmp_path / "config.yaml"
+    payload = [{"id": "1:2", "preset": "media_ptt", "bindings": {"KEY_MUTE": "cancel"}}]
+    path.write_text(yaml.safe_dump({"ptt": {"devices": payload}}))
+    values = load_yaml_environment(path)
+    output = tmp_path / "roundtrip.yaml"
+    write_yaml_from_environment(values, output)
+    assert yaml.safe_load(output.read_text())["ptt"]["devices"] == payload
+
+
 def test_load_hierarchical_yaml(tmp_path):
     """階層設定とスロット配列を既存設定名へ変換する。"""
     path = tmp_path / "config.yaml"

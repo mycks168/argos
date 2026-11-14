@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import logging
 import queue
 import random
@@ -44,6 +45,7 @@ from argos.hardware.audio import (
 from argos.hardware.audio_priority import PriorityStreamWatcher
 from argos.hardware.button import ButtonPtt
 from argos.hardware.bluetooth_media import BluetoothMediaInput
+from argos.hardware.input_profiles import ProfileInput, matches_device, parse_profiles, product_id
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.services.acknowledgement import AcknowledgementClient
@@ -373,6 +375,17 @@ class ArgosApp:
         self._wakeword_ptt_hold = threading.Event()
         self._gpio: GpioPttInput | None = None
         self._bluetooth_media: BluetoothMediaInput | None = None
+        self._profile_inputs: list[ProfileInput] = []
+        self._profile_buttons: dict[str, ButtonPtt] = {}
+        self._input_recording_owner: str | None = None
+        self._input_profiles = settings.ptt_devices
+        if settings.ptt_knob_device:
+            legacy_id = product_id(settings.ptt_knob_device)
+            if not any(profile.id == legacy_id for profile in self._input_profiles):
+                self._input_profiles += parse_profiles(json.dumps([{"id": legacy_id, "preset": "media_knob"}]))
+        # ノブで回した音量は、回し終わってからまとめて保存し、書き込み回数を減らす。
+        self._volume_save_timer: threading.Timer | None = None
+        self._volume_save_lock = threading.Lock()
         self._wakeword_pattern = build_wakeword_pattern(settings.wakeword_aliases)
         self._dashboard_state.set_audio_muted(initial_muted)
 
@@ -459,7 +472,10 @@ class ArgosApp:
                 self._bluetooth_button.cancel,
                 self._shutdown,
                 self._bluetooth_chime.update,
+                should_ignore_device=lambda path: matches_device(path, self._input_profiles),
             )
+        if not self._settings.dry_run:
+            self._start_profile_inputs()
         self._start_wakeword_listener()
         self._auth_coord.announce_required()
         self._auth_coord.start_status_monitor()
@@ -795,6 +811,7 @@ class ArgosApp:
 
     def _on_ptt_press(self) -> None:
         """PTT 押下時に録音を開始する。"""
+        self._input_recording_owner = None
         if not self._is_microphone_enabled():
             # マイクOFFでも録音・認証はしないが、スクリーンセーバーだけは解除する。
             log.info("マイクOFFのためPTT押下を無視します（画面のみ起こす）")
@@ -870,8 +887,93 @@ class ArgosApp:
         self._speech.speak_status(f"{name}に切り替えました")
         self._start_pending_slot_response()
 
+    def _is_ptt_recording(self) -> bool:
+        """PTTの録音中、またはウェイクワード録音をPTTで継続中ならTrueを返す。"""
+        return bool(self._recorder.is_recording or self._wakeword_ptt_hold.is_set())
+
+    def _start_profile_inputs(self) -> None:
+        """製品ID別の設定で、USB・Bluetooth共通の入力監視を起動する。"""
+        for profile in self._input_profiles:
+            identity = profile.id
+            self._profile_buttons[identity] = ButtonPtt(
+                lambda identity=identity: self._profile_record(identity, True),
+                lambda identity=identity: self._profile_record(identity, False),
+                self._on_double_click,
+                lambda identity=identity: self._cancel_profile_record(identity),
+                should_record_short_press=self._is_auth_locked,
+            )
+            self._profile_inputs.append(ProfileInput(
+                profile,
+                lambda action, value, amount, identity=identity: self._on_profile_action(identity, action, value, amount),
+                lambda identity=identity: self._profile_disconnected(identity),
+                self._shutdown,
+            ))
+
+    def _profile_record(self, identity: str, pressed: bool) -> None:
+        """別機器で始めた録音を奪わず、所有する機器だけが停止・送信する。"""
+        if pressed:
+            if self._is_ptt_recording():
+                return
+            self._on_ptt_press()
+            if self._is_ptt_recording():
+                self._input_recording_owner = identity
+        elif self._input_recording_owner == identity:
+            self._input_recording_owner = None
+            self._on_ptt_release()
+
+    def _cancel_profile_record(self, identity: str) -> None:
+        """その機器で始めた録音だけを取り消す。"""
+        if self._input_recording_owner == identity:
+            self._input_recording_owner = None
+            self._on_cancel()
+
+    def _profile_disconnected(self, identity: str) -> None:
+        """切断時はPTTタイマーと、その機器の録音を取り消す。"""
+        self._profile_buttons[identity].cancel()
+        self._cancel_profile_record(identity)
+
+    def _on_profile_action(self, identity: str, action: str, value: int, amount: int) -> None:
+        """入力方式によらない共通操作を、既存のアプリ機能へ渡す。"""
+        if action == "ptt":
+            button = self._profile_buttons[identity]
+            (button.handle_press if value else button.handle_release)()
+        elif action == "record_toggle":
+            self._profile_record(identity, not self._is_ptt_recording())
+        elif action in {"volume_up", "volume_down"}:
+            self._on_knob_volume(amount if action == "volume_up" else -amount)
+        elif action == "slot_next":
+            self._on_double_click()
+        elif action == "slot_previous":
+            self._on_previous_slot()
+        elif action == "cancel":
+            self._on_cancel()
+
+    def _on_knob_toggle(self) -> None:
+        """ノブの押し込みごとに、録音の開始と停止・送信を切り替える。"""
+        if self._is_ptt_recording():
+            self._on_ptt_release()
+        else:
+            self._on_ptt_press()
+
+    def _on_knob_disconnect(self) -> None:
+        """ノブが抜かれたら、ノブで始めた可能性のある録音を破棄する。"""
+        if self._recorder.is_recording:
+            self._on_cancel()
+
+    def _on_knob_volume(self, delta: int) -> None:
+        """ノブの回転でARGOSの読み上げ音量を上げ下げする。"""
+        volume = self._audio.set_volume(self._audio.volume + delta)
+        self._dashboard_state.set_audio_volume(volume)
+        with self._volume_save_lock:
+            if self._volume_save_timer is not None:
+                self._volume_save_timer.cancel()
+            self._volume_save_timer = threading.Timer(1.0, self._save_audio_state)
+            self._volume_save_timer.daemon = True
+            self._volume_save_timer.start()
+
     def _on_cancel(self) -> None:
         """処理中の音声入出力をキャンセルする。"""
+        self._input_recording_owner = None
         log.info("キャンセル要求: 録音破棄と再生停止")
         self._recorder.cancel()
         self._cancel_active_audio()
@@ -1569,6 +1671,8 @@ class ArgosApp:
                 self._remove_recording_file(wav_path)
             self._button.mark_idle()
             self._bluetooth_button.mark_idle()
+            for button in self._profile_buttons.values():
+                button.mark_idle()
             self._status.finish(token)
 
     def _remove_recording_file(self, wav_path: str) -> None:
@@ -1859,6 +1963,13 @@ class ArgosApp:
         if self._greeting is not None:
             self._greeting.mark_active()
         self._recorder.cancel()
+        with self._volume_save_lock:
+            pending_volume_save = self._volume_save_timer
+            self._volume_save_timer = None
+        if pending_volume_save is not None and pending_volume_save.is_alive():
+            # 保存待ちの音量を、終了前に書き込んでおく。
+            pending_volume_save.cancel()
+            self._save_audio_state()
         if self._wakeword_listener is not None:
             self._wakeword_listener.stop()
         if self._audio_input_stream is not None:
