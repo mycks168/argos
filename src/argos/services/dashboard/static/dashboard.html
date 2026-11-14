@@ -1289,6 +1289,7 @@
   <script src="/static/message_text.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script src="/static/sp_notice_popup.js"></script>
+  <script src="/static/wheel_redirect.js"></script>
   <script>
     const messages = document.getElementById("messages");
     const textComposer = document.getElementById("text-composer");
@@ -1578,6 +1579,8 @@
     messages.addEventListener("scroll", () => {
       followLatestMessage = isNearLatestMessage();
     }, {passive: true});
+    // どこでホイールを回しても会話欄をスクロールする（USBメディアノブの下のダイアル用）。
+    window.ArgosWheelRedirect.install(window, messages);
     function showSplash() {
       splash.classList.add("is-active");
       window.clearTimeout(splashTimer);

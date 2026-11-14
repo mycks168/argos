@@ -18,7 +18,22 @@ def _input():
     device._shutdown = threading.Event()
     device._mac = "DC:2C:26:08:75:08"
     device._on_connection_change = lambda _connected: None
+    device._should_ignore_device = lambda _path: False
     return device, events
+
+
+def test_profile_device_is_not_processed_by_legacy_reader(monkeypatch):
+    """新設定の機器は、旧MAC設定が残っていても二重に読まない。"""
+    device, events = _input()
+    monkeypatch.setattr(bluetooth_media, "find_media_device", lambda _: "/dev/input/event9")
+    device._should_ignore_device = lambda _: True
+    connections = []
+    device._on_connection_change = connections.append
+    monkeypatch.setattr(device._shutdown, "wait", lambda _: device._shutdown.set())
+    device._read_device = lambda _: events.append("read")
+    device._run()
+    assert events == []
+    assert connections == [True, False]
 
 
 def test_find_media_device_by_bluetooth_address(tmp_path):

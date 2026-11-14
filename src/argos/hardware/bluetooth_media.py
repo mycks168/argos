@@ -44,6 +44,7 @@ class BluetoothMediaInput:
         on_cancel: Callable[[], None],
         shutdown: threading.Event,
         on_connection_change: Callable[[bool], None] | None = None,
+        should_ignore_device: Callable[[Path], bool] | None = None,
     ) -> None:
         """監視する機器と各操作のコールバックを受け取る。"""
         self._mac = mac
@@ -54,6 +55,7 @@ class BluetoothMediaInput:
         self._on_cancel = on_cancel
         self._shutdown = shutdown
         self._on_connection_change = on_connection_change or (lambda _connected: None)
+        self._should_ignore_device = should_ignore_device or (lambda _path: False)
         self._pressed = False
         self._thread = threading.Thread(target=self._run, daemon=True, name="bluetooth-media-input")
         self._thread.start()
@@ -100,12 +102,20 @@ class BluetoothMediaInput:
 
     def _run(self) -> None:
         """Bluetooth再接続時にイベントデバイスを探し直す。"""
+        profile_connected = False
         while not self._shutdown.is_set():
             path = find_media_device(self._mac)
-            if path is not None:
+            ignored = path is not None and self._should_ignore_device(path)
+            # 新設定がキーを処理していても、既存MAC設定の接続通知は維持する。
+            if ignored != profile_connected:
+                self._on_connection_change(ignored)
+                profile_connected = ignored
+            if path is not None and not ignored:
                 try:
                     log.info("Bluetoothメディアボタンの監視を開始します: %s", path)
                     self._read_device(path)
                 except Exception:
                     log.exception("Bluetoothメディアボタンの監視に失敗しました")
             self._shutdown.wait(0.1)
+        if profile_connected:
+            self._on_connection_change(False)

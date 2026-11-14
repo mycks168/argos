@@ -61,6 +61,7 @@ LIST_MAPPINGS = {
 
 # 配列やテーブルを、そのままJSONにして渡す項目。
 JSON_MAPPINGS = {
+    ("ptt", "devices"): "ARGOS_PTT_DEVICES_JSON",
     ("notice.android", "apps"): "ARGOS_NOTICE_ANDROID_APPS_JSON",
     ("notice.android", "mute"): "ARGOS_NOTICE_ANDROID_MUTE_JSON",
 }
@@ -71,6 +72,7 @@ EXACT_MAPPINGS = {
     ("audio", "silence_rms_threshold"): "SILENCE_RMS_THRESHOLD",
     ("ptt", "gpio"): "ARGOS_PTT_GPIO",
     ("ptt", "bluetooth_mac"): "ARGOS_PTT_BLUETOOTH_MAC",
+    ("ptt", "knob_device"): "ARGOS_PTT_KNOB_DEVICE",
     ("tts", "delimiters"): "ARGOS_TTS_DELIMITERS",
     ("tts.cache", "enabled"): "ARGOS_TTS_CACHE_ENABLED",
     ("tts.cache", "max_chars"): "ARGOS_TTS_CACHE_MAX_CHARS",

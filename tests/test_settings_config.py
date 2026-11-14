@@ -11,6 +11,20 @@ from argos.services.dashboard.settings_config import (
 )
 
 
+def test_input_devices_are_explained_and_validated(tmp_path):
+    """機器設定を説明付きで表示し、不正な操作は保存前に拒否する。"""
+    path = tmp_path / "config.yaml"
+    path.write_text("ptt:\n  devices: []\n")
+    field = next(field for field in load_settings_form(path)["fields"] if field["key"] == "ptt.devices")
+    assert "製品ID" in field["description"]
+    payload = [{"id": "1:2", "preset": "media_ptt"}]
+    save_settings_form(path, {"ptt.devices": payload})
+    assert yaml.safe_load(path.read_text())["ptt"]["devices"] == payload
+    with pytest.raises(ValueError):
+        save_settings_form(path, {"ptt.devices": [{"id": "1:2", "bindings": {"113": "shell"}}]})
+    assert yaml.safe_load(path.read_text())["ptt"]["devices"] == payload
+
+
 def _write_config(path: Path) -> None:
     """設定画面テスト用のYAMLを書く。"""
     path.write_text(

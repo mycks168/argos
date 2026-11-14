@@ -1494,3 +1494,44 @@ def test_window_layout_choice_blocks_media_keys_only_with_bluetooth_ptt(tmp_path
     write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": "maps", "ARGOS_PTT_BLUETOOTH_MAC": mac}, config_path)
     installer._apply_window_layout_choice(_window_layout_plan(tmp_path), config_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
     assert ("XF86AudioPlay" in config.read_text(encoding="utf-8")) is blocked
+
+
+def test_block_media_keys_with_knob_keys_adds_only_missing(tmp_path):
+    """ノブのキーを指定すると、既に割り当てた次・前はそのままに、足りないキーだけ足す。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    plan = _window_layout_plan(tmp_path)
+    installer._block_media_keys_for_apps(plan, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    installer._block_media_keys_for_apps(plan, keys=installer.KNOB_KEYS, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    keys = [key for tag, key in _keybinds(config) if tag == "keybind"]
+    assert keys == list(installer.MEDIA_KEYS) + ["XF86AudioMute", "XF86AudioRaiseVolume", "XF86AudioLowerVolume"]
+
+
+@pytest.mark.parametrize(("knob", "blocked"), [("514c:8850", True), ("", False)])
+def test_knob_key_choice_blocks_only_with_knob(tmp_path, knob, blocked):
+    """ノブを設定したときだけ、画面分割の有無によらずノブのキーを割り当てる。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({"ARGOS_PTT_KNOB_DEVICE": knob}, config_path)
+    installer._apply_knob_key_choice(_window_layout_plan(tmp_path), config_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert ("XF86AudioRaiseVolume" in config.read_text(encoding="utf-8")) is blocked
+
+
+def test_explicit_profile_does_not_add_global_knob_keybindings(tmp_path):
+    """新しい機器別設定を優先し、全キーボード共通の割り当ては追加しない。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    config_path = tmp_path / "config.yaml"
+    write_yaml_from_environment({
+        "ARGOS_PTT_KNOB_DEVICE": "514c:8850",
+        "ARGOS_PTT_DEVICES_JSON": '[{"id":"514c:8850","preset":"media_knob","exclusive":true}]',
+    }, config_path)
+    installer._apply_knob_key_choice(_window_layout_plan(tmp_path), config_path, runner=lambda *_args, **_kwargs: None)
+    assert "XF86AudioRaiseVolume" not in config.read_text()
+
+
+def test_block_media_keys_keeps_indent_before_closing_keyboard(tmp_path):
+    """字下げされた</keyboard>の前へ足すとき、コメントの字下げを二重にしない。"""
+    config = _labwc_config(tmp_path, "<openbox_config>\n\t<keyboard>\n\t\t<default />\n\t</keyboard>\n</openbox_config>\n")
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    text = config.read_text(encoding="utf-8")
+    assert "\n\t\t<!-- ARGOS:" in text and "\t\t\t<!--" not in text
+    assert text.endswith("</keybind>\n\t</keyboard>\n</openbox_config>\n")

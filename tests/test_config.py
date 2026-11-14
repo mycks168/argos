@@ -11,6 +11,14 @@ from argos.config import (
 )
 
 
+def test_input_device_profiles_load_from_environment(monkeypatch):
+    """入力機器の製品IDと個別割り当てを設定へ渡す。"""
+    monkeypatch.setenv("ARGOS_PTT_DEVICES_JSON", '[{"id":"1:2","bindings":{"KEY_F13":"ptt"}}]')
+    settings = load_settings()
+    assert settings.ptt_devices[0].id == "0001:0002"
+    assert settings.ptt_devices[0].bindings[183].action == "ptt"
+
+
 @pytest.fixture(autouse=True)
 def _clear_unified_slots(monkeypatch):
     """各テストが実機config.yamlのスロット設定に影響されないようにする。"""

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from argos.yaml_config import apply_yaml_environment
 from argos.agent_slot_options import slot_execution_mode, slot_tmux_timeout
+from argos.hardware.input_profiles import InputProfile, parse_profiles
 
 _PROCESS_ENVIRONMENT = set(os.environ)
 apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
@@ -179,6 +180,9 @@ class Settings:
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
     ptt_bluetooth_mac: str = ""
+    # USBメディアノブのUSB機器ID（例: 514c:8850）。空なら使わない。
+    ptt_knob_device: str = ""
+    ptt_devices: tuple[InputProfile, ...] = ()
     claude_model: str = ""
     # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
     dashboard_view_key: str = ""
@@ -692,6 +696,8 @@ def load_settings() -> Settings:
         remote_location_token=os.environ.get("ARGOS_REMOTE_LOCATION_TOKEN", ""),
         ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         ptt_bluetooth_mac=os.environ.get("ARGOS_PTT_BLUETOOTH_MAC", "").strip(),
+        ptt_knob_device=os.environ.get("ARGOS_PTT_KNOB_DEVICE", "").strip(),
+        ptt_devices=parse_profiles(os.environ.get("ARGOS_PTT_DEVICES_JSON", "[]")),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),

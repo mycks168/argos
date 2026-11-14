@@ -2583,3 +2583,130 @@ def test_notice_speaker_is_wired_with_conversation_and_echo_aware_playback(monke
     app = ArgosApp(Settings(**{**_settings().__dict__, "dry_run": False}))
     assert app._notice_speaker._is_conversation_active == app._is_conversation_active
     assert app._notice_speaker._play == app._speech.play_notice_audio
+
+
+def test_profiles_override_legacy_knob_and_preserve_other_id(monkeypatch):
+    """旧ノブ設定は共通設定へ移し、明示設定と重複させない。"""
+    from argos.hardware.input_profiles import parse_profiles
+
+    _patch_app(monkeypatch)
+    explicit = parse_profiles('[{"id":"1:2","preset":"media_ptt"}]')
+    for legacy, expected in [("1:2", 1), ("3:4", 2)]:
+        app = ArgosApp(Settings(**{**_settings().__dict__, "ptt_devices": explicit, "ptt_knob_device": legacy}))
+        assert len(app._input_profiles) == expected
+
+
+def test_profile_callbacks_and_recording_ownership(monkeypatch):
+    """全操作を共通処理へ渡し、他の機器が始めた録音は止めない。"""
+    from argos.hardware.input_profiles import parse_profiles
+
+    _patch_app(monkeypatch)
+    profiles = parse_profiles('[{"id":"1:2","preset":"media_knob"},{"id":"3:4","preset":"media_ptt"}]')
+    captured, calls = [], []
+    monkeypatch.setattr("argos.core.app.ProfileInput", lambda *args: captured.append(args))
+    app = ArgosApp(Settings(**{**_settings().__dict__, "ptt_devices": profiles}))
+    app._start_profile_inputs()
+    first, second = captured
+    assert first[0].id == "0001:0002" and second[0].id == "0003:0004"
+    first[1]("record_toggle", 1, 5)
+    assert app._input_recording_owner == "0001:0002" and app._recorder.is_recording
+    second[1]("record_toggle", 1, 5)
+    second[2]()
+    assert app._recorder.is_recording
+    first[2]()
+    assert not app._recorder.is_recording
+    monkeypatch.setattr(app, "_on_ptt_release", lambda: calls.append("release"))
+    first[1]("record_toggle", 1, 5)
+    first[1]("record_toggle", 1, 5)
+    assert calls == ["release"]
+    app._recorder.cancel()
+    app._set_microphone_enabled(False)
+    app._profile_record("0001:0002", True)
+    assert app._input_recording_owner is None
+    monkeypatch.setattr(app, "_on_knob_volume", lambda amount: calls.append(amount))
+    monkeypatch.setattr(app, "_on_double_click", lambda: calls.append("next"))
+    monkeypatch.setattr(app, "_on_previous_slot", lambda: calls.append("previous"))
+    monkeypatch.setattr(app, "_on_cancel", lambda: calls.append("cancel"))
+    for action in ("volume_up", "volume_down", "slot_next", "slot_previous", "cancel", "none"):
+        first[1](action, 1, 3)
+    assert calls[1:] == [3, -3, "next", "previous", "cancel"]
+    button = app._profile_buttons["0003:0004"]
+    monkeypatch.setattr(button, "handle_press", lambda: calls.append("press"))
+    monkeypatch.setattr(button, "handle_release", lambda: calls.append("release"))
+    second[1]("ptt", 1, 5)
+    second[1]("ptt", 0, 5)
+    assert calls[-2:] == ["press", "release"]
+
+
+def test_knob_toggle_starts_then_stops_recording(monkeypatch):
+    """ノブの押し込みは、1回目で録音を始め、2回目で録音を止めて処理へ渡す。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    calls = []
+    monkeypatch.setattr(app, "_on_ptt_press", lambda: (calls.append("press"), app._recorder.start()))
+    monkeypatch.setattr(app, "_on_ptt_release", lambda: calls.append("release"))
+
+    app._on_knob_toggle()
+    app._on_knob_toggle()
+
+    assert calls == ["press", "release"]
+
+
+def test_knob_toggle_releases_wakeword_ptt_hold(monkeypatch):
+    """ウェイクワード録音をPTTで継続中なら、次の押し込みで継続を解除する。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    calls = []
+    monkeypatch.setattr(app, "_on_ptt_release", lambda: calls.append("release"))
+    app._wakeword_ptt_hold.set()
+
+    app._on_knob_toggle()
+
+    assert calls == ["release"]
+
+
+def test_knob_disconnect_cancels_only_while_recording(monkeypatch):
+    """ノブが抜かれたとき、録音中なら破棄し、そうでなければ何もしない。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    calls = []
+    monkeypatch.setattr(app, "_on_cancel", lambda: calls.append("cancel"))
+
+    app._on_knob_disconnect()
+    app._recorder.start()
+    app._on_knob_disconnect()
+
+    assert calls == ["cancel"]
+
+
+def test_knob_volume_updates_dashboard_and_saves_once(monkeypatch):
+    """回転で音量を変えて表示へ反映し、保存は回し終わりの1回にまとめる。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    saved = []
+    monkeypatch.setattr(app, "_save_audio_state", lambda: saved.append(app._audio.volume))
+    app._audio.set_volume(50)
+
+    app._on_knob_volume(5)
+    app._on_knob_volume(5)
+    app._on_knob_volume(-5)
+    timer = app._volume_save_timer
+    timer.join(3)
+
+    assert app._audio.volume == 55
+    assert app._dashboard_state.snapshot()["audio"]["volume"] == 55
+    assert saved == [55]
+
+
+def test_stop_components_flushes_pending_volume_save(monkeypatch):
+    """保存待ちの音量があれば、終了時に書き込む。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    saved = []
+    monkeypatch.setattr(app, "_save_audio_state", lambda: saved.append(app._audio.volume))
+    app._on_knob_volume(5)
+
+    app._stop_components()
+
+    assert saved == [app._audio.volume]
+    assert app._volume_save_timer is None
