@@ -17,6 +17,7 @@ def main() -> None:
     runner = AgentRunner(settings, store)
     # 届け終わった古いジョブの記録を、起動時と1時間ごとに消す。
     runner.start_job_pruning()
+    runner.start_reply_collection()
     server = AgentRunnerServer(runner, token=settings.agent_runner_token)
     server.serve_forever(settings.agent_runner_host, settings.agent_runner_port)
 

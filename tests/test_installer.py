@@ -1400,3 +1400,97 @@ def test_quiet_lxc_sudoers_follows_window_layout_choice(tmp_path, monkeypatch, a
         _watchdog_plan(tmp_path), config_path, runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None
     )
     assert any(command[:2] == ["sudo", "visudo"] for command in commands) is expected
+
+
+MEDIA_KEYS_EMPTY_CONFIG = """<?xml version='1.0' encoding='utf-8'?>
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+\t<!-- 保持するコメント -->
+\t<touch deviceName="ILITEK" mouseEmulation="no" />
+</openbox_config>
+"""
+
+
+def _keybinds(config):
+    """rc.xmlのキー割り当てを (タグ名, key) の一覧で返す。"""
+    root = installer.ET.fromstring(config.read_text(encoding="utf-8"))
+    return [
+        (str(node.tag).rpartition("}")[2], node.get("key"))
+        for node in root.iter()
+        if str(node.tag).rpartition("}")[2] in {"keybind", "default"}
+    ]
+
+
+def test_block_media_keys_adds_keyboard_with_defaults(tmp_path):
+    """割り当てがなければ、標準の割り当てを残したうえでメディアキーを割り当て、labwcへ通知する。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    commands, messages = [], []
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=messages.append)
+    assert _keybinds(config) == [("default", None)] + [("keybind", key) for key in installer.MEDIA_KEYS]
+    assert "<!-- 保持するコメント -->" in config.read_text(encoding="utf-8")
+    assert config.with_name("rc.xml.before-argos-media-keys").read_text(encoding="utf-8") == MEDIA_KEYS_EMPTY_CONFIG
+    assert commands == [["pkill", "-HUP", "-u", "argos", "-x", "labwc"]]
+    assert messages and "before-argos-media-keys" in messages[0]
+
+
+def test_block_media_keys_is_idempotent(tmp_path):
+    """2回目は何も変えず、最初のバックアップも残す。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    plan = _window_layout_plan(tmp_path)
+    installer._block_media_keys_for_apps(plan, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    first = config.read_text(encoding="utf-8")
+    commands = []
+    installer._block_media_keys_for_apps(plan, runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None)
+    assert config.read_text(encoding="utf-8") == first
+    assert config.with_name("rc.xml.before-argos-media-keys").read_text(encoding="utf-8") == MEDIA_KEYS_EMPTY_CONFIG
+    assert commands == []
+
+
+def test_block_media_keys_keeps_existing_bindings(tmp_path):
+    """既存の割り当てがあれば<default/>は足さず、割り当て済みのキーも変えない。"""
+    text = (
+        '<openbox_config><keyboard>\n'
+        '\t<keybind key="XF86AudioPlay"><action name="Execute" command="mpc toggle" /></keybind>\n'
+        '\t</keyboard></openbox_config>'
+    )
+    config = _labwc_config(tmp_path, text)
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert _keybinds(config) == [("keybind", "XF86AudioPlay"), ("keybind", "XF86AudioNext"), ("keybind", "XF86AudioPrev")]
+    assert "mpc toggle" in config.read_text(encoding="utf-8")
+
+
+def test_block_media_keys_fills_empty_keyboard_element(tmp_path):
+    """中身のない<keyboard/>は、標準の割り当てとメディアキーを入れた要素に置き換える。"""
+    config = _labwc_config(tmp_path, "<openbox_config><keyboard /></openbox_config>")
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert _keybinds(config) == [("default", None)] + [("keybind", key) for key in installer.MEDIA_KEYS]
+
+
+@pytest.mark.parametrize(
+    ("text", "warning"),
+    [("<openbox_config><touch", "解析できない"), ("<labwc_config />", "想定と違う")],
+)
+def test_block_media_keys_warns_on_unexpected_config(tmp_path, text, warning):
+    """壊れたXMLや想定外の構成は変更せず、警告だけ出す。"""
+    config = _labwc_config(tmp_path, text)
+    messages = []
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: None, output_func=messages.append)
+    assert config.read_text(encoding="utf-8") == text
+    assert messages and warning in messages[0]
+
+
+def test_block_media_keys_without_config(tmp_path):
+    """rc.xmlがない端末では何もしない。"""
+    commands = []
+    installer._block_media_keys_for_apps(_window_layout_plan(tmp_path), runner=lambda command, **kwargs: commands.append(command), output_func=lambda message: None)
+    assert commands == []
+
+
+@pytest.mark.parametrize(("mac", "blocked"), [("DC:2C:26:08:75:08", True), ("", False)])
+def test_window_layout_choice_blocks_media_keys_only_with_bluetooth_ptt(tmp_path, monkeypatch, mac, blocked):
+    """画面分割を使い、BluetoothのPTTも設定したときだけメディアキーを割り当てる。"""
+    config = _labwc_config(tmp_path, MEDIA_KEYS_EMPTY_CONFIG)
+    config_path = tmp_path / "config.yaml"
+    monkeypatch.setattr("argos.installer.shutil.which", lambda tool: f"/usr/bin/{tool}")
+    write_yaml_from_environment({"ARGOS_WINDOW_LAYOUT_ANDROID_APP": "maps", "ARGOS_PTT_BLUETOOTH_MAC": mac}, config_path)
+    installer._apply_window_layout_choice(_window_layout_plan(tmp_path), config_path, runner=lambda command, **kwargs: None, output_func=lambda message: None)
+    assert ("XF86AudioPlay" in config.read_text(encoding="utf-8")) is blocked

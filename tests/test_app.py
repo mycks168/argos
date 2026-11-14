@@ -52,7 +52,7 @@ class FakeThread:
         FakeThread.started.append((self.target, self.args))
 
 
-def _settings():
+def _settings() -> Settings:
     return Settings(
         agent_provider="codex",
         agent_state_path="~/.argos/agent-sessions.json",
@@ -249,7 +249,7 @@ class FakeKokoro:
         return f"kokoro:{text}".encode()
 
 
-def _patch_app(monkeypatch):
+def _patch_app(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("argos.core.app.Recorder", FakeRecorder)
     monkeypatch.setattr("argos.core.app.AudioPlayer", FakeAudio)
     monkeypatch.setattr("argos.core.app.SttGatewayClient", FakeStt)

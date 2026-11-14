@@ -6,6 +6,8 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from http.client import HTTPResponse
+from typing import cast
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -36,7 +38,7 @@ def _read_sse_events(response):
 class FakeTerminalHandler:
     """DashboardServerへ渡す端末ハンドラのテスト用スタブ。"""
 
-    def __init__(self, turn_events):
+    def __init__(self, turn_events: list[dict[str, object]]) -> None:
         """process_turnで返すイベント列を保持する。"""
         self._turn_events = turn_events
         self.progress_audio_assets = {}
@@ -84,7 +86,7 @@ class FakeTerminalHandler:
         yield from self._turn_events
 
 
-def _start_server(handler, token="secret"):
+def _start_server(handler: object, token: str = "secret") -> tuple[DashboardServer, str]:
     """端末ハンドラ付きのDashboardServerを起動しベースURLを返す。"""
     server = DashboardServer(DashboardState(), "127.0.0.1", 0, token, terminal_handler=handler)
     server.start()
@@ -92,7 +94,7 @@ def _start_server(handler, token="secret"):
     return server, base_url
 
 
-def _request(url, method="GET", body=None, token="secret", content_type="application/json", accept=""):
+def _request(url: str, method: str = "GET", body: bytes | None = None, token: str = "secret", content_type: str = "application/json", accept: str = "") -> HTTPResponse:
     """Terminal APIへHTTPリクエストを送りレスポンスを返す。"""
     headers = {}
     if token:
@@ -101,7 +103,7 @@ def _request(url, method="GET", body=None, token="secret", content_type="applica
         headers["Content-Type"] = content_type
     if accept:
         headers["Accept"] = accept
-    return urlopen(Request(url, data=body, headers=headers, method=method), timeout=3)
+    return cast(HTTPResponse, urlopen(Request(url, data=body, headers=headers, method=method), timeout=3))
 
 
 def _configure_deferred_runner_delivery(
