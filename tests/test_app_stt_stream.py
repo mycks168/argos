@@ -482,7 +482,7 @@ def test_stream_client_sends_argos_options(monkeypatch, progress_voice):
     assert options["backchannel"] == {
         "threshold": 0.4, "min_interval_ms": 1200,
         "phrases_by_kind": {
-            "continuing": "うん", "seeking_agreement": "うん", "opinion": "うん", "step_by_step": "うん",
+            "continuing": "うん", "hesitating": "うん", "seeking_agreement": "うん", "opinion": "うん", "step_by_step": "うん",
             "explanation": "なるほど", "sad_or_trouble": ["そっか", "そっかぁ"], "complaint": "そっか", "news": "そっか",
         },
     }

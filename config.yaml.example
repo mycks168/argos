@@ -248,10 +248,16 @@ stt:
   - なるほど
   - うん
   backchannel_start_delay_ms: 2000
+  # 相槌のタイミングの決め方。silence=話が途切れて無音が続いたところで打つ、maai=相槌モデルの確率だけで決める。
+  # 空ならstt-gatewayの既定に任せる。
+  backchannel_timing: ''
+  # silenceのとき、無音がこの時間（ミリ秒）続いたら相槌を打つ。0ならstt-gatewayの既定（120ms）。
+  backchannel_silence_ms: 0
   # 話の種類ごとの相槌。値は文言か、1〜5個の配列（配列は順に使う）。指定しない種類では相槌を打たない。
   # 空の辞書 {} にすると、種類を判定せず backchannel_phrases を順番に使う。
   backchannel_phrases_by_kind:
     continuing: うん
+    hesitating: うん
     seeking_agreement: うん
     opinion: うん
     step_by_step: うん

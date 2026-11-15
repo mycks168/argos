@@ -19,6 +19,25 @@ def test_input_device_profiles_load_from_environment(monkeypatch):
     assert settings.ptt_devices[0].bindings[183].action == "ptt"
 
 
+def test_hesitating_uses_un_and_backchannel_volume_can_be_raised(monkeypatch):
+    """言いよどみの既定文言を送り、相槌の音量だけを変更できる。"""
+    from argos.services.stt.stream import build_start_options
+
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", raising=False)
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_VOLUME", "0.7")
+    settings = load_settings()
+    assert dict(settings.stt_gateway_backchannel_phrases_by_kind)["hesitating"] == ("うん",)
+    assert settings.stt_gateway_backchannel_volume == 0.7
+    options = build_start_options(
+        ack_enabled=True,
+        backchannel_phrases=settings.stt_gateway_backchannel_phrases,
+        backchannel_threshold=settings.stt_gateway_backchannel_threshold,
+        backchannel_min_interval_ms=settings.stt_gateway_backchannel_min_interval_ms,
+        backchannel_phrases_by_kind=settings.stt_gateway_backchannel_phrases_by_kind,
+    )
+    assert options["backchannel"]["phrases_by_kind"]["hesitating"] == "うん"
+
+
 @pytest.fixture(autouse=True)
 def _clear_unified_slots(monkeypatch):
     """各テストが実機config.yamlのスロット設定に影響されないようにする。"""
@@ -855,7 +874,7 @@ def test_kind_phrases_defaults_and_disabled(monkeypatch):
     """既定の種類別の文言と、空辞書による従来動作への切り替えを読み込む。"""
     monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", raising=False)
     assert dict(load_settings().stt_gateway_backchannel_phrases_by_kind) == {
-        "continuing": ("うん",), "seeking_agreement": ("うん",), "opinion": ("うん",), "step_by_step": ("うん",),
+        "continuing": ("うん",), "hesitating": ("うん",), "seeking_agreement": ("うん",), "opinion": ("うん",), "step_by_step": ("うん",),
         "explanation": ("なるほど",), "sad_or_trouble": ("そっか", "そっかぁ"), "complaint": ("そっか",),
         "news": ("そっか",)}
     monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", "{}")
@@ -886,5 +905,29 @@ def test_load_stt_backchannel_skip_rate(monkeypatch):
 def test_kind_phrases_reject_invalid_settings(monkeypatch, raw):
     """誤った型やgatewayの上限を超える文言は起動前に検出する。"""
     monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", raw)
+    with pytest.raises(ValueError):
+        load_settings()
+
+
+def test_load_stt_backchannel_timing(monkeypatch):
+    """相槌のタイミングの決め方と無音の長さを読み込み、未対応の値はエラーにする。"""
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_TIMING", raising=False)
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", raising=False)
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_timing == ""
+    assert settings.stt_gateway_backchannel_silence_ms == 0
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_TIMING", " Silence ")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "120")
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_timing == "silence"
+    assert settings.stt_gateway_backchannel_silence_ms == 120
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "-1")
+    assert load_settings().stt_gateway_backchannel_silence_ms == 0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "99999")
+    assert load_settings().stt_gateway_backchannel_silence_ms == 2000
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_TIMING", "rms")
     with pytest.raises(ValueError):
         load_settings()

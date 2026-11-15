@@ -251,6 +251,8 @@ DESCRIPTION_BY_KEY = {
     "stt.backchannel_min_interval_ms": "相槌から次の相槌までの最短の間隔（ミリ秒）です。",
     "stt.backchannel_phrases": "話している途中の相槌の言葉です。順番に使います（最大10個、1つ20文字まで）。",
     "stt.backchannel_start_delay_ms": "話し始めてからこの時間（ミリ秒）は相槌を鳴らしません。話し始めの割り込みを防ぎます。",
+    "stt.backchannel_timing": "相槌のタイミングの決め方です。silenceは話が途切れて無音が続いたところで、maaiは相槌モデルの確率だけで決めます。空ならstt-gatewayの既定に任せます。",
+    "stt.backchannel_silence_ms": "silenceのとき、無音がこの時間（ミリ秒）続いたら相槌を打ちます。0ならstt-gatewayの既定（120ms）です。",
     "stt.backchannel_skip_rate": "届いた相槌を鳴らさずに見送る割合（0〜1）。毎回打つと機械っぽく聞こえるのを防ぎます。",
     "stt.ack_timeout_seconds": "文字起こしの後、最初の返事を待つ秒数です。過ぎたら決まった言葉で返事します。",
     "auth.enabled": "音声キーワードによる本人確認を有効にします。",

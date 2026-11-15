@@ -1149,6 +1149,36 @@ def test_dashboard_root_layout_query_grid_redirects():
         server.stop()
 
 
+@pytest.mark.parametrize("cookie,hint,explicit,expected", [
+    ("standard", "sp", "", "standard"),
+    ("sp", "standard", "", "sp"),
+    ("grid", "sp", "", "grid"),
+    ("", "sp", "", "sp"),
+    ("", "grid", "", "grid"),
+    ("", "unknown", "", "standard"),
+    ("standard", "sp", "grid", "grid"),
+    ("grid", "sp", "standard", "standard"),
+])
+def test_saved_layout_survives_server_restart(cookie, hint, explicit, expected):
+    """再起動しても手動選択を復元し、自動配置は未選択時だけ使う。"""
+    for _ in range(2):
+        server = DashboardServer(DashboardState(), "127.0.0.1", 0, "secret")
+        server.start()
+        try:
+            connection = HTTPConnection(*server.address, timeout=2)
+            path = f"/?startup_layout={hint}&layout={explicit}"
+            connection.request("GET", path, headers={"Cookie": f"argos_layout={cookie}"} if cookie else {})
+            response = connection.getresponse()
+            body = response.read().decode()
+            if expected == "grid":
+                assert response.status == 303 and response.getheader("Location") == "/grid"
+            else:
+                assert response.status == 200 and f'data-layout="{expected}"' in body
+            connection.close()
+        finally:
+            server.stop()
+
+
 @pytest.mark.parametrize("seconds, expected", [(None, "8.0"), (12.5, "12.5"), (0, "0")])
 def test_dashboard_injects_sp_notice_seconds(seconds, expected):
     """SP表示で通知欄を自動で開く秒数を、設定値のまま画面へ埋め込む（未指定は8秒、0は無効）。"""

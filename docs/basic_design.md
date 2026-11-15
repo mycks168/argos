@@ -92,10 +92,11 @@ location:
 
 相槌（`backchannel`）:
 
+- `stt.backchannel_timing`（`STT_GATEWAY_BACKCHANNEL_TIMING`、既定は空）を `start.backchannel.timing` に送る。`silence` は stt-gateway が Silero VAD で話していない区間を見つけ、無音が一定時間続いたところで相槌を出す方式、`maai` は相槌モデルの確率だけで決める従来の方式。空なら項目を送らず stt-gateway の既定に任せる。`silence` で無音とみなす長さは `stt.backchannel_silence_ms`（`STT_GATEWAY_BACKCHANNEL_SILENCE_MS`、0〜2000、0なら送らず stt-gateway の既定 120ms）を `start.backchannel.silence_ms` に送る。確率だけで決める方式では、ARGOS のマイクの音だと相槌がすべて話の途中（50〜150ms の短い切れ目）に出てかぶったため、無音を待つ方式を選べるようにした（2026-11-15）。`maai`・`silence` 以外の値は起動時の設定読み込みでエラーにする。
 - `phrases` と `phrases_by_kind` は同時に送れない。分類設定がある場合は `phrases_by_kind` だけを送り、古いgatewayへの互換再送では `phrases_by_kind` を除き、設定済みの `backchannel_phrases` を `phrases` として送る。
 - `stt.backchannel_phrases_by_kind`（環境変数 `STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND` はJSON辞書）を `start.backchannel.phrases_by_kind` に送る。stt-gateway は相槌のタイミングごとに、そこまでの発話から話の種類を14種類（`continuing`, `hesitating`, `question_or_request`, `sad_or_trouble`, `explanation`, `surprising`, `news`, `seeking_agreement`, `opinion`, `happy`, `complaint`, `step_by_step`, `thinking_aloud`, `wrapping_up`）から判定し、その種類の文言を返す。指定しない種類では相槌を出さない。
   - 値は1〜20文字の文言か、その配列（1〜5個）。配列はその種類の中で順に使われ、順番は接続の中で引き継がれる。ARGOS は文言が1つなら文字列、複数なら配列で送る。
-  - 既定は `continuing`・`seeking_agreement`・`opinion`・`step_by_step` に「うん」、`explanation` に「なるほど」、`sad_or_trouble` に「そっか」「そっかぁ」、`complaint`・`news` に「そっか」。言いよどみ・質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合うため、`opinion` は「うん」にした。
+  - 既定は `continuing`・`hesitating`・`seeking_agreement`・`opinion`・`step_by_step` に「うん」、`explanation` に「なるほど」、`sad_or_trouble` に「そっか」「そっかぁ」、`complaint`・`news` に「そっか」。質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。言いよどみも受け止めるため、`hesitating`には「うん」を割り当てる。「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合うため、`opinion` は「うん」にした。
   - 14種類以外の種類、6個以上の配列、21文字以上の文言は、stt-gateway が `invalid_message` で拒否するため、起動時の設定読み込みでエラーにする。
   - 空の辞書 `{}` なら種類の指定を送らず、従来の文言を順番に使う。
 - 分類指定付きの `start` は受理を最大3秒待ってから音声を送る。`started` 前の `invalid_message` では、分類指定を外して同じ接続で `start` を1回再送し、ためた音声を送る。以後、そのクライアントでは分類指定を外す。再送も拒否された場合は録音ファイルでの文字起こしに切り替える。
@@ -311,7 +312,7 @@ ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの 
 
 既存の `/` は車載・固定ディスプレイ向け表示として維持する。`/sp` はスマートフォン・タブレット向け表示を提供し、状態欄と通知欄を左右のドロワーとして開閉する。SP表示ではツールバー左上のメニューボタン（`☰`）を押すことで、左側のステータスパネルを常時固定表示するモード（`sp-left-pinned`）と非表示モードを直接切り替えることができる。左枠固定時は中央の会話領域の幅と位置が自動調整され、背景バックドロップを非表示にしてスムーズに操作できる。固定状態はブラウザの `localStorage`（`argos-sp-left-pinned`）に保持される。SP表示では、新しい通知が届いたとき通知欄（右ドロワー）を自動で開いて、`dashboard.sp_notice_seconds`（`ARGOS_DASHBOARD_SP_NOTICE_SECONDS`、既定8秒、0以下で無効）たつと閉じる（`static/sp_notice_popup.js` の `NoticePopup`）。対象は、`source` が `ARGOS` 以外の通知と、`priority` が `high` の通知で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は、バッジだけで自動では開かない。ページを開いた時点の通知は既存のものとして扱い、開かない。利用者が通知欄を操作（ベル・背景の押下、通知欄への接触・スクロール）したら、自動では閉じない。自動で開いた通知は既読にする。バッジは、未確認があるあいだ、大きく赤く表示して拡大縮小する（`prefers-reduced-motion` では止める）。
 
-また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。
+また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。キオスクの起動時も最後の手動選択（通常・SP・グリッド）を復元する。表示の優先順位は、明示的な`layout`指定、保存済みCookie、自動配置の初回候補`startup_layout`、サーバー既定値の順とする。`dashboard-layout`ファイルの値は初回候補としてだけ渡し、過去の分割用SP設定で手動選択を上書きしない。`ARGOS_DASHBOARD_KIOSK_LAYOUT`および`window_layout.dashboard_layout`の固定指定は引き続き明示的な`layout`として扱う。
 
 SP表示ではページ全体を固定ビューポートに収め、本文スクロールを禁止する。スクロール対象は会話履歴、状態ドロワー、通知ドロワーに限定する。`VisualViewport` の高さと上端位置を反映し、iOSのソフトウェアキーボード開閉時にも入力欄を表示領域内へ維持する。通知到着時はドロワーを自動表示せず、通知ボタンの未確認件数だけを更新してテキスト入力を妨げない。通知ドロワーを開いた時点で確認済みにし、最新確認時刻をブラウザの `localStorage` に保存する。通知履歴は削除せず、確認状態は端末ごとに独立させる。ダッシュボードHTMLはブラウザへキャッシュさせず、更新後の操作UIを再読み込み時に反映する。
 

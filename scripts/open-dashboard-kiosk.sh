@@ -58,15 +58,22 @@ if [ -n "${ARGOS_DASHBOARD_VIEW_KEY:-}" ]; then
   DASHBOARD_QUERY="key=${ARGOS_DASHBOARD_VIEW_KEY}"
 fi
 
-# 画面配置ツール(argos.tools.window_layout)が選んだレイアウトがあれば、Cookieより優先して開く。
-# 環境変数の指定が最優先。standard/sp/grid以外の値は無視する。
+# 手動で保存した表示を優先し、画面配置ツールの記録は初回だけの候補にする。
+# 明示的な固定設定だけは、従来どおりCookieより優先する。
 LAYOUT_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/argos/dashboard-layout"
 KIOSK_LAYOUT="${ARGOS_DASHBOARD_KIOSK_LAYOUT:-}"
+LAYOUT_QUERY_KEY="layout"
+if [ -z "${KIOSK_LAYOUT}" ]; then
+  case "${ARGOS_WINDOW_LAYOUT_DASHBOARD_LAYOUT:-}" in
+    standard|sp|grid) KIOSK_LAYOUT="${ARGOS_WINDOW_LAYOUT_DASHBOARD_LAYOUT}" ;;
+  esac
+fi
 if [ -z "${KIOSK_LAYOUT}" ] && [ -f "${LAYOUT_FILE}" ]; then
   KIOSK_LAYOUT="$(head -c 16 "${LAYOUT_FILE}" | tr -d '[:space:]')"
+  LAYOUT_QUERY_KEY="startup_layout"
 fi
 case "${KIOSK_LAYOUT}" in
-  standard|sp|grid) DASHBOARD_QUERY="${DASHBOARD_QUERY:+${DASHBOARD_QUERY}&}layout=${KIOSK_LAYOUT}" ;;
+  standard|sp|grid) DASHBOARD_QUERY="${DASHBOARD_QUERY:+${DASHBOARD_QUERY}&}${LAYOUT_QUERY_KEY}=${KIOSK_LAYOUT}" ;;
 esac
 if [ -n "${DASHBOARD_QUERY}" ]; then
   DASHBOARD_URL="${DASHBOARD_URL}?${DASHBOARD_QUERY}"

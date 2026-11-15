@@ -539,3 +539,20 @@ def test_build_kind_options():
                                                               ("sad_or_trouble", ("そっか", "そっかぁ"))))
     assert options["backchannel"]["phrases_by_kind"] == {"continuing": "うん", "sad_or_trouble": ["そっか", "そっかぁ"]}
     assert "phrases" not in options["backchannel"]
+
+
+def test_build_start_options_timing():
+    """相槌のタイミング指定は、設定したときだけ start.backchannel に入る。"""
+    base = dict(ack_enabled=True, backchannel_phrases=("うん",), backchannel_threshold=0.35,
+                backchannel_min_interval_ms=2500)
+    plain = build_start_options(**base)
+    assert "timing" not in plain["backchannel"]
+    assert "silence_ms" not in plain["backchannel"]
+
+    timed = build_start_options(**base, backchannel_timing="silence", backchannel_silence_ms=120)
+    assert timed["backchannel"]["timing"] == "silence"
+    assert timed["backchannel"]["silence_ms"] == 120
+
+    only_timing = build_start_options(**base, backchannel_timing="maai")
+    assert only_timing["backchannel"]["timing"] == "maai"
+    assert "silence_ms" not in only_timing["backchannel"]

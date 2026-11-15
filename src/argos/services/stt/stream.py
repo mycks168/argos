@@ -58,8 +58,13 @@ def build_start_options(
     backchannel_threshold: float,
     backchannel_min_interval_ms: int,
     backchannel_phrases_by_kind: tuple[tuple[str, tuple[str, ...]], ...] = (),
+    backchannel_timing: str = "",
+    backchannel_silence_ms: int = 0,
 ) -> dict[str, Any]:
     """start に付ける、発話ごとの ack と backchannel の指定を作る。
+
+    backchannel_timing（"maai"/"silence"）と backchannel_silence_ms は、指定したときだけ送る。
+    空・0 のときは項目ごと省き、stt-gateway の既定のやり方に任せる（古い gateway でも壊れない）。
 
     ack を読み上げない設定（進捗音声がオフ）のときは "ack": false にして、
     stt-gateway に LLM で返事を作らせない。
@@ -68,6 +73,10 @@ def build_start_options(
         "threshold": backchannel_threshold,
         "min_interval_ms": backchannel_min_interval_ms,
     }
+    if backchannel_timing:
+        backchannel["timing"] = backchannel_timing
+    if backchannel_silence_ms > 0:
+        backchannel["silence_ms"] = backchannel_silence_ms
     if backchannel_phrases_by_kind:
         # 文言が1つなら文字列、複数なら配列で送る。配列は、その種類の中で順に使われる。
         backchannel["phrases_by_kind"] = {

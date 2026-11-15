@@ -79,10 +79,11 @@ def _float_env_with_fallback(name: str, fallback_name: str, default: float) -> f
 # 「へえ」は上がって下がる抑揚が強く、「そうなんだ」は長くて抑揚が不自然に聞こえたため外した。
 DEFAULT_STT_BACKCHANNEL_PHRASES = ("そっか", "なるほど", "うん")
 # 話の種類ごとの相槌。stt-gateway が相槌のたびに話の種類を判定し、その種類の文言を順に返す。
-# 言いよどみ・質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。
+# 質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。
 # 「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合う（stt-gateway 側の調査）。
 DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("continuing", ("うん",)),
+    ("hesitating", ("うん",)),
     ("seeking_agreement", ("うん",)),
     ("opinion", ("うん",)),
     ("step_by_step", ("うん",)),
@@ -140,6 +141,27 @@ def _stt_backchannel_phrases_by_kind() -> tuple[tuple[str, tuple[str, ...]], ...
             raise ValueError("種類別の相槌は、1〜20文字の文言か、その配列（1〜5個）で指定してください")
         result.append((kind, tuple(phrase.strip() for phrase in phrases)))
     return tuple(result)
+
+
+STT_BACKCHANNEL_TIMINGS = ("maai", "silence")
+
+
+def _stt_backchannel_timing() -> str:
+    """相槌のタイミングの決め方を読み込む。空なら stt-gateway の既定に任せる（指定を送らない）。
+
+    maai は相槌モデルの確率だけで決める従来の方式、silence は話していない区間（VAD）が
+    一定時間続いたところで出す方式。
+    """
+    value = os.environ.get("STT_GATEWAY_BACKCHANNEL_TIMING", "").strip().lower()
+    if value and value not in STT_BACKCHANNEL_TIMINGS:
+        raise ValueError(f"stt.backchannel_timingは{'・'.join(STT_BACKCHANNEL_TIMINGS)}のどれかか、空で指定してください")
+    return value
+
+
+def _stt_backchannel_silence_ms() -> int:
+    """silence方式で、無音が続いたとみなす長さ（ミリ秒）を読み込む。0なら stt-gateway の既定に任せる。"""
+    value = int(os.environ.get("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "0"))
+    return min(2000, max(0, value))
 
 
 def _stt_backchannel_skip_rate() -> float:
@@ -389,6 +411,9 @@ class Settings:
     stt_gateway_backchannel_skip_rate: float = 0.25
     # 話し始めてからこの時間（音声上のミリ秒）までに届いた相槌は鳴らさない。
     stt_gateway_backchannel_start_delay_ms: int = 2000
+    # 相槌のタイミングの決め方（""=gatewayの既定 / "maai" / "silence"）と、silenceの無音の長さ（0=既定）
+    stt_gateway_backchannel_timing: str = ""
+    stt_gateway_backchannel_silence_ms: int = 0
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -730,6 +755,8 @@ def load_settings() -> Settings:
         stt_gateway_backchannel_start_delay_ms=max(
             0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "2000"))
         ),
+        stt_gateway_backchannel_timing=_stt_backchannel_timing(),
+        stt_gateway_backchannel_silence_ms=_stt_backchannel_silence_ms(),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),

@@ -242,6 +242,10 @@ wakeword:
 
 `/` を開いたときにどのレイアウトを出すかは、前回の選択（ブラウザに保存）と既定値で決まります。
 
+キオスクでも、最後に手動で選んだ通常・SP・グリッドを再起動後に復元します。
+以前のWaydroid分割用SP設定が残っていても、手動の選択を上書きしません。
+ただし`ARGOS_DASHBOARD_KIOSK_LAYOUT`や`window_layout.dashboard_layout`で明示的に固定している場合は、その指定が優先されます。
+
 **設定**
 
 ```yaml
@@ -706,6 +710,7 @@ stt:
   backchannel_phrases: [そっか, なるほど, うん]
   backchannel_phrases_by_kind:  # 話の種類ごとの相槌
     continuing: うん
+    hesitating: うん
     seeking_agreement: うん
     opinion: うん
     step_by_step: うん
@@ -715,6 +720,8 @@ stt:
     news: そっか
   backchannel_skip_rate: 0.25       # 相槌をときどき見送る割合
   backchannel_start_delay_ms: 2000  # 話し始めの相槌を鳴らさない時間
+  backchannel_timing: silence       # 相槌のタイミング（silence=無音を待つ / maai=確率だけ / 空=gatewayの既定）
+  backchannel_silence_ms: 120       # silenceで無音とみなす長さ（0=gatewayの既定）
 voicevox:
   url: http://localhost:50021
   bearer_token: ''
@@ -727,9 +734,9 @@ tts:
     enabled: true
 ```
 
-`stream: true` にすると、PTTやウェイクワードで話している間に、ARGOSが「うん」「そっか」と小さめの声で相槌を打ちます。話し終えると、すぐに「ちょっと見てみるね。」のような最初の返事をしてから、本回答を読み上げます。相槌が少なければ `backchannel_threshold` を下げ、多すぎれば上げてください。stt-gateway が WebSocket `/stream` に対応している必要があります。つながらないときは、自動で従来の文字起こしに切り替わります。スピーカーの相槌をマイクが拾って聞き取りが悪くなるときは、`backchannel_volume` を下げるか `0` にしてください。相槌の出方を調べるときは、`debug_recording_dir` に保存先（例：`~/.local/share/argos/stt-debug`）を指定すると、話した録音と、届いた相槌の記録が残ります。声が残るので、調べ終わったら空に戻して、保存先のファイルを消してください。
+`stream: true` にすると、PTTやウェイクワードで話している間に、ARGOSが「うん」「そっか」と小さめの声で相槌を打ちます。話し終えると、すぐに「ちょっと見てみるね。」のような最初の返事をしてから、本回答を読み上げます。相槌が少なければ `backchannel_threshold` を下げ、多すぎれば上げてください。相槌が話の途中にかぶるときは、`backchannel_timing: silence` にすると、話が途切れて無音が続いたところで打つようになります（stt-gateway側の対応が必要です）。stt-gateway が WebSocket `/stream` に対応している必要があります。つながらないときは、自動で従来の文字起こしに切り替わります。スピーカーの相槌をマイクが拾って聞き取りが悪くなるときは、`backchannel_volume` を下げるか `0` にしてください。相槌の出方を調べるときは、`debug_recording_dir` に保存先（例：`~/.local/share/argos/stt-debug`）を指定すると、話した録音と、届いた相槌の記録が残ります。声が残るので、調べ終わったら空に戻して、保存先のファイルを消してください。
 
-`backchannel_phrases_by_kind` で、話の種類ごとの相槌を指定できます。stt-gateway が、相槌のたびにそこまでの話から種類を判定します。種類は次の14個で、指定していない種類では相槌を打ちません。
+`backchannel_phrases_by_kind` で、話の種類ごとの相槌を指定できます。stt-gateway が、相槌のたびにそこまでの話から種類を判定します。種類は次の14個で、指定していない種類では相槌を打ちません。言いよどみ（`hesitating`）にも既定で「うん」を返します。相槌だけが小さく聞こえる場合は`backchannel_volume`を0.5から0.7などへ上げてください。通常の返答音量は変わりません。変更の反映にはARGOS本体の再起動が必要です。
 
 | 種類 | 意味 | 既定の相槌 |
 |---|---|---|
@@ -743,7 +750,7 @@ tts:
 | `news` | 出来事の報告 | そっか |
 | `surprising` | 驚く話 | （打たない） |
 | `happy` | 嬉しい話 | （打たない） |
-| `hesitating` | 言いよどみ | （打たない） |
+| `hesitating` | 言いよどみ | うん |
 | `question_or_request` | 質問や依頼 | （打たない） |
 | `thinking_aloud` | 考えながら話している | （打たない） |
 | `wrapping_up` | 話をまとめて終えようとしている | （打たない） |
