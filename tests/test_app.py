@@ -1932,6 +1932,41 @@ def test_stream_response_splits_tts_chunks(monkeypatch):
     assert app._dashboard_state.snapshot()["display_activity"]["sequence"] == 3
 
 
+def test_stream_response_shows_figures_but_does_not_read_them(monkeypatch):
+    """図・表・コードは画面へそのまま渡し、読み上げは地の文だけにする。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    message_id = app._dashboard_state.add_message("assistant", "", streaming=True)
+    deltas = ["## 構成\n図にしたよ。\n```mer", "maid\ngraph TD\nA-->B\n```\n| a | b |\n|---|---|\n", "**以上**だよ"]
+
+    response = app._speech.speak_response_stream(deltas, dashboard_message_id=message_id)
+
+    assert response == "".join(deltas)
+    assert app._dashboard_state.snapshot()["messages"][-1]["text"] == "".join(deltas)
+    assert app._audio.played == [
+        "正規化:構成".encode(),
+        "正規化:図にしたよ。".encode(),
+        "正規化:以上だよ".encode(),
+    ]
+
+
+def test_synthesize_response_stream_does_not_read_figures(monkeypatch):
+    """遠隔端末向けの合成でも、応答テキストは全文を渡し、音声は地の文だけにする。"""
+    _patch_app(monkeypatch)
+    settings = Settings(**{**_settings().__dict__, "dry_run": False})
+    app = ArgosApp(settings)
+    spoken = []
+    monkeypatch.setattr(app._speech, "_synthesize_chunk", lambda chunk, _slot_key="": spoken.append(chunk) or b"wav")
+    deltas = ["表だよ。\n| a | b |\n", "|---|---|\n```svg\n<svg></svg>\n```\n終わり。次"]
+
+    events = list(app._speech.synthesize_response_stream(deltas))
+
+    assert [value for kind, value in events if kind == "text"] == deltas
+    assert spoken == ["表だよ。", "終わり。", "次"]
+    assert [kind for kind, _ in events].count("audio") == 3
+
+
 def test_stream_response_discards_queued_chunks_after_cancel(monkeypatch):
     _patch_app(monkeypatch)
     settings = Settings(**{**_settings().__dict__, "dry_run": False})

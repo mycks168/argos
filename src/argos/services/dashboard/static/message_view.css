@@ -1,0 +1,87 @@
+/* 会話本文（Markdown・図・表・画像）の見た目。ダッシュボードとグリッドで共用する。
+   画面の大きさを決め打ちせず、文字サイズ（em）と画面比（vw/vh）だけで寸法を決める。 */
+
+.msg-body { white-space: normal; overflow-wrap: anywhere; }
+.msg-body > :first-child { margin-top: 0; }
+.msg-body > :last-child { margin-bottom: 0; }
+
+.msg-body p,
+.msg-body ul,
+.msg-body ol,
+.msg-body blockquote,
+.msg-body pre,
+.msg-body .msg-table-wrap,
+.msg-body .msg-figure { margin: 0.45em 0; }
+
+.msg-body h1, .msg-body h2, .msg-body h3,
+.msg-body h4, .msg-body h5, .msg-body h6 { margin: 0.7em 0 0.3em; line-height: 1.25; font-weight: 700; }
+.msg-body h1 { font-size: 1.3em; }
+.msg-body h2 { font-size: 1.18em; }
+.msg-body h3 { font-size: 1.08em; }
+.msg-body h4, .msg-body h5, .msg-body h6 { font-size: 1em; }
+
+.msg-body ul, .msg-body ol { padding-left: 1.5em; }
+.msg-body li > p { margin: 0.15em 0; }
+.msg-body a { color: #78c8f5; text-decoration: underline; }
+.msg-body hr { border: 0; border-top: 1px solid #33475a; margin: 0.7em 0; }
+.msg-body blockquote { margin-left: 0; padding-left: 0.8em; border-left: 3px solid #526775; color: #b5c4cf; }
+
+.msg-body code {
+  font-family: ui-monospace, "DejaVu Sans Mono", Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.08em 0.3em;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.09);
+}
+.msg-body pre {
+  max-width: 100%;
+  padding: 0.6em 0.8em;
+  overflow-x: auto;
+  border: 1px solid #24343f;
+  border-radius: 4px;
+  background: #0a1016;
+  line-height: 1.35;
+}
+.msg-body pre code { padding: 0; background: none; white-space: pre; overflow-wrap: normal; }
+.msg-body pre.msg-code-pending { opacity: 0.6; }
+
+.msg-body .msg-table-wrap { max-width: 100%; overflow-x: auto; }
+.msg-body table { border-collapse: collapse; font-size: 0.92em; }
+.msg-body th, .msg-body td { padding: 0.25em 0.65em; border: 1px solid #33475a; text-align: left; vertical-align: top; }
+.msg-body th { background: rgba(105, 183, 228, 0.14); font-weight: 700; }
+
+.msg-body .msg-figure { max-width: 100%; }
+.msg-body .msg-figure > svg { display: block; max-width: 100%; height: auto; max-height: 80vh; }
+.msg-body .msg-figure figcaption { font-size: 0.85em; color: #e0a37a; }
+.msg-body .msg-image,
+.msg-body .msg-svg { display: block; max-width: 100%; max-height: min(70vh, 40em); height: auto; object-fit: contain; }
+.msg-body .msg-svg-fluid { width: min(100%, 36em); }
+.msg-body .msg-zoomable { cursor: zoom-in; }
+
+/* タップで出す拡大表示。画面全体を覆い、もう一度タップすると閉じる。 */
+.msg-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2vmin;
+  overflow: auto;
+  box-sizing: border-box;
+  background: rgba(4, 8, 12, 0.95);
+  color: #edf3f7;
+  font-size: clamp(16px, 2.4vmin, 40px);
+  cursor: zoom-out;
+}
+.msg-lightbox > * { margin: 0; cursor: zoom-out; }
+.msg-lightbox > img,
+.msg-lightbox > .msg-figure > img,
+.msg-lightbox > .msg-figure > svg {
+  width: 96vw;
+  height: 96vh;
+  max-width: none !important;
+  max-height: none;
+  object-fit: contain;
+}
+.msg-lightbox > .msg-table-wrap { max-width: 96vw; max-height: 96vh; margin: auto; overflow: auto; }

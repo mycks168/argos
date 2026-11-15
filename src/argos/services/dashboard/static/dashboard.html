@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARGOS Dashboard</title>
+  <link rel="stylesheet" href="/static/message_view.css">
   <style>
     :root {
       color-scheme: dark;
@@ -1286,7 +1287,9 @@
   <script src="/static/browser_audio.js"></script>
   <script src="/static/slot_audio.js"></script>
   <script src="/static/background_receiver.js"></script>
+  <script src="/static/vendor/markdown-it.min.js"></script>
   <script src="/static/message_text.js"></script>
+  <script src="/static/message_view.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script src="/static/sp_notice_popup.js"></script>
   <script src="/static/wheel_redirect.js"></script>
@@ -1553,7 +1556,6 @@
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
-    const renderMessageText = value => ArgosMessageText.renderMessageText(value);
     function updateDashboardMuteState(nextMuted) {
       if (nextMuted && !muted) slotAudio.cancel();
       muted = nextMuted;
@@ -1727,11 +1729,20 @@
       const nextMessages = JSON.stringify(visibleMessages);
       if (!consoleView.isEnabled && nextMessages !== previousMessages) {
         const shouldFollow = followLatestMessage || isNearLatestMessage();
-        messages.innerHTML = visibleMessages.length ? visibleMessages.map(item => `
+        // 表示を切り替えた直後は作り直し、それ以外は変わったメッセージだけを差し替える（図のちらつき防止）。
+        if (previousMessages === "") ArgosMessageView.reset(messages);
+        ArgosMessageView.sync(messages, visibleMessages, {
+          renderShell: (item, bodyHtml) => `
         <article class="message" data-role="${escapeHtml(item.role)}">
           <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"} ${item.streaming ? "..." : ""}</div>
-          <div class="text">${renderMessageText(item.text)}</div>
-        </article>`).join("") : `<div class="empty">会話待機中</div>`;
+          <div class="text msg-body">${bodyHtml}</div>
+        </article>`,
+          emptyHtml: `<div class="empty">会話待機中</div>`,
+          // 図や画像が後から入って伸びた分も、末尾を見ている間は追いかける。
+          onLayoutChange: () => {
+            if (followLatestMessage) messages.scrollTop = messages.scrollHeight;
+          },
+        });
         previousMessages = nextMessages;
         if (shouldFollow) {
           messages.scrollTop = messages.scrollHeight;

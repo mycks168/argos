@@ -27,11 +27,20 @@ def test_grid_queues_progress_audio_for_target_tile() -> None:
 
 
 def test_dashboards_render_source_urls_as_safe_links() -> None:
-    """通常画面とGridは共通処理で回答中の出典URLをリンク化する。"""
+    """通常画面とGridは共通処理で回答本文（Markdown、図、出典URLのリンク）を描画する。"""
     dashboard_html = _static_html("dashboard.html")
     grid_html = _static_html("grid.html")
 
-    assert '<script src="/static/message_text.js"></script>' in dashboard_html
-    assert '<script src="/static/message_text.js"></script>' in grid_html
-    assert "renderMessageText(item.text)" in dashboard_html
-    assert "renderMessageText(text)" in grid_html
+    for html in (dashboard_html, grid_html):
+        assert '<link rel="stylesheet" href="/static/message_view.css">' in html
+        # 本文の変換が同梱のmarkdown-itを使うため、先に読み込む。
+        assert html.index('<script src="/static/vendor/markdown-it.min.js"></script>') < html.index(
+            '<script src="/static/message_text.js"></script>'
+        )
+        assert html.index('<script src="/static/message_text.js"></script>') < html.index(
+            '<script src="/static/message_view.js"></script>'
+        )
+        # mermaidは大きいので、ページでは読み込まず、図が出たときに表示処理が読み込む。
+        assert "mermaid.min.js" not in html
+    assert "ArgosMessageView.sync(messages, visibleMessages, {" in dashboard_html
+    assert "ArgosMessageView.sync(container, messages.map(" in grid_html

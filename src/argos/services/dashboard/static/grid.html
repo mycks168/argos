@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARGOS スロット一覧</title>
+  <link rel="stylesheet" href="/static/message_view.css">
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #070b0f; color: #edf3f7; }
     * { box-sizing: border-box; }
@@ -80,7 +81,9 @@
   <script src="/static/browser_audio.js"></script>
   <script src="/static/slot_audio.js"></script>
   <script src="/static/background_receiver.js"></script>
+  <script src="/static/vendor/markdown-it.min.js"></script>
   <script src="/static/message_text.js"></script>
+  <script src="/static/message_view.js"></script>
   <script src="/static/tmux_embed.js"></script>
   <script>
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;
@@ -123,7 +126,6 @@
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character]
     ));
-    const renderMessageText = value => ArgosMessageText.renderMessageText(value);
 
     function createTile(slot) {
       const key = slotKey(slot);
@@ -247,10 +249,15 @@
       if (container.dataset.signature === signature) return;
       const shouldFollow = container.scrollHeight - container.scrollTop - container.clientHeight < 30;
       container.dataset.signature = signature;
-      container.innerHTML = messages.map(message => {
-        const text = String(message.text ?? "").trim();
-        return `<div class="message ${message.role === "user" ? "user" : "assistant"}${message.streaming ? " streaming" : ""}">${renderMessageText(text)}</div>`;
-      }).join("");
+      container.dataset.follow = String(shouldFollow);
+      ArgosMessageView.sync(container, messages.map(message => ({...message, text: String(message.text ?? "").trim()})), {
+        renderShell: (message, bodyHtml) => (
+          `<div class="message ${message.role === "user" ? "user" : "assistant"}${message.streaming ? " streaming" : ""}"><div class="msg-body">${bodyHtml}</div></div>`
+        ),
+        onLayoutChange: () => {
+          if (container.dataset.follow === "true") container.scrollTop = container.scrollHeight;
+        },
+      });
       if (shouldFollow) container.scrollTop = container.scrollHeight;
     }
 

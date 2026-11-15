@@ -207,6 +207,10 @@ def test_build_agent_prompt_adds_argos_defaults():
     assert "<ARGOS_SYSTEM_CONTEXT>" in prompt
     assert "車載音声アシスタントARGOS" in prompt
     assert "回答は日本語で短く" in prompt
+    # 画面で図や表を出せることと、それらは読み上げられないことを伝える。
+    assert "```mermaid のコードブロックは図として" in prompt
+    assert "```svg のコードブロックはSVG画像として" in prompt
+    assert "地の文だけが読み上げられる" in prompt
     assert "/opt/argos/skills" in prompt
     assert "ユーザー発話:\n地図を出して" in prompt
 
