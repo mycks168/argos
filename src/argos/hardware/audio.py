@@ -14,7 +14,7 @@ import uuid
 import wave
 import logging
 from pathlib import Path
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 import queue
 
 
@@ -64,8 +64,14 @@ class AudioInputStream:
         *,
         chunk_ms: int = 80,
         subscriber_queue_chunks: int = 256,
+        stop_when_idle: bool = False,
     ) -> None:
-        """入力デバイス候補と配信サンプルレートを保持する。"""
+        """入力デバイス候補と配信サンプルレートを保持する。
+
+        stop_when_idle=True のときは、購読者がいなくなったらarecordを止める
+        （ウェイクワードを使わず、PTTの録音中だけマイクを開く場合）。
+        次に購読されたら、また開く。
+        """
         self._devices = (devices,) if isinstance(devices, str) else tuple(devices)
         if not self._devices:
             raise ValueError("共有マイク入力デバイス候補が空です")
@@ -80,6 +86,15 @@ class AudioInputStream:
         self._next_subscriber_id = 1
         self._proc: subprocess.Popen | None = None
         self._thread: threading.Thread | None = None
+        self._stop_when_idle = stop_when_idle
+        # 開始と停止を同時に進めないためのロック。購読の追加・解除（_lock）とは分ける。
+        self._lifecycle_lock = threading.Lock()
+
+    @property
+    def is_running(self) -> bool:
+        """マイク入力を読み続けている（arecordを開いている、または開き直している）ならTrueを返す。"""
+        thread = self._thread
+        return thread is not None and thread.is_alive()
 
     @property
     def output_sample_rate(self) -> int:
@@ -88,35 +103,58 @@ class AudioInputStream:
 
     def start(self) -> None:
         """共有マイク入力を開始する。"""
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        with self._lifecycle_lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
 
     def stop(self) -> None:
         """共有マイク入力を停止する。"""
+        with self._lifecycle_lock:
+            self._halt()
+        with self._lock:
+            self._subscribers.clear()
+
+    def _halt(self) -> None:
+        """arecordと読み取りスレッドを止める（_lifecycle_lock を持って呼ぶ）。"""
         self._stop.set()
         self._stop_process()
         if self._thread is not None and self._thread is not threading.current_thread():
             self._thread.join(timeout=3)
-        with self._lock:
-            self._subscribers.clear()
 
     def subscribe(self) -> AudioInputSubscription:
-        """音声チャンク購読を作成する。"""
-        self.start()
+        """音声チャンク購読を作成する。
+
+        購読者を先に登録してから開始する。登録の前に開始すると、別の購読の解除で
+        「購読者がいない」と判断されて、開始した直後に止められることがあるため。
+        """
         frames: queue.Queue[bytes] = queue.Queue(maxsize=self._subscriber_queue_chunks)
         with self._lock:
             subscriber_id = self._next_subscriber_id
             self._next_subscriber_id += 1
             self._subscribers[subscriber_id] = frames
+        self.start()
         return AudioInputSubscription(self, subscriber_id, frames)
 
     def unsubscribe(self, subscriber_id: int) -> None:
-        """指定購読者を解除する。"""
+        """指定購読者を解除する。stop_when_idle なら、最後の購読者が抜けたときにarecordを止める。"""
         with self._lock:
             self._subscribers.pop(subscriber_id, None)
+        if self._stop_when_idle:
+            self._stop_if_idle()
+
+    def _stop_if_idle(self) -> None:
+        """購読者がいなければarecordを止める。"""
+        with self._lifecycle_lock:
+            with self._lock:
+                if self._subscribers:
+                    return
+            if not self.is_running:
+                return
+            log.info("共有マイク入力を使う処理がなくなったため、マイクを閉じます")
+            self._halt()
 
     def _run(self) -> None:
         """arecord raw入力を読み、購読者へ配信し続ける。"""
@@ -124,6 +162,9 @@ class AudioInputStream:
             try:
                 self._run_process()
             except Exception:
+                if self._stop.is_set():
+                    # 止めたためにarecordが終わっただけなので、失敗として扱わない。
+                    return
                 log.exception("共有マイク入力が失敗しました。再試行します")
                 if self._stop.wait(2.0):
                     return
@@ -212,6 +253,7 @@ class StreamRecorder:
         self._thread: threading.Thread | None = None
         self._recording = False
         self._lock = threading.Lock()
+        self._on_audio: Callable[[bytes], None] | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -219,8 +261,12 @@ class StreamRecorder:
         with self._lock:
             return self._recording
 
-    def start(self) -> None:
-        """共有ストリームから録音を開始する。"""
+    def start(self, on_audio: Callable[[bytes], None] | None = None) -> None:
+        """共有ストリームから録音を開始する。
+
+        on_audio を渡すと、録音した音声チャンクを、録りながら順に渡す
+        （stt-gateway へストリーミングで送るため）。
+        """
         with self._lock:
             if self._recording:
                 log.warning("録音開始をスキップしました: 既に共有ストリーム録音中です")
@@ -229,6 +275,7 @@ class StreamRecorder:
             recording_dir.mkdir(parents=True, exist_ok=True)
             self._wav_path = str(recording_dir / f"{WAV_PREFIX}{time.time_ns()}-{uuid.uuid4().hex}.wav")
             self._frames = []
+            self._on_audio = on_audio
             self._stop.clear()
             self._subscription = self._source.subscribe()
             self._recording = True
@@ -289,6 +336,17 @@ class StreamRecorder:
             data = subscription.read(timeout=0.2)
             if data:
                 self._frames.append(data)
+                self._emit_audio(data)
+
+    def _emit_audio(self, data: bytes) -> None:
+        """録音した音声チャンクを呼び出し先へ渡す。失敗しても録音は続ける。"""
+        on_audio = self._on_audio
+        if on_audio is None:
+            return
+        try:
+            on_audio(data)
+        except Exception:
+            log.exception("録音中の音声を渡せませんでした")
 
 
 def check_audio_level(wav_path: str) -> float:
@@ -323,8 +381,12 @@ class Recorder:
         """録音プロセスが生きているか返す。"""
         return self._proc is not None and self._proc.poll() is None
 
-    def start(self) -> None:
-        """録音を開始する。"""
+    def start(self, on_audio: Callable[[bytes], None] | None = None) -> None:
+        """録音を開始する。
+
+        arecord でファイルへ直接録るため、録りながら音声を渡すこと（on_audio）はできない。
+        引数は StreamRecorder と呼び出し方をそろえるためだけにある。
+        """
         if self.is_recording:
             log.warning("録音開始をスキップしました: 既に arecord が動作中です")
             return

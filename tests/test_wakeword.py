@@ -3,6 +3,7 @@ import time
 import wave
 from collections import deque
 
+import pytest
 import numpy as np
 
 from argos.services.wakeword.livekit import (
@@ -479,3 +480,102 @@ def test_wakeword_listener_reports_open_failure(monkeypatch):
         assert "開けません" in str(exc)
     else:
         raise AssertionError("RuntimeErrorが発生しませんでした")
+
+
+class _FakeArecord:
+    """読み出す音声を決めた arecord の偽物。"""
+
+    def __init__(self, reads):
+        self.stdout = self
+        self._reads = reads
+
+    def read(self, _size):
+        return self._reads.pop(0) if self._reads else b""
+
+    def poll(self):
+        return None
+
+    def send_signal(self, _signum):
+        return None
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        return None
+
+
+class _AlwaysDetect:
+    def predict_score(self, _waveform):
+        return 0.9
+
+
+@pytest.mark.parametrize("endpoint_mode", ["rms", "vad"])
+def test_wakeword_listener_streams_recording_audio(monkeypatch, endpoint_mode):
+    """検知後に録音する音声を、先読み分は pre_roll=True を付けて、録りながら渡す。"""
+    loud = b"\x00\x40" * 1280
+    silence = b"\x00\x00" * 1280
+    reads = [loud, loud, silence, silence, silence]
+    emitted = []
+
+    class FakeVadModel:
+        def predict(self, samples):
+            chunk_count = max(1, int(np.ceil(samples.size / 512)))
+            probabilities = np.zeros(chunk_count, dtype=np.float32)
+            probabilities[:5] = 0.8
+            return probabilities
+
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        window_seconds=0.08,
+        interval_seconds=0.0,
+        record_min_seconds=0.0,
+        record_silence_seconds=0.0,
+        min_actual_seconds=0.0,
+        endpoint_mode=endpoint_mode,
+        vad_min_silence_seconds=0.0,
+        vad_check_seconds=0.0,
+        on_recording_ready=lambda path: listener.stop(),
+        on_recording_audio=lambda data, pre_roll=False: emitted.append((len(data), pre_roll)),
+    )
+    monkeypatch.setattr(listener, "_open_arecord", lambda: _FakeArecord(reads))
+    monkeypatch.setattr(listener, "_load_vad_model", lambda: FakeVadModel())
+
+    listener._run_stream(_AlwaysDetect(), 0.5)
+
+    assert emitted
+    assert emitted[0][1] is True
+    assert emitted[-1][1] is False
+
+
+def test_wakeword_listener_keeps_recording_when_audio_callback_fails(monkeypatch):
+    """音声の渡し先が失敗しても、録音は最後まで続ける。"""
+    loud = b"\x00\x40" * 1280
+    silence = b"\x00\x00" * 1280
+    reads = [loud, loud, silence]
+    ready = []
+
+    def broken(data, pre_roll=False):
+        raise RuntimeError("送信先の失敗")
+
+    listener = WakeWordListener(
+        devices=("mic",),
+        model_dir="/tmp/model",
+        threshold=0.5,
+        window_seconds=0.08,
+        interval_seconds=0.0,
+        record_min_seconds=0.0,
+        record_silence_seconds=0.0,
+        min_actual_seconds=0.0,
+        endpoint_mode="rms",
+        on_recording_ready=lambda path: (ready.append(path), listener.stop()),
+        on_recording_audio=broken,
+    )
+    monkeypatch.setattr(listener, "_open_arecord", lambda: _FakeArecord(reads))
+
+    listener._run_stream(_AlwaysDetect(), 0.5)
+
+    with wave.open(ready[0], "rb") as wav_file:
+        assert wav_file.getnframes() == 1280 * 3

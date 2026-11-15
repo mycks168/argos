@@ -29,7 +29,7 @@ GPIO・ST7789 LCD・GPS は車載構成で使う任意の機能です。無く�
 
 | サービス | 用途 |
 | --- | --- |
-| stt-gateway | 音声の文字起こし（`POST /transcribe`） |
+| stt-gateway | 音声の文字起こし（`POST /transcribe`）。ストリーミング（WebSocket `/stream`）で相槌・最初の返事も受け取れる |
 | VOICEVOX Engine | 音声合成（`POST /audio_query`、`POST /synthesis`） |
 | tts-filter | 読み上げ前のテキスト整形（`POST /normalize`、任意） |
 

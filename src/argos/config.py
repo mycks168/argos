@@ -74,6 +74,80 @@ def _float_env_with_fallback(name: str, fallback_name: str, default: float) -> f
     return float(_env_with_fallback(name, fallback_name, str(default)))
 
 
+# 話している最中の相槌の文言。stt-gateway へ発話ごとに送り、ARGOS の起動時に合成しておく。
+# VOICEVOX の 3 人の話者で聞き比べて決めた（2026-11-15）。「うんうん」は「う～ん」に、
+# 「へえ」は上がって下がる抑揚が強く、「そうなんだ」は長くて抑揚が不自然に聞こえたため外した。
+DEFAULT_STT_BACKCHANNEL_PHRASES = ("そっか", "なるほど", "うん")
+# 話の種類ごとの相槌。stt-gateway が相槌のたびに話の種類を判定し、その種類の文言を順に返す。
+# 言いよどみ・質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。
+# 「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合う（stt-gateway 側の調査）。
+DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("continuing", ("うん",)),
+    ("seeking_agreement", ("うん",)),
+    ("opinion", ("うん",)),
+    ("step_by_step", ("うん",)),
+    ("explanation", ("なるほど",)),
+    ("sad_or_trouble", ("そっか", "そっかぁ")),
+    ("complaint", ("そっか",)),
+    ("news", ("そっか",)),
+)
+# stt-gateway が判定する話の種類。これ以外を送ると発話が始まらないため、起動前に検出する。
+STT_BACKCHANNEL_KINDS = (
+    "continuing", "hesitating", "question_or_request", "sad_or_trouble", "explanation", "surprising", "news",
+    "seeking_agreement", "opinion", "happy", "complaint", "step_by_step", "thinking_aloud", "wrapping_up",
+)
+# 1つの種類に指定できる文言の数の上限（stt-gateway の上限）。
+STT_BACKCHANNEL_MAX_PHRASES_PER_KIND = 5
+# stt-gateway が受け付ける相槌の文言の上限（個数・1つの長さ）。超えると発話が始まらないため手前でそろえる。
+STT_BACKCHANNEL_MAX_PHRASES = 10
+STT_BACKCHANNEL_MAX_PHRASE_CHARS = 20
+
+
+def _stt_backchannel_phrases() -> tuple[str, ...]:
+    """相槌の文言を読み込み、stt-gateway が受け付ける個数と長さにそろえる。"""
+    phrases = _split_phrases("STT_GATEWAY_BACKCHANNEL_PHRASES", DEFAULT_STT_BACKCHANNEL_PHRASES)
+    usable = tuple(phrase for phrase in phrases if len(phrase) <= STT_BACKCHANNEL_MAX_PHRASE_CHARS)
+    return usable[:STT_BACKCHANNEL_MAX_PHRASES] or DEFAULT_STT_BACKCHANNEL_PHRASES
+
+
+def _stt_backchannel_threshold() -> float:
+    """相槌のしきい値を読み込む。stt-gateway は 0 より大きく 1 以下だけを受け付ける。"""
+    value = float(os.environ.get("STT_GATEWAY_BACKCHANNEL_THRESHOLD", "0.4"))
+    return min(1.0, max(0.01, value))
+
+
+def _stt_backchannel_phrases_by_kind() -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """種類別の文言をJSONから読む。値は文字列か、1〜5個の文字列の配列。空の辞書は従来の順番選択を使う指定。"""
+    raw = os.environ.get("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND")
+    if raw is None:
+        return DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND
+    try:
+        value = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError("stt.backchannel_phrases_by_kindはJSONの辞書で指定してください") from exc
+    if not isinstance(value, dict):
+        raise ValueError("stt.backchannel_phrases_by_kindは辞書で指定してください")
+    result = []
+    for kind, raw_phrases in value.items():
+        if kind not in STT_BACKCHANNEL_KINDS:
+            raise ValueError(f"stt.backchannel_phrases_by_kindの種類が不明です: {kind}（{', '.join(STT_BACKCHANNEL_KINDS)}）")
+        phrases = [raw_phrases] if isinstance(raw_phrases, str) else raw_phrases
+        if (
+            not isinstance(phrases, list)
+            or not 1 <= len(phrases) <= STT_BACKCHANNEL_MAX_PHRASES_PER_KIND
+            or not all(isinstance(phrase, str) and 1 <= len(phrase.strip()) <= 20 for phrase in phrases)
+        ):
+            raise ValueError("種類別の相槌は、1〜20文字の文言か、その配列（1〜5個）で指定してください")
+        result.append((kind, tuple(phrase.strip() for phrase in phrases)))
+    return tuple(result)
+
+
+def _stt_backchannel_skip_rate() -> float:
+    """相槌を見送る割合を読み込み、0〜1にそろえる。"""
+    value = float(os.environ.get("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "0.25"))
+    return min(1.0, max(0.0, value))
+
+
 def _split_phrases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
     """セミコロン（半角・全角）・改行区切りのフレーズ一覧を環境変数から読み込む。"""
     raw = os.environ.get(name, "")
@@ -295,6 +369,26 @@ class Settings:
     voicevox_accept_opus: bool = False
     stt_gateway_use_opus: bool = False
     stt_gateway_opus_bitrate: str = "24k"
+    # WebSocket /stream で録音しながら送り、相槌と最初の返事を受け取る。
+    stt_gateway_stream: bool = False
+    # 話している最中の相槌の音量（読み上げ音量に対する倍率）。0なら鳴らさない。
+    stt_gateway_backchannel_volume: float = 0.5
+    # 文字起こしの後、最初の返事（ack）を待つ秒数。過ぎたら従来の開始フレーズにする。
+    stt_gateway_ack_timeout_seconds: float = 1.5
+    # 調査用に、ストリーミングで送った発話の録音と相槌の記録を残す場所。空なら残さない。
+    stt_gateway_debug_recording_dir: str = ""
+    # 相槌を打つ確率のしきい値。低いほど相槌が増える。
+    stt_gateway_backchannel_threshold: float = 0.4
+    # 前の相槌から次の相槌までの最短の間隔（音声上のミリ秒）。
+    stt_gateway_backchannel_min_interval_ms: int = 1500
+    stt_gateway_backchannel_phrases: tuple[str, ...] = DEFAULT_STT_BACKCHANNEL_PHRASES
+    stt_gateway_backchannel_phrases_by_kind: tuple[tuple[str, tuple[str, ...]], ...] = (
+        DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND
+    )
+    # 届いた相槌を鳴らさずに見送る割合。人も、打てるところで毎回は打たないため。
+    stt_gateway_backchannel_skip_rate: float = 0.25
+    # 話し始めてからこの時間（音声上のミリ秒）までに届いた相槌は鳴らさない。
+    stt_gateway_backchannel_start_delay_ms: int = 2000
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -620,6 +714,22 @@ def load_settings() -> Settings:
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
         stt_gateway_use_opus=_bool_env("STT_GATEWAY_USE_OPUS", False),
         stt_gateway_opus_bitrate=os.environ.get("STT_GATEWAY_OPUS_BITRATE", "24k"),
+        stt_gateway_stream=_bool_env("STT_GATEWAY_STREAM", False),
+        stt_gateway_backchannel_volume=min(
+            1.0, max(0.0, float(os.environ.get("STT_GATEWAY_BACKCHANNEL_VOLUME", "0.5")))
+        ),
+        stt_gateway_ack_timeout_seconds=max(0.0, float(os.environ.get("STT_GATEWAY_ACK_TIMEOUT_SECONDS", "1.5"))),
+        stt_gateway_debug_recording_dir=os.environ.get("STT_GATEWAY_DEBUG_RECORDING_DIR", ""),
+        stt_gateway_backchannel_threshold=_stt_backchannel_threshold(),
+        stt_gateway_backchannel_min_interval_ms=min(
+            60000, max(0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS", "1500")))
+        ),
+        stt_gateway_backchannel_phrases=_stt_backchannel_phrases(),
+        stt_gateway_backchannel_phrases_by_kind=_stt_backchannel_phrases_by_kind(),
+        stt_gateway_backchannel_skip_rate=_stt_backchannel_skip_rate(),
+        stt_gateway_backchannel_start_delay_ms=max(
+            0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "2000"))
+        ),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),
