@@ -1859,7 +1859,7 @@ def test_wakeword_recording_ready_sets_transcribing_status(monkeypatch, tmp_path
     snapshot = app._dashboard_state.snapshot()
     assert snapshot["status"]["code"] == "transcribing"
     assert snapshot["status"]["label"] == "文字起こし中"
-    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path), False))]
+    assert FakeThread.started == [(app._process_wakeword_recording, (str(wav_path), False, None))]
 
 
 def test_chunk_contains_wakeword_detects_alias(monkeypatch):

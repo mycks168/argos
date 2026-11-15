@@ -1,5 +1,7 @@
 """config.yaml読込と旧.env移行のテスト。"""
 
+import json
+
 import pytest
 import yaml
 
@@ -255,3 +257,32 @@ notice:
     assert data["notice"]["android"]["enabled"] is True
     assert data["notice"]["android"]["apps"] == [{"package": "com.Slack", "name": "Slack"}]
     assert data["notice"]["android"]["mute"] == [{"conversation": "#監視通知"}]
+
+
+def test_stt_stream_settings_round_trip(tmp_path):
+    """ストリーミングの設定と相槌の文言の一覧を、YAMLと環境変数名の間で往復できる。"""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "stt:\n  stream: true\n  backchannel_threshold: 0.4\n  backchannel_phrases:\n    - うん\n    - へえ\n",
+        encoding="utf-8",
+    )
+
+    values = load_yaml_environment(path)
+
+    assert values["STT_GATEWAY_STREAM"] == "true"
+    assert values["STT_GATEWAY_BACKCHANNEL_THRESHOLD"] == "0.4"
+    assert values["STT_GATEWAY_BACKCHANNEL_PHRASES"] == "うん;へえ"
+    rewritten = tmp_path / "rewritten.yaml"
+    write_yaml_from_environment(values, rewritten)
+    assert yaml.safe_load(rewritten.read_text(encoding="utf-8"))["stt"]["backchannel_phrases"] == ["うん", "へえ"]
+
+
+def test_kind_phrases_yaml_round_trip(tmp_path):
+    """分類別の辞書を環境変数へ変換し、YAMLへ戻しても保持する。"""
+    from argos.yaml_config import load_yaml_environment, write_yaml_from_environment
+    path = tmp_path / "config.yaml"
+    path.write_text("stt:\n  backchannel_phrases_by_kind:\n    continuing: うん\n", encoding="utf-8")
+    values = load_yaml_environment(path)
+    assert json.loads(values["STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND"]) == {"continuing": "うん"}
+    write_yaml_from_environment(values, path)
+    assert load_yaml_environment(path) == values

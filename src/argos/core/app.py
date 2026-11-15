@@ -38,6 +38,7 @@ from argos.hardware.audio import (
     AudioInputStream,
     AudioPlayer,
     Recorder,
+    STT_LEADING_SILENCE_SECONDS,
     StreamRecorder,
     check_audio_level,
     cleanup_stale_recordings,
@@ -48,6 +49,7 @@ from argos.hardware.bluetooth_media import BluetoothMediaInput
 from argos.hardware.input_profiles import ProfileInput, matches_device, parse_profiles, product_id
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
+from argos.core.backchannel_player import BackchannelPlayer
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.agent.runner_client import RunnerSlotBusyError
@@ -68,6 +70,8 @@ from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
 from argos.services.startup import build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
+from argos.services.stt.debug_recording import save_debug_recording
+from argos.services.stt.stream import SttStreamClient, SttStreamUtterance, build_start_options
 from argos.services.notice_speech import PhraseStore
 from argos.services.stt.whisper import FasterWhisperClient
 from argos.services.tts.cache import TTSCacheManager
@@ -75,6 +79,7 @@ from argos.services.tts.filter import TtsFilterClient
 from argos.services.tts.kokoro import KokoroClient
 from argos.services.tts.voicevox import VoicevoxClient
 from argos.services.wakeword import WakeWordListener, save_false_positive_candidate
+from argos.services.wakeword.livekit import SAMPLE_RATE as WAKEWORD_SAMPLE_RATE
 from argos.yaml_config import default_config_path
 
 log = logging.getLogger(__name__)
@@ -122,6 +127,21 @@ def _select_progress_wait_phrase(phrases: tuple[str, ...]) -> str:
     return random.choice(phrases or DEFAULT_AGENT_PROGRESS_WAIT_PHRASES)
 
 
+# 最初の返事（stt-gateway の ack）を読み上げたときに、エージェントへの依頼の末尾に付ける補足。
+# 付けないと、本回答が「うん、〜なんだね」と同じ受け止めを繰り返し、返事が 2 回続いて不自然になる。
+# 返事の言葉そのものは書かない。書くと、エージェントがその言葉の良し悪しを語り始めることがあった
+# （今日の発話 7 件を Codex で比べた結果。docs/basic_design.md の「最初の返事」）。
+FIRST_REPLY_AGENT_HINT = (
+    "（音声会話の補足：あなたの回答の前に、ARGOSがすでに短い返事をしています。"
+    "回答は受け止めや相槌の言葉から始めず、本題から話してください。）"
+)
+
+
+def _prompt_after_first_reply(text: str) -> str:
+    """最初の返事を読み上げた後にエージェントへ渡す依頼を作る。"""
+    return f"{text}\n\n{FIRST_REPLY_AGENT_HINT}"
+
+
 class AgentProgressAnnouncer:
     """LLMエージェント待機中の進捗音声を管理する。"""
 
@@ -134,8 +154,13 @@ class AgentProgressAnnouncer:
         acknowledgement_client: AcknowledgementClient | None = None,
         start_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_START_PHRASES,
         wait_phrases: tuple[str, ...] = DEFAULT_AGENT_PROGRESS_WAIT_PHRASES,
+        first_reply: Callable[[], str | None] | None = None,
     ) -> None:
-        """読み上げ関数と通知間隔、進捗フレーズを初期化する。"""
+        """読み上げ関数と通知間隔、進捗フレーズを初期化する。
+
+        first_reply を渡すと、開始メッセージにその戻り値（stt-gateway が作った最初の返事）を使う。
+        None や空文字が返ったときは、従来どおり候補から選ぶ。
+        """
         self._speak_status = speak_status
         self._first_delay_seconds = first_delay_seconds
         self._interval_seconds = interval_seconds
@@ -143,20 +168,35 @@ class AgentProgressAnnouncer:
         self._acknowledgement_client = acknowledgement_client
         self._start_phrases = start_phrases or DEFAULT_AGENT_PROGRESS_START_PHRASES
         self._wait_phrases = wait_phrases or DEFAULT_AGENT_PROGRESS_WAIT_PHRASES
+        self._first_reply = first_reply
+        # 開始メッセージに最初の返事を使ったか。使ったときは、エージェントへ補足を付ける。
+        self.used_first_reply = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
         """開始メッセージを読み上げ、待機通知スレッドを起動する。"""
-        self._speak_status(
-            _select_progress_start_phrase(
+        phrase = self._take_first_reply()
+        self.used_first_reply = bool(phrase)
+        if not phrase:
+            phrase = _select_progress_start_phrase(
                 self._user_text,
                 self._acknowledgement_client,
                 self._start_phrases,
             )
-        )
+        self._speak_status(phrase)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
+
+    def _take_first_reply(self) -> str:
+        """最初の返事を取り出す。取り出せなければ空文字を返す。"""
+        if self._first_reply is None:
+            return ""
+        try:
+            return (self._first_reply() or "").strip()
+        except Exception:
+            log.exception("最初の返事を取得できませんでした")
+            return ""
 
     def stop(self) -> None:
         """待機通知を停止する。"""
@@ -202,6 +242,29 @@ class ArgosApp:
             settings.stt_gateway_use_opus,
             settings.stt_gateway_opus_bitrate,
         )
+        # stt-gateway の /stream。録音しながら送り、相槌と最初の返事を受け取る。
+        self._stt_stream = (
+            SttStreamClient(
+                settings.stt_gateway_url,
+                settings.stt_language,
+                settings.stt_gateway_token,
+                settings.stt_gateway_opus_bitrate,
+                start_options=build_start_options(
+                    # 最初の返事は進捗音声の開始メッセージとして読み上げる。読み上げないなら作らせない。
+                    ack_enabled=settings.agent_progress_voice,
+                    backchannel_phrases=settings.stt_gateway_backchannel_phrases,
+                    backchannel_phrases_by_kind=settings.stt_gateway_backchannel_phrases_by_kind,
+                    backchannel_threshold=settings.stt_gateway_backchannel_threshold,
+                    backchannel_min_interval_ms=settings.stt_gateway_backchannel_min_interval_ms,
+                ),
+                backchannel_start_delay_ms=settings.stt_gateway_backchannel_start_delay_ms,
+                backchannel_fallback_phrases=settings.stt_gateway_backchannel_phrases,
+            )
+            if _uses_stt_stream(settings)
+            else None
+        )
+        self._utterance_stream: SttStreamUtterance | None = None
+        self._utterance_stream_lock = threading.Lock()
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
             settings.stt_language,
@@ -331,6 +394,14 @@ class ArgosApp:
             shutdown=self._shutdown,
             muted=initial_muted,
         )
+        self._backchannel = BackchannelPlayer(
+            synthesize=self._speech.synthesize_for_notice,
+            play=self._audio.play_wav,
+            speaker=self._speech.current_speaker_id,
+            can_play=self._can_play_backchannel,
+            volume=settings.stt_gateway_backchannel_volume,
+            skip_rate=settings.stt_gateway_backchannel_skip_rate,
+        )
         # 通知を声でも知らせる。運転中など、画面を見られないときに、気づけるようにする。
         self._notice_speaker = NoticeSpeaker(
             enabled=settings.notice_speak_enabled and not settings.dry_run,
@@ -390,14 +461,21 @@ class ArgosApp:
         self._dashboard_state.set_audio_muted(initial_muted)
 
     def _create_audio_input_stream(self, settings: Settings, audio_devices: Iterable[str]) -> AudioInputStream | None:
-        """ウェイクワード有効時にPTTと共有するマイク入力を作成する。"""
-        if settings.dry_run or not settings.wakeword_enabled:
+        """ウェイクワード有効時にPTTと共有するマイク入力を作成する。
+
+        stt-gateway へストリーミングで送るときも作る。録りながら音声を渡せるのは、
+        共有マイク入力から録る StreamRecorder だけのため。このときは常時聞く処理が無いため、
+        録音が終わって購読者がいなくなったらマイクを閉じる。
+        """
+        if settings.dry_run or not (settings.wakeword_enabled or _uses_stt_stream(settings)):
             return None
         return AudioInputStream(
             audio_devices,
             settings.wakeword_capture_sample_rate,
             settings.audio_sample_rate,
             chunk_ms=settings.wakeword_chunk_ms,
+            # ウェイクワードを使わないときは、PTTの録音中だけマイクを開く。
+            stop_when_idle=not settings.wakeword_enabled,
         )
 
     def _create_lcd_display(self, settings: Settings) -> St7789TextDisplay | None:
@@ -477,6 +555,7 @@ class ArgosApp:
         if not self._settings.dry_run:
             self._start_profile_inputs()
         self._start_wakeword_listener()
+        self._prewarm_backchannel()
         self._auth_coord.announce_required()
         self._auth_coord.start_status_monitor()
         self._start_agent_delivery_monitor()
@@ -836,7 +915,11 @@ class ArgosApp:
             self._auth_coord.play_lock_warning()
         else:
             self._status.set(generation, "listening", "録音中")
-        self._recorder.start()
+        stream = self._open_utterance_stream(self._settings.audio_sample_rate)
+        if stream is None:
+            self._recorder.start()
+        else:
+            self._recorder.start(on_audio=stream.feed)
 
     def _on_ptt_release(self) -> None:
         """PTT 解放時に録音を停止し、処理スレッドを開始する。"""
@@ -976,6 +1059,7 @@ class ArgosApp:
         self._input_recording_owner = None
         log.info("キャンセル要求: 録音破棄と再生停止")
         self._recorder.cancel()
+        self._discard_utterance_stream()
         self._cancel_active_audio()
         self._set_ready_or_locked()
 
@@ -1013,6 +1097,7 @@ class ArgosApp:
                 on_recording_ready=self._on_wakeword_recording_ready,
                 on_followup_expired=self._on_wakeword_followup_expired,
                 followup_seconds=self._settings.wakeword_followup_seconds,
+                on_recording_audio=self._on_wakeword_recording_audio if self._stt_stream is not None else None,
             )
             self._wakeword_listener.start()
             label = "VAD常時受付" if self._settings.listen_mode == "vad" else "ウェイクワード監視"
@@ -1065,13 +1150,17 @@ class ArgosApp:
             self._status.set(generation, "auth_listening", "本人確認録音中")
         else:
             self._status.set(generation, "listening", "録音中")
+        self._open_utterance_stream(WAKEWORD_SAMPLE_RATE)
         return True
 
     def _on_wakeword_recording_ready(self, wav_path: str, followup: bool = False) -> None:
         """ウェイクワード後に録音されたWAVを処理スレッドへ渡す。"""
         self._wakeword_recording.clear()
         self._wakeword_ptt_hold.clear()
+        stream = self._take_utterance_stream()
         if self._shutdown.is_set() or not self._is_microphone_enabled():
+            if stream is not None:
+                stream.close()
             self._remove_recording_file(wav_path)
             return
         generation = self._status.current_generation()
@@ -1080,7 +1169,7 @@ class ArgosApp:
         else:
             self._status.set(generation, "transcribing", "文字起こし中")
         self._worker = threading.Thread(
-            target=self._process_wakeword_recording, args=(wav_path, followup), daemon=True
+            target=self._process_wakeword_recording, args=(wav_path, followup, stream), daemon=True
         )
         self._worker.start()
 
@@ -1103,15 +1192,20 @@ class ArgosApp:
         self._wakeword_listener.arm_followup()
         self._status.set(self._status.current_generation(), "followup", "継続受付中")
 
-    def _process_wakeword_recording(self, wav_path: str, followup: bool = False) -> None:
-        """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。"""
+    def _process_wakeword_recording(
+        self, wav_path: str, followup: bool = False, stream: SttStreamUtterance | None = None
+    ) -> None:
+        """ウェイクワード検知後のWAVをSTT、LLMエージェント、TTSの順に処理する。
+
+        stream はストリーミングで送った同じ発話。あればその文字起こしと最初の返事を使う。
+        """
         token = self._status.current_generation()
         handled = False
         try:
             level = check_audio_level(wav_path)
             log.info("ウェイクワード後録音音量: RMS=%.1f", level)
             try:
-                transcript = self._transcribe_wav(wav_path)
+                transcript = self._transcribe_recording(wav_path, stream)
             except Exception as exc:
                 log.exception("ウェイクワード後の文字起こしに失敗しました")
                 self._report_error("文字起こし", exc)
@@ -1142,13 +1236,16 @@ class ArgosApp:
                     return
             if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
-                self._handle_text(transcript)
+                self._handle_transcript(transcript, stream)
                 handled = True
         except Exception as exc:
             log.exception("ウェイクワード後の音声処理に失敗しました")
             self._report_error("録音", exc)
             self._speech.speak_status(f"処理に失敗しました。{exc}")
         finally:
+            if stream is not None:
+                stream.close()
+                self._save_stream_debug_recording(wav_path, stream, "followup" if followup else "wakeword")
             self._wakeword_recording.clear()
             self._wakeword_ptt_hold.clear()
             self._remove_recording_file(wav_path)
@@ -1641,12 +1738,14 @@ class ArgosApp:
         """録音済み WAV を STT、LLMエージェント、TTS の順に処理する。"""
         token = self._status.current_generation()
         wav_path = ""
+        stream: SttStreamUtterance | None = None
         try:
             wav_path = self._recorder.stop()
+            stream = self._take_utterance_stream()
             level = check_audio_level(wav_path)
             log.info("PTT録音音量: RMS=%.1f", level)
             try:
-                transcript = self._transcribe_wav(wav_path)
+                transcript = self._transcribe_recording(wav_path, stream)
             except Exception as exc:
                 log.exception("文字起こしに失敗しました")
                 self._report_error("文字起こし", exc)
@@ -1661,12 +1760,18 @@ class ArgosApp:
                 return
             if self._auth_coord.ensure_authenticated(transcript, token):
                 self._greet_on_interaction()
-                self._handle_text(transcript)
+                self._handle_transcript(transcript, stream)
         except Exception as exc:
             log.exception("音声処理に失敗しました")
             self._report_error("録音", exc)
             self._speech.speak_status(f"処理に失敗しました。{exc}")
         finally:
+            if stream is not None:
+                stream.close()
+                self._save_stream_debug_recording(wav_path, stream, "ptt")
+            else:
+                # 録音の停止に失敗したときも、送りかけの発話を残さない。
+                self._discard_utterance_stream()
             if wav_path:
                 self._remove_recording_file(wav_path)
             self._button.mark_idle()
@@ -1683,6 +1788,123 @@ class ArgosApp:
             pass
         except OSError as exc:
             log.warning("処理済み録音ファイルを削除できませんでした: %s: %s", wav_path, exc)
+
+    def _transcribe_recording(self, wav_path: str, stream: SttStreamUtterance | None) -> str:
+        """ストリーミングで送った発話があればその文字起こしを使い、だめならWAVで文字起こしする。"""
+        if stream is not None:
+            try:
+                return stream.finish()
+            except Exception as exc:
+                log.warning("ストリーミング文字起こしに失敗したため、録音ファイルで文字起こしします: %s", exc)
+                self._report_error("stt-gateway（ストリーミング）", exc)
+        return self._transcribe_wav(wav_path)
+
+    def _open_utterance_stream(self, sample_rate: int) -> SttStreamUtterance | None:
+        """新しい発話のストリーミング送信を始める。使わない設定ならNoneを返す。"""
+        if self._stt_stream is None:
+            return None
+        try:
+            stream = self._stt_stream.open(sample_rate, on_backchannel=self._backchannel.submit)
+        except Exception:
+            log.exception("stt-gateway へのストリーミング送信を始められませんでした")
+            stream = None
+        with self._utterance_stream_lock:
+            previous, self._utterance_stream = self._utterance_stream, stream
+        if previous is not None:
+            previous.close()
+        return stream
+
+    def _take_utterance_stream(self) -> SttStreamUtterance | None:
+        """録音中の発話のストリームを取り出す（以後、録音中の音声は渡さない）。"""
+        with self._utterance_stream_lock:
+            stream, self._utterance_stream = self._utterance_stream, None
+        return stream
+
+    def _discard_utterance_stream(self) -> None:
+        """録音の破棄に合わせて、送りかけの発話を閉じる。"""
+        stream = self._take_utterance_stream()
+        if stream is not None:
+            stream.close()
+
+    def _on_wakeword_recording_audio(self, data: bytes, pre_roll: bool = False) -> None:
+        """ウェイクワード検知後に録音している音声を、ストリーミングで送る。"""
+        with self._utterance_stream_lock:
+            stream = self._utterance_stream
+        if stream is not None:
+            stream.feed(data, live=not pre_roll)
+
+    def _handle_transcript(self, transcript: str, stream: SttStreamUtterance | None) -> None:
+        """文字起こし結果をエージェントへ渡す。ストリーミングの発話なら、最初の返事も使う。"""
+        first_reply = self._first_reply_from(stream)
+        if first_reply is None:
+            self._handle_text(transcript)
+        else:
+            self._handle_text(transcript, first_reply=first_reply)
+
+    def _first_reply_from(self, stream: SttStreamUtterance | None) -> Callable[[], str | None] | None:
+        """ストリーミングで送った発話から、最初の返事を待って取り出す関数を返す。"""
+        if stream is None or stream.failed:
+            return None
+        timeout = self._settings.stt_gateway_ack_timeout_seconds
+        return lambda: stream.wait_ack(timeout)
+
+    def _can_play_backchannel(self) -> bool:
+        """いま相槌を鳴らしてよいか判定する（録音中で、ほかの音を鳴らしていないとき）。"""
+        reason = self._backchannel_block_reason()
+        if reason:
+            log.info("相槌を鳴らせません: %s", reason)
+            return False
+        return True
+
+    def _backchannel_block_reason(self) -> str:
+        """相槌を鳴らせない理由を返す。鳴らせるときは空文字を返す。"""
+        if self._settings.dry_run:
+            return "dry_run"
+        if self._speech.is_muted():
+            return "ミュート中"
+        if self._audio.is_held:
+            return "他アプリの音声を優先して保留中"
+        if self._audio.is_playing:
+            return "ほかの音を再生中"
+        status = self._dashboard_state.status_code()
+        if status not in ("listening", "auth_listening"):
+            return f"録音中ではない（status={status}）"
+        return ""
+
+    def _save_stream_debug_recording(self, wav_path: str, stream: SttStreamUtterance | None, kind: str) -> None:
+        """設定されていれば、ストリーミングで送った発話の録音と相槌の記録を、調査用に残す。"""
+        output_dir = self._settings.stt_gateway_debug_recording_dir
+        if stream is None or not wav_path or not output_dir.strip():
+            return
+        summary = stream.debug_summary()
+        # PTTの録音ファイルは先頭に無音を足してある。相槌の位置（送った音声の先頭から）と合わせるため。
+        summary["wav_leading_silence_ms"] = round(STT_LEADING_SILENCE_SECONDS * 1000) if kind == "ptt" else 0
+        save_debug_recording(output_dir, wav_path, summary, kind)
+
+    def _prewarm_backchannel(self) -> None:
+        """よく使う相槌を、起動時にバックグラウンドで合成しておく。"""
+        if self._stt_stream is None or self._settings.dry_run or not self._backchannel.enabled:
+            return
+        threading.Thread(
+            target=self._backchannel.prewarm,
+            args=(
+                tuple(dict.fromkeys((
+                    *self._settings.stt_gateway_backchannel_phrases,
+                    *(
+                        phrase
+                        for _, phrases in self._settings.stt_gateway_backchannel_phrases_by_kind
+                        for phrase in phrases
+                    ),
+                ))),
+                tuple(dict.fromkeys((
+                    self._speech.current_speaker_id(),
+                    self._settings.voicevox_speaker,
+                    *(slot.voicevox_speaker for slot in self._settings.agent_slots if slot.voicevox_speaker is not None),
+                ))),
+            ),
+            name="backchannel-prewarm",
+            daemon=True,
+        ).start()
 
     def _transcribe_wav(self, wav_path: str) -> str:
         """stt-gatewayを優先し、未設定または失敗時はfaster-whisperで文字起こしする。
@@ -1705,8 +1927,11 @@ class ArgosApp:
             self._report_error("stt-gateway", gateway_error)
         return self._local_stt.transcribe(wav_path)
 
-    def _handle_text(self, text: str) -> None:
-        """テキストをLLMエージェントに送り、応答を読み上げる。"""
+    def _handle_text(self, text: str, *, first_reply: Callable[[], str | None] | None = None) -> None:
+        """テキストをLLMエージェントに送り、応答を読み上げる。
+
+        first_reply は、待機中の開始メッセージに使う最初の返事を返す関数（stt-gateway の ack）。
+        """
         log.info("ユーザ発話: %s", text)
         slot_name = self._agent.current_name
         slot_provider = self._agent.current_provider
@@ -1715,11 +1940,16 @@ class ArgosApp:
         self._dashboard_state.add_message("user", text)
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._status.set(handle_generation, "thinking", "考え中")
-        announcer = self._start_agent_progress(text, slot_key)
+        announcer = self._start_agent_progress(text, slot_key, first_reply)
+        # 最初の返事を読み上げたときだけ、本回答が受け止めを繰り返さないよう補足を付ける。
+        # ダッシュボードと会話の記録には、補足のない元の発話を残す。
+        prompt = text
+        if announcer is not None and announcer.used_first_reply:
+            prompt = _prompt_after_first_reply(text)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speech.speak_response_stream(
-                self._stop_progress_on_first_delta(self._agent.ask_stream(text), announcer),
+                self._stop_progress_on_first_delta(self._agent.ask_stream(prompt), announcer),
                 dashboard_message_id=dashboard_message_id,
                 slot_key=slot_key,
             )
@@ -1795,7 +2025,12 @@ class ArgosApp:
 
         threading.Thread(target=compact, name="conversation-compaction", daemon=True).start()
 
-    def _start_agent_progress(self, user_text: str = "", slot_key: str = "") -> AgentProgressAnnouncer | None:
+    def _start_agent_progress(
+        self,
+        user_text: str = "",
+        slot_key: str = "",
+        first_reply: Callable[[], str | None] | None = None,
+    ) -> AgentProgressAnnouncer | None:
         """設定に応じてエージェント待機中の進捗音声を開始する。"""
         if not self._settings.agent_progress_voice:
             return None
@@ -1811,6 +2046,7 @@ class ArgosApp:
             acknowledgement_client=self._acknowledgement,
             start_phrases=self._settings.agent_progress_start_phrases,
             wait_phrases=self._settings.agent_progress_wait_phrases,
+            first_reply=first_reply,
         )
         announcer.start()
         return announcer
@@ -1857,6 +2093,7 @@ class ArgosApp:
         self._microphone_enabled = enabled
         if not enabled:
             self._recorder.cancel()
+            self._discard_utterance_stream()
             self._wakeword_recording.clear()
             self._wakeword_ptt_hold.clear()
             self._set_ready_or_locked()
@@ -1963,6 +2200,7 @@ class ArgosApp:
         if self._greeting is not None:
             self._greeting.mark_active()
         self._recorder.cancel()
+        self._discard_utterance_stream()
         with self._volume_save_lock:
             pending_volume_save = self._volume_save_timer
             self._volume_save_timer = None
@@ -2111,6 +2349,11 @@ def _build_android_notice_watcher(
         summarize_min_chars=settings.android_notice_summarize_min_chars,
         interval_seconds=settings.android_notice_interval_seconds,
     )
+
+
+def _uses_stt_stream(settings: Settings) -> bool:
+    """stt-gateway の /stream で、録音しながら送る設定ならTrueを返す。"""
+    return settings.stt_gateway_stream and bool(settings.stt_gateway_url.strip()) and not settings.dry_run
 
 
 def _app_slot_key(name: str, provider: str) -> str:

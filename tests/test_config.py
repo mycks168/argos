@@ -794,3 +794,97 @@ def test_agent_runner_job_retention_days(monkeypatch):
     assert load_settings().agent_runner_job_retention_days == 7.0
     monkeypatch.setenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "3")
     assert load_settings().agent_runner_job_retention_days == 3.0
+
+
+def test_load_stt_stream_settings(monkeypatch):
+    """ストリーミングの設定を読み込み、音量と待ち時間を範囲に収める。"""
+    for name in ("STT_GATEWAY_STREAM", "STT_GATEWAY_BACKCHANNEL_VOLUME", "STT_GATEWAY_ACK_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert settings.stt_gateway_stream is False
+    assert settings.stt_gateway_backchannel_volume == 0.5
+    assert settings.stt_gateway_ack_timeout_seconds == 1.5
+
+    monkeypatch.setenv("STT_GATEWAY_STREAM", "true")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_VOLUME", "3")
+    monkeypatch.setenv("STT_GATEWAY_ACK_TIMEOUT_SECONDS", "-1")
+    settings = load_settings()
+    assert settings.stt_gateway_stream is True
+    assert settings.stt_gateway_backchannel_volume == 1.0
+    assert settings.stt_gateway_ack_timeout_seconds == 0.0
+
+
+def test_load_stt_backchannel_options(monkeypatch):
+    """相槌のしきい値・間隔・文言を読み込み、stt-gateway が受け付ける範囲にそろえる。"""
+    for name in (
+        "STT_GATEWAY_BACKCHANNEL_THRESHOLD",
+        "STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS",
+        "STT_GATEWAY_BACKCHANNEL_PHRASES",
+        "STT_GATEWAY_BACKCHANNEL_START_DELAY_MS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_start_delay_ms == 2000
+    assert settings.stt_gateway_backchannel_threshold == 0.4
+    assert settings.stt_gateway_backchannel_min_interval_ms == 1500
+    assert settings.stt_gateway_backchannel_phrases == ("そっか", "なるほど", "うん")
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_THRESHOLD", "0")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS", "99999")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES", ";".join(["はい", "あ" * 21] + [f"え{i}" for i in range(12)]))
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_threshold == 0.01
+    assert settings.stt_gateway_backchannel_min_interval_ms == 60000
+    assert settings.stt_gateway_backchannel_phrases[0] == "はい"
+    assert len(settings.stt_gateway_backchannel_phrases) == 10
+    assert "あ" * 21 not in settings.stt_gateway_backchannel_phrases
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES", "あ" * 21)
+    assert load_settings().stt_gateway_backchannel_phrases == ("そっか", "なるほど", "うん")
+
+
+def test_load_stt_backchannel_start_delay(monkeypatch):
+    """話し始めてから相槌を鳴らさない時間を読み込み、負の値は0にする。"""
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "-5")
+    assert load_settings().stt_gateway_backchannel_start_delay_ms == 0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "1200")
+    assert load_settings().stt_gateway_backchannel_start_delay_ms == 1200
+
+
+def test_kind_phrases_defaults_and_disabled(monkeypatch):
+    """既定の種類別の文言と、空辞書による従来動作への切り替えを読み込む。"""
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", raising=False)
+    assert dict(load_settings().stt_gateway_backchannel_phrases_by_kind) == {
+        "continuing": ("うん",), "seeking_agreement": ("うん",), "opinion": ("うん",), "step_by_step": ("うん",),
+        "explanation": ("なるほど",), "sad_or_trouble": ("そっか", "そっかぁ"), "complaint": ("そっか",),
+        "news": ("そっか",)}
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", "{}")
+    assert load_settings().stt_gateway_backchannel_phrases_by_kind == ()
+
+
+def test_kind_phrases_accept_string_and_array(monkeypatch):
+    """値は文字列か配列で書け、前後の空白を除いて読み込む。"""
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND",
+                       json.dumps({"happy": " いいね ", "news": ["そっか", "へえ"]}))
+    assert load_settings().stt_gateway_backchannel_phrases_by_kind == (("happy", ("いいね",)), ("news", ("そっか", "へえ")))
+
+
+def test_load_stt_backchannel_skip_rate(monkeypatch):
+    """相槌を見送る割合を読み込み、0〜1にそろえる。"""
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", raising=False)
+    assert load_settings().stt_gateway_backchannel_skip_rate == 0.25
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "1.5")
+    assert load_settings().stt_gateway_backchannel_skip_rate == 1.0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "-1")
+    assert load_settings().stt_gateway_backchannel_skip_rate == 0.0
+
+
+@pytest.mark.parametrize("raw", ['[]', 'null', '{', '{"continuing": []}', '{"continuing": ""}', '{"": "うん"}',
+                                  json.dumps({"continuing": "あ" * 21}), '{"foo": "うん"}',
+                                  json.dumps({"continuing": ["うん"] * 6}), '{"continuing": ["うん", ""]}',
+                                  '{"continuing": ["うん", 1]}', '{"continuing": 1}'])
+def test_kind_phrases_reject_invalid_settings(monkeypatch, raw):
+    """誤った型やgatewayの上限を超える文言は起動前に検出する。"""
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND", raw)
+    with pytest.raises(ValueError):
+        load_settings()

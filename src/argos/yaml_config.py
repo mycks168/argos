@@ -54,6 +54,7 @@ LIST_MAPPINGS = {
     ("wakeword", "aliases"): ("ARGOS_WAKEWORD_ALIASES", ","),
     ("agent", "progress_start_phrases"): ("ARGOS_AGENT_PROGRESS_START_PHRASES", ";"),
     ("agent", "progress_wait_phrases"): ("ARGOS_AGENT_PROGRESS_WAIT_PHRASES", ";"),
+    ("stt", "backchannel_phrases"): ("STT_GATEWAY_BACKCHANNEL_PHRASES", ";"),
     ("agents.codex", "extra_args"): ("ARGOS_CODEX_EXTRA_ARGS", " "),
     ("agents.antigravity", "extra_args"): ("ARGOS_ANTIGRAVITY_EXTRA_ARGS", " "),
     ("agents.hermes", "extra_args"): ("ARGOS_HERMES_EXTRA_ARGS", " "),
@@ -61,6 +62,7 @@ LIST_MAPPINGS = {
 
 # 配列やテーブルを、そのままJSONにして渡す項目。
 JSON_MAPPINGS = {
+    ("stt", "backchannel_phrases_by_kind"): "STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND",
     ("ptt", "devices"): "ARGOS_PTT_DEVICES_JSON",
     ("notice.android", "apps"): "ARGOS_NOTICE_ANDROID_APPS_JSON",
     ("notice.android", "mute"): "ARGOS_NOTICE_ANDROID_MUTE_JSON",

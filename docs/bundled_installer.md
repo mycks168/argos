@@ -136,6 +136,8 @@ cronはログインシェルのPATHを引き継がないため、更新ジョブ
 
 ウェイクワードを標準機能として扱うため、ARGOS本体の通常依存に `onnxruntime` と `numpy` を含める。これにより、`--extra wakeword` を指定しなくてもONNXモデルの実行に必要なランタイムが入る。
 
+stt-gateway のストリーミング（`/stream`）のため、通常依存に `av`（PyAV。Opus の生パケットのエンコード。wheel に libopus を含む）と `websockets`（WebSocket の同期クライアント）を含める。ストリーミングを使わない環境でも入るが、使わなければ読み込まない。
+
 ウェイクワードの実行に必要なONNXモデルは `models/wakeword/` に同梱する。
 
 - `argos.onnx`: 「アルゴス」検知用の分類器

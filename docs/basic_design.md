@@ -74,6 +74,62 @@ location:
 `STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。faster-whisper が未導入（`uv sync --extra whisper` をしていない）なら、試さずに飛ばし、stt-gateway の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`文字起こし` エラー）にする。フォールバックが使えないのに、`stt-gateway` エラーと `faster-whisper が未導入です` エラーを2つ並べない。
 文字起こし結果が空文字だった場合は発話をエージェントへ送らず、ログに録音ファイルパスとRMSを出し、ダッシュボード通知に「音声を認識できませんでした。」を表示する。
 
+#### ストリーミング（WebSocket `/stream`）
+
+`STT_GATEWAY_STREAM=true`（`stt.stream: true`）のときは、PTTとウェイクワードの録音を、録りながら stt-gateway の WebSocket `/stream` へ送る。話している最中の相槌（`backchannel`）と、文字起こしの後の最初の返事（`ack`）を受け取るため。`/stream` の仕様は stt-gateway の基本設計（2.4）に従う。端末（PiZero・ブラウザ）からの音声ターンは、WAVがまとめて届くため対象外で、従来どおり `POST /transcribe` を使う。
+
+- 接続先は `STT_GATEWAY_URL` の `http`/`https` を `ws`/`wss` に替えた `<URL>/stream`。認証は `/transcribe` と同じ `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>` ヘッダ（トークン未設定時は付けない）。
+- 発話ごとに1本の接続を張る。録音開始で接続し、`{"type":"start","encoding":"opus","language":<STT_GATEWAY_LANGUAGE>,"ack":...,"backchannel":...}` を送る。つながるまでの音声はためておき、つながったら送る。
+- `start` の `ack` と `backchannel` は、stt-gateway の「発話ごとの指定」（2026-11-15 追加）。`backchannel` は `threshold`（`STT_GATEWAY_BACKCHANNEL_THRESHOLD`、既定0.4）、`min_interval_ms`（`STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS`、既定1500）、`phrases`（`STT_GATEWAY_BACKCHANNEL_PHRASES`、既定「そっか・なるほど・うん」）。stt-gateway の既定のしきい値0.5では、実機の声で相槌の確率が0.50〜0.56を少し超えたときしか相槌が出ず、少なくタイミングも悪かったため0.4にする。文言は stt-gateway の上限（1〜10個、1つ20文字まで）に収まるよう、設定の読み込み時にそろえる。
+- `ack` は、ARGOS向けの返事の作り方（下の「最初の返事」）。`ARGOS_AGENT_PROGRESS_VOICE=false` のときは `"ack": false` を送り、返事を作らせない。
+- `start` が受け付けられず、`started` より前に `invalid_message` が届いたときは、その発話は始まらない。`transcript` を待たずに失敗とし、録音ファイルでの文字起こしに切り替える。
+- 音声は Opus の生パケット（コンテナなし、モノラル、20ms）。PyAV（libopus）でエンコードする。ビットレートは `STT_GATEWAY_OPUS_BITRATE`。録音のサンプリングレートが libopus の対応値（8/12/16/24/48kHz）以外のときは16kHzに変換する。
+- 録音終了で残りの音声と `{"type":"end"}` を送り、`transcript` を待つ（30秒まで）。`ack` を受け取るか、待ち時間を過ぎたら接続を閉じる。
+- 録りながら音声を渡せるのは共有マイク入力（`StreamRecorder`）だけのため、ストリーミング有効時はウェイクワードが無効でも共有マイク入力を使う。このときは常時聞く処理が無いため、購読者（PTTの録音）がいなくなったら arecord を止め、次の録音で開き直す（`stop_when_idle`）。マイクを開くのはPTTの録音中だけで、マイクを外したままでも開き直しの失敗ログは出続けない。ウェイクワード有効時は、従来どおり開いたままにする。
+- ウェイクワード後の録音は、検知より前の先読み分（`ARGOS_WAKEWORD_PRE_ROLL_SECONDS`）も送る。文字起こしにウェイクワードが含まれるため、従来どおり呼びかけの確認と除去ができる。先読み分の位置に届いた相槌は鳴らさない。
+- 録音ファイルも従来どおり保存する。接続できない、`transcript` が届かない、`transcribe_failed` などで文字起こしを得られない場合は、ダッシュボードに `stt-gateway（ストリーミング）` エラーを通知し、その録音ファイルで `POST /transcribe`（さらに失敗すれば faster-whisper）に切り替える。
+- キャンセル、マイクOFF、終了のときは、送りかけの発話を閉じる。
+
+相槌（`backchannel`）:
+
+- `phrases` と `phrases_by_kind` は同時に送れない。分類設定がある場合は `phrases_by_kind` だけを送り、古いgatewayへの互換再送では `phrases_by_kind` を除き、設定済みの `backchannel_phrases` を `phrases` として送る。
+- `stt.backchannel_phrases_by_kind`（環境変数 `STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND` はJSON辞書）を `start.backchannel.phrases_by_kind` に送る。stt-gateway は相槌のタイミングごとに、そこまでの発話から話の種類を14種類（`continuing`, `hesitating`, `question_or_request`, `sad_or_trouble`, `explanation`, `surprising`, `news`, `seeking_agreement`, `opinion`, `happy`, `complaint`, `step_by_step`, `thinking_aloud`, `wrapping_up`）から判定し、その種類の文言を返す。指定しない種類では相槌を出さない。
+  - 値は1〜20文字の文言か、その配列（1〜5個）。配列はその種類の中で順に使われ、順番は接続の中で引き継がれる。ARGOS は文言が1つなら文字列、複数なら配列で送る。
+  - 既定は `continuing`・`seeking_agreement`・`opinion`・`step_by_step` に「うん」、`explanation` に「なるほど」、`sad_or_trouble` に「そっか」「そっかぁ」、`complaint`・`news` に「そっか」。言いよどみ・質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合うため、`opinion` は「うん」にした。
+  - 14種類以外の種類、6個以上の配列、21文字以上の文言は、stt-gateway が `invalid_message` で拒否するため、起動時の設定読み込みでエラーにする。
+  - 空の辞書 `{}` なら種類の指定を送らず、従来の文言を順番に使う。
+- 分類指定付きの `start` は受理を最大3秒待ってから音声を送る。`started` 前の `invalid_message` では、分類指定を外して同じ接続で `start` を1回再送し、ためた音声を送る。以後、そのクライアントでは分類指定を外す。再送も拒否された場合は録音ファイルでの文字起こしに切り替える。
+- 届いた相槌のうち `STT_GATEWAY_BACKCHANNEL_SKIP_RATE`（0〜1、既定0.25）の割合を、鳴らさずに見送る。人は相槌を打てるところで毎回打つわけではなく、毎回打つと機械っぽく聞こえたため。見送った相槌はログに出す。
+- 分類別と従来の両方の文言を、起動時に全スロットの話者（現在の話者・既定の話者も含む）で事前合成する。受信した `kind` はログと調査用JSONに記録する。
+- 録音を止めずに、VOICEVOX（失敗時はKokoro）で合成した相槌を鳴らす。音量は読み上げ音量に `STT_GATEWAY_BACKCHANNEL_VOLUME`（0〜1、既定0.5）を掛けたもの。0なら鳴らさない。
+- 話し始め（ウェイクワードの先読み分を除いた、送った音声の先頭）から `STT_GATEWAY_BACKCHANNEL_START_DELAY_MS`（既定2000ms）までの位置に届いた相槌は鳴らさない。予測モデルは話し始めて1.3秒ほどでも相槌を打つべきと判断することがあり、話し始めた直後の相槌は割り込みに聞こえたため。マイクの音量（RMS）は使わない。車内ではロードノイズで音量が高く、話しているかの判断に使えないため。
+- 相槌の文言は、VOICEVOXの3人の話者（四国めたん・春日部つむぎ・†聖騎士 紅桜†）で聞き比べて決めた（2026-11-15）。「うんうん」は1語として低→高→低と読まれ「う～ん」に聞こえ、「へえ」は上がって下がる抑揚が強く、「ええ」は不自然で、「そうなんだ」は長く、話者によって抑揚が不自然だった。`audio_query` の音の高さや間を書き換える方法も試したが、元の読み方より聞き取りにくくなったため使わない。「うん。」のように句点を付けても、1文だけでは読み方は変わらない。
+- 鳴らすのは、ダッシュボードの状態が録音中（`listening`/`auth_listening`）で、ほかの音を鳴らしておらず、ミュート・他アプリ優先の保留中でないときだけ。前の相槌を鳴らしている間に届いた相槌は捨てる。
+- 合成した相槌は話者ごとにメモリへ覚える。stt-gateway へ送る文言（`STT_GATEWAY_BACKCHANNEL_PHRASES`）は起動時に合成しておく。
+- スピーカーの相槌をマイクが拾うと、文字起こしや、ウェイクワード後の発話終了の判定（VAD）に影響することがある。エコーキャンセルの無い環境では、音量を下げるか0にする。
+
+相槌の調査:
+
+- 届いた相槌はすべて、文言・位置（`offset_ms`）・確率・遅れ・扱い（`delivered` 鳴らす側へ渡した、`pre_roll` 先読み分、`too_early` 話し始めてすぐ、`after_end` 録音終了後、`empty` 文言なし）をログ（`相槌を受信:`）に出す。遅れは、届いた時点で送り終えていた音声の長さから位置を引いたもので、話してから届くまでの時間の目安。
+- 鳴らさなかったときは理由（ミュート中、ほかの音を再生中、録音中ではない、前の相槌を再生中など）を、鳴らしたときは受け取ってから再生を始めるまでの時間と、合成済みだったかをログに出す。
+- `STT_GATEWAY_DEBUG_RECORDING_DIR`（`stt.debug_recording_dir`）を指定したときだけ、ストリーミングで送った発話の録音（WAV）と記録（JSON）を同じ名前で保存する。記録には、送った音声の長さ、発話の開始位置（`live_from_ms`）、文字起こし、最初の返事、失敗の内容、相槌を使えたか、届いた相槌の一覧、WAVの先頭に足した無音の長さ（`wav_leading_silence_ms`。PTTは200ms、ウェイクワードは0）を入れる。利用者の声が残るため既定では保存しない。保存先は権限700、ファイルは600にし、新しい50件だけ残す。
+
+最初の返事（`ack`）:
+
+- ARGOSでは、最初の返事の後にエージェントの本回答が続く。stt-gateway の既定のプロンプトは相手の言葉を繰り返してよいとしているため、「違和感あるんだね。」の後に本回答が「しっくりこないんだね。」と同じ受け止めを繰り返したり、「どうだった？」と聞き返した後に別の本回答が始まったりして不自然だった。そこで `start` の `ack` で、中身のない「つなぎ」の一言にするプロンプトを送る（stt-gateway の README の、本回答が後に続くクライアント向けの推奨のまま）。
+  - `system_prompt`：会話の聞き手として相槌を一言打つ。答えを知らないので質問や依頼には答えず「ちょっと見てみるね」「考えるね」のように受け止めるだけ。相手の言葉は繰り返さず、聞き返さない。日本語で、15文字以内、くだけた口調、1文。
+  - `examples`：「明日の天気ってどう？」→「ちょっと見てみるね。」など4組。
+  - `fallback_text`：「えっと、ちょっと待ってね。」（LLMが時間切れなどのとき stt-gateway が返す）。
+  - 「聞き手」「答えを知らない」「日本語で」は外さない。外すと、小型のLLMが質問に答えて事実でない内容を言い切ったり、日本語以外で返したりする（stt-gateway の変更履歴 2026-11-15）。
+  - プロンプトは stt-gateway の推奨から変えない。2026-11-15 に実機の発話7件（`gemma4:e2b`）で、「わかった」「なるほどね」のような話を終える言い方を禁じる版と、「見てみるね」「考えるね」のように、これからすることで終えるよう指示する版を試した。どちらも推奨より悪く、7件中4〜6件が「わかった」「なるほどね」になった（小型のLLMは、禁止として書いた言葉に引っ張られる）。推奨のプロンプトでも、質問でない発話（「それは別でいいや」「待ってて」）には話を終える言い方になる。
+- 最初の返事を読み上げたときは、エージェントへの依頼の末尾に補足を付ける：「（音声会話の補足：あなたの回答の前に、ARGOSがすでに短い返事をしています。回答は受け止めや相槌の言葉から始めず、本題から話してください。）」。付けないと、本回答が「うん、〜なんだね」と同じ受け止めを繰り返し、返事が2回続く。
+  - 同じ7件を Codex で比べると、補足なしでは「うん、了解！」「うん、〜なんだね」で始まることが多く、補足ありでは7件中5件で受け止めから始まらなくなった。
+  - 補足に返事の言葉そのものは書かない。書いた版では、7件中2件で、エージェントがその言葉の良し悪しを語り始めた。
+  - 補足を付けるのは、stt-gateway の返事を開始メッセージとして読み上げたときだけ。従来の候補や相槌 API（`/select`）の開始メッセージには付けない。ダッシュボードの表示と会話の記録には、補足のない元の発話を残す（エージェントの会話履歴には補足が残る）。
+
+- 文字起こし結果をエージェントへ渡す処理で、進捗音声の開始メッセージに `ack` を使う。`transcript` の後、`STT_GATEWAY_ACK_TIMEOUT_SECONDS`（既定1.5秒）まで待つ。来なければ、従来どおり相槌 API（`POST /select`）または候補から選ぶ。
+- `ARGOS_AGENT_PROGRESS_VOICE=false` のときは、`ack` も読み上げない。
+
 faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_WHISPER_COMPUTE_TYPE` で調整する。既定モデルは `small`。faster-whisper を使う環境では `uv sync --extra whisper` を実行する。
 
 ### tts-filter
@@ -396,7 +452,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
-エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。Web音声ターンではエージェント差分の読取だけを別スレッドで行い、最初の差分を待つ間もSSE接続へ`progress`イベントを返す。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
+エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。stt-gateway のストリーミング（`STT_GATEWAY_STREAM=true`）で受け取った最初の返事（`ack`）があれば、それを開始メッセージにする（「stt-gateway」の「ストリーミング」を参照）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。Web音声ターンではエージェント差分の読取だけを別スレッドで行い、最初の差分を待つ間もSSE接続へ`progress`イベントを返す。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 
 ### 発話時の挨拶
 
