@@ -384,16 +384,12 @@ def test_client_open_builds_utterance():
 
 def test_build_start_options():
     """ack と backchannel の指定を作る。ack を使わないなら false にする。"""
-    options = build_start_options(
-        ack_enabled=True, backchannel_phrases=("うん",), backchannel_threshold=0.4, backchannel_min_interval_ms=1500
-    )
+    options = build_start_options(ack_enabled=True, backchannel_phrases=("うん",), backchannel_min_interval_ms=1500)
     assert options["ack"] == ARGOS_ACK_OPTIONS
     assert options["ack"] is not ARGOS_ACK_OPTIONS
-    assert options["backchannel"] == {"threshold": 0.4, "min_interval_ms": 1500, "phrases": ["うん"]}
-    without = build_start_options(
-        ack_enabled=False, backchannel_phrases=(), backchannel_threshold=0.5, backchannel_min_interval_ms=0
-    )
-    assert without == {"ack": False, "backchannel": {"threshold": 0.5, "min_interval_ms": 0}}
+    assert options["backchannel"] == {"min_interval_ms": 1500, "phrases": ["うん"]}
+    without = build_start_options(ack_enabled=False, backchannel_phrases=(), backchannel_min_interval_ms=0)
+    assert without == {"ack": False, "backchannel": {"min_interval_ms": 0}}
 
 
 def test_argos_ack_prompt_keeps_listener_wording():
@@ -477,82 +473,21 @@ def test_client_passes_start_delay():
     utterance.close()
 
 
-def test_kind_options_retry_without_losing_audio_and_remember_compatibility():
-    """古いgatewayで分類指定を外して再送し、同じ音声と次の発話を送れる。"""
-    sockets = []
-
-    def on_start(ws):
-        """分類指定だけを拒否し、従来の指定は受理する。"""
-        if "phrases_by_kind" in ws.texts()[-1].get("backchannel", {}):
-            assert ws.packets() == []
-            ws.push({"type": "error", "code": "invalid_message", "detail": "unknown field"})
-        else:
-            ws.push({"type": "started", "backchannel": True})
-
-    def connect(url, **kwargs):
-        """発話ごとに新しい接続を作る。"""
-        ws = FakeWebSocket(on_start=on_start, on_end=_reply())
-        sockets.append(ws)
-        return ws
-
-    options = {"backchannel": {"phrases_by_kind": {"continuing": "うん"}}}
-    client = SttStreamClient("http://stt", "ja", connect=connect, start_options=options,
-                             backchannel_fallback_phrases=("うん",))
-    for _ in range(2):
-        utterance = client.open(16000)
-        utterance.feed(_pcm(0.2))
-        assert utterance.finish(5) == "今日の天気は"
-        assert utterance.wait_ack(5)
-    assert len([x for x in sockets[0].texts() if x["type"] == "start"]) == 2
-    assert sockets[0].packets() == sockets[1].packets()
-    assert "phrases_by_kind" not in sockets[1].texts()[0]["backchannel"]
-    assert sockets[1].texts()[0]["backchannel"]["phrases"] == ["うん"]
-    assert sockets[0].texts()[1]["backchannel"]["phrases"] == ["うん"]
-    assert "phrases_by_kind" in options["backchannel"]
-
-
-def test_kind_retry_rejection_fails_fast():
-    """分類指定を外しても拒否される場合は無限に再送しない。"""
-    ws = FakeWebSocket(on_start=lambda ws: ws.push({"type": "error", "code": "invalid_message"}))
-    utterance, _ = _utterance(ws, start_options={"backchannel": {"phrases_by_kind": {"continuing": "うん"}}})
-    with pytest.raises(SttStreamError, match="invalid_message"):
-        utterance.finish(5)
-    utterance.close()
-    assert len(ws.texts()) == 2
-
-
-def test_kind_is_recorded_in_debug_summary(caplog):
-    """分類を調査用JSONとログの両方へ残す。"""
+def test_backchannel_log_and_summary(caplog):
+    """届いた相槌を調査用JSONとログの両方へ残す。"""
     utterance = SttStreamUtterance(url="ws://stt", token="", language="ja", sample_rate=16000, bitrate=24000)
     utterance.feed(_pcm(3))
     with caplog.at_level("INFO"):
-        utterance._handle_event({"type": "backchannel", "text": "うん", "kind": "continuing", "offset_ms": 2500})
-    assert utterance.debug_summary()["backchannels"][0]["kind"] == "continuing"
-    assert "分類=continuing" in caplog.text
+        utterance._handle_event({"type": "backchannel", "text": "うん", "offset_ms": 2500})
+    assert utterance.debug_summary()["backchannels"][0]["text"] == "うん"
+    assert "相槌を受信: うん" in caplog.text
 
 
-def test_build_kind_options():
-    """種類別の設定をstartへ送る。文言が1つなら文字列、複数なら配列にし、指定しない種類は追加しない。"""
-    options = build_start_options(ack_enabled=False, backchannel_phrases=("うん",),
-                                 backchannel_threshold=0.4, backchannel_min_interval_ms=1500,
-                                 backchannel_phrases_by_kind=(("continuing", ("うん",)),
-                                                              ("sad_or_trouble", ("そっか", "そっかぁ"))))
-    assert options["backchannel"]["phrases_by_kind"] == {"continuing": "うん", "sad_or_trouble": ["そっか", "そっかぁ"]}
-    assert "phrases" not in options["backchannel"]
-
-
-def test_build_start_options_timing():
-    """相槌のタイミング指定は、設定したときだけ start.backchannel に入る。"""
-    base = dict(ack_enabled=True, backchannel_phrases=("うん",), backchannel_threshold=0.35,
-                backchannel_min_interval_ms=2500)
+def test_build_start_options_silence_ms():
+    """無音の長さは指定したときだけ送り、gatewayが拒否する項目は送らない。"""
+    base = dict(ack_enabled=True, backchannel_phrases=("うん",), backchannel_min_interval_ms=2500)
     plain = build_start_options(**base)
-    assert "timing" not in plain["backchannel"]
-    assert "silence_ms" not in plain["backchannel"]
-
-    timed = build_start_options(**base, backchannel_timing="silence", backchannel_silence_ms=120)
-    assert timed["backchannel"]["timing"] == "silence"
+    assert set(plain["backchannel"]) == {"phrases", "min_interval_ms"}
+    timed = build_start_options(**base, backchannel_silence_ms=120)
     assert timed["backchannel"]["silence_ms"] == 120
-
-    only_timing = build_start_options(**base, backchannel_timing="maai")
-    assert only_timing["backchannel"]["timing"] == "maai"
-    assert "silence_ms" not in only_timing["backchannel"]
+    assert not {"threshold", "timing", "phrases_by_kind"} & set(timed["backchannel"])

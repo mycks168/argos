@@ -80,7 +80,7 @@ location:
 
 - 接続先は `STT_GATEWAY_URL` の `http`/`https` を `ws`/`wss` に替えた `<URL>/stream`。認証は `/transcribe` と同じ `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>` ヘッダ（トークン未設定時は付けない）。
 - 発話ごとに1本の接続を張る。録音開始で接続し、`{"type":"start","encoding":"opus","language":<STT_GATEWAY_LANGUAGE>,"ack":...,"backchannel":...}` を送る。つながるまでの音声はためておき、つながったら送る。
-- `start` の `ack` と `backchannel` は、stt-gateway の「発話ごとの指定」（2026-11-15 追加）。`backchannel` は `threshold`（`STT_GATEWAY_BACKCHANNEL_THRESHOLD`、既定0.4）、`min_interval_ms`（`STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS`、既定1500）、`phrases`（`STT_GATEWAY_BACKCHANNEL_PHRASES`、既定「そっか・なるほど・うん」）。stt-gateway の既定のしきい値0.5では、実機の声で相槌の確率が0.50〜0.56を少し超えたときしか相槌が出ず、少なくタイミングも悪かったため0.4にする。文言は stt-gateway の上限（1〜10個、1つ20文字まで）に収まるよう、設定の読み込み時にそろえる。
+- `start` の `ack` と `backchannel` は、stt-gateway の「発話ごとの指定」（2026-11-15 追加）。`backchannel` は `phrases`（`STT_GATEWAY_BACKCHANNEL_PHRASES`、既定「そっか・なるほど・うん」）、`min_interval_ms`（`STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS`、既定1500）、`silence_ms`（`STT_GATEWAY_BACKCHANNEL_SILENCE_MS`、0〜2000、0なら送らない）だけを送る。stt-gateway は、この3つ以外（`threshold`・`timing`・`phrases_by_kind` など）を `invalid_message` で拒否し、その発話は始まらない。文言は stt-gateway の上限（1〜10個、1つ20文字まで）に収まるよう、設定の読み込み時にそろえる。
 - `ack` は、ARGOS向けの返事の作り方（下の「最初の返事」）。`ARGOS_AGENT_PROGRESS_VOICE=false` のときは `"ack": false` を送り、返事を作らせない。
 - `start` が受け付けられず、`started` より前に `invalid_message` が届いたときは、その発話は始まらない。`transcript` を待たずに失敗とし、録音ファイルでの文字起こしに切り替える。
 - 音声は Opus の生パケット（コンテナなし、モノラル、20ms）。PyAV（libopus）でエンコードする。ビットレートは `STT_GATEWAY_OPUS_BITRATE`。録音のサンプリングレートが libopus の対応値（8/12/16/24/48kHz）以外のときは16kHzに変換する。
@@ -92,18 +92,12 @@ location:
 
 相槌（`backchannel`）:
 
-- `stt.backchannel_timing`（`STT_GATEWAY_BACKCHANNEL_TIMING`、既定は空）を `start.backchannel.timing` に送る。`silence` は stt-gateway が Silero VAD で話していない区間を見つけ、無音が一定時間続いたところで相槌を出す方式、`maai` は相槌モデルの確率だけで決める従来の方式。空なら項目を送らず stt-gateway の既定に任せる。`silence` で無音とみなす長さは `stt.backchannel_silence_ms`（`STT_GATEWAY_BACKCHANNEL_SILENCE_MS`、0〜2000、0なら送らず stt-gateway の既定 120ms）を `start.backchannel.silence_ms` に送る。確率だけで決める方式では、ARGOS のマイクの音だと相槌がすべて話の途中（50〜150ms の短い切れ目）に出てかぶったため、無音を待つ方式を選べるようにした（2026-11-15）。`maai`・`silence` 以外の値は起動時の設定読み込みでエラーにする。
-- `phrases` と `phrases_by_kind` は同時に送れない。分類設定がある場合は `phrases_by_kind` だけを送り、古いgatewayへの互換再送では `phrases_by_kind` を除き、設定済みの `backchannel_phrases` を `phrases` として送る。
-- `stt.backchannel_phrases_by_kind`（環境変数 `STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND` はJSON辞書）を `start.backchannel.phrases_by_kind` に送る。stt-gateway は相槌のタイミングごとに、そこまでの発話から話の種類を14種類（`continuing`, `hesitating`, `question_or_request`, `sad_or_trouble`, `explanation`, `surprising`, `news`, `seeking_agreement`, `opinion`, `happy`, `complaint`, `step_by_step`, `thinking_aloud`, `wrapping_up`）から判定し、その種類の文言を返す。指定しない種類では相槌を出さない。
-  - 値は1〜20文字の文言か、その配列（1〜5個）。配列はその種類の中で順に使われ、順番は接続の中で引き継がれる。ARGOS は文言が1つなら文字列、複数なら配列で送る。
-  - 既定は `continuing`・`hesitating`・`seeking_agreement`・`opinion`・`step_by_step` に「うん」、`explanation` に「なるほど」、`sad_or_trouble` に「そっか」「そっかぁ」、`complaint`・`news` に「そっか」。質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。言いよどみも受け止めるため、`hesitating`には「うん」を割り当てる。「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合うため、`opinion` は「うん」にした。
-  - 14種類以外の種類、6個以上の配列、21文字以上の文言は、stt-gateway が `invalid_message` で拒否するため、起動時の設定読み込みでエラーにする。
-  - 空の辞書 `{}` なら種類の指定を送らず、従来の文言を順番に使う。
-- 分類指定付きの `start` は受理を最大3秒待ってから音声を送る。`started` 前の `invalid_message` では、分類指定を外して同じ接続で `start` を1回再送し、ためた音声を送る。以後、そのクライアントでは分類指定を外す。再送も拒否された場合は録音ファイルでの文字起こしに切り替える。
+- 相槌のタイミングは stt-gateway が決める。Silero VAD で無音が続いたところ（既定90ms、`silence_ms` で変更可）を候補にし、区切りらしさの判定や、新しく1秒以上話したかなどで出すかどうかを決める。文言は `phrases` を順に回す。
+- 経緯（2026-11-15〜16）：相槌モデル（MaAI）の確率でタイミングを決める方式では、ARGOS のマイクの音だと相槌がすべて話の途中（息継ぎ）に出てかぶった。話の種類（Kev-0.8B、14種類）で文言を選ぶ方式も試したが、ARGOS での話し方はほぼ「うん」で足り、種類の判定が相槌を消したり合わない文言を選んだりしたため、stt-gateway 側でどちらも外した。ARGOS からも、しきい値（`threshold`）・タイミングの方式（`timing`）・種類別の文言（`phrases_by_kind`）の設定を外した。
 - 届いた相槌のうち `STT_GATEWAY_BACKCHANNEL_SKIP_RATE`（0〜1、既定0.25）の割合を、鳴らさずに見送る。人は相槌を打てるところで毎回打つわけではなく、毎回打つと機械っぽく聞こえたため。見送った相槌はログに出す。
-- 分類別と従来の両方の文言を、起動時に全スロットの話者（現在の話者・既定の話者も含む）で事前合成する。受信した `kind` はログと調査用JSONに記録する。
+- 相槌の文言は、起動時に全スロットの話者（現在の話者・既定の話者も含む）で事前合成する。
 - 録音を止めずに、VOICEVOX（失敗時はKokoro）で合成した相槌を鳴らす。音量は読み上げ音量に `STT_GATEWAY_BACKCHANNEL_VOLUME`（0〜1、既定0.5）を掛けたもの。0なら鳴らさない。
-- 話し始め（ウェイクワードの先読み分を除いた、送った音声の先頭）から `STT_GATEWAY_BACKCHANNEL_START_DELAY_MS`（既定2000ms）までの位置に届いた相槌は鳴らさない。予測モデルは話し始めて1.3秒ほどでも相槌を打つべきと判断することがあり、話し始めた直後の相槌は割り込みに聞こえたため。マイクの音量（RMS）は使わない。車内ではロードノイズで音量が高く、話しているかの判断に使えないため。
+- 話し始め（ウェイクワードの先読み分を除いた、送った音声の先頭）から `STT_GATEWAY_BACKCHANNEL_START_DELAY_MS`（既定2000ms）までの位置に届いた相槌は鳴らさない。話し始めた直後の相槌は割り込みに聞こえたため。マイクの音量（RMS）は使わない。車内ではロードノイズで音量が高く、話しているかの判断に使えないため。
 - 相槌の文言は、VOICEVOXの3人の話者（四国めたん・春日部つむぎ・†聖騎士 紅桜†）で聞き比べて決めた（2026-11-15）。「うんうん」は1語として低→高→低と読まれ「う～ん」に聞こえ、「へえ」は上がって下がる抑揚が強く、「ええ」は不自然で、「そうなんだ」は長く、話者によって抑揚が不自然だった。`audio_query` の音の高さや間を書き換える方法も試したが、元の読み方より聞き取りにくくなったため使わない。「うん。」のように句点を付けても、1文だけでは読み方は変わらない。
 - 鳴らすのは、ダッシュボードの状態が録音中（`listening`/`auth_listening`）で、ほかの音を鳴らしておらず、ミュート・他アプリ優先の保留中でないときだけ。前の相槌を鳴らしている間に届いた相槌は捨てる。
 - 合成した相槌は話者ごとにメモリへ覚える。stt-gateway へ送る文言（`STT_GATEWAY_BACKCHANNEL_PHRASES`）は起動時に合成しておく。
@@ -111,7 +105,7 @@ location:
 
 相槌の調査:
 
-- 届いた相槌はすべて、文言・位置（`offset_ms`）・確率・遅れ・扱い（`delivered` 鳴らす側へ渡した、`pre_roll` 先読み分、`too_early` 話し始めてすぐ、`after_end` 録音終了後、`empty` 文言なし）をログ（`相槌を受信:`）に出す。遅れは、届いた時点で送り終えていた音声の長さから位置を引いたもので、話してから届くまでの時間の目安。
+- 届いた相槌はすべて、文言・位置（`offset_ms`）・確率（届いた場合）・遅れ・扱い（`delivered` 鳴らす側へ渡した、`pre_roll` 先読み分、`too_early` 話し始めてすぐ、`after_end` 録音終了後、`empty` 文言なし）をログ（`相槌を受信:`）に出す。遅れは、届いた時点で送り終えていた音声の長さから位置を引いたもので、話してから届くまでの時間の目安。
 - 鳴らさなかったときは理由（ミュート中、ほかの音を再生中、録音中ではない、前の相槌を再生中など）を、鳴らしたときは受け取ってから再生を始めるまでの時間と、合成済みだったかをログに出す。
 - `STT_GATEWAY_DEBUG_RECORDING_DIR`（`stt.debug_recording_dir`）を指定したときだけ、ストリーミングで送った発話の録音（WAV）と記録（JSON）を同じ名前で保存する。記録には、送った音声の長さ、発話の開始位置（`live_from_ms`）、文字起こし、最初の返事、失敗の内容、相槌を使えたか、届いた相槌の一覧、WAVの先頭に足した無音の長さ（`wav_leading_silence_ms`。PTTは200ms、ウェイクワードは0）を入れる。利用者の声が残るため既定では保存しない。保存先は権限700、ファイルは600にし、新しい50件だけ残す。
 

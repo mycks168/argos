@@ -62,7 +62,6 @@ LIST_MAPPINGS = {
 
 # 配列やテーブルを、そのままJSONにして渡す項目。
 JSON_MAPPINGS = {
-    ("stt", "backchannel_phrases_by_kind"): "STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND",
     ("ptt", "devices"): "ARGOS_PTT_DEVICES_JSON",
     ("notice.android", "apps"): "ARGOS_NOTICE_ANDROID_APPS_JSON",
     ("notice.android", "mute"): "ARGOS_NOTICE_ANDROID_MUTE_JSON",

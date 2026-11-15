@@ -78,27 +78,6 @@ def _float_env_with_fallback(name: str, fallback_name: str, default: float) -> f
 # VOICEVOX の 3 人の話者で聞き比べて決めた（2026-11-15）。「うんうん」は「う～ん」に、
 # 「へえ」は上がって下がる抑揚が強く、「そうなんだ」は長くて抑揚が不自然に聞こえたため外した。
 DEFAULT_STT_BACKCHANNEL_PHRASES = ("そっか", "なるほど", "うん")
-# 話の種類ごとの相槌。stt-gateway が相槌のたびに話の種類を判定し、その種類の文言を順に返す。
-# 質問や依頼・考えながら話している・話をまとめている、は相槌を打たないため指定しない。
-# 「〜な気がするな」のような意見や感想には「なるほど」より「うん」が合う（stt-gateway 側の調査）。
-DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("continuing", ("うん",)),
-    ("hesitating", ("うん",)),
-    ("seeking_agreement", ("うん",)),
-    ("opinion", ("うん",)),
-    ("step_by_step", ("うん",)),
-    ("explanation", ("なるほど",)),
-    ("sad_or_trouble", ("そっか", "そっかぁ")),
-    ("complaint", ("そっか",)),
-    ("news", ("そっか",)),
-)
-# stt-gateway が判定する話の種類。これ以外を送ると発話が始まらないため、起動前に検出する。
-STT_BACKCHANNEL_KINDS = (
-    "continuing", "hesitating", "question_or_request", "sad_or_trouble", "explanation", "surprising", "news",
-    "seeking_agreement", "opinion", "happy", "complaint", "step_by_step", "thinking_aloud", "wrapping_up",
-)
-# 1つの種類に指定できる文言の数の上限（stt-gateway の上限）。
-STT_BACKCHANNEL_MAX_PHRASES_PER_KIND = 5
 # stt-gateway が受け付ける相槌の文言の上限（個数・1つの長さ）。超えると発話が始まらないため手前でそろえる。
 STT_BACKCHANNEL_MAX_PHRASES = 10
 STT_BACKCHANNEL_MAX_PHRASE_CHARS = 20
@@ -111,55 +90,8 @@ def _stt_backchannel_phrases() -> tuple[str, ...]:
     return usable[:STT_BACKCHANNEL_MAX_PHRASES] or DEFAULT_STT_BACKCHANNEL_PHRASES
 
 
-def _stt_backchannel_threshold() -> float:
-    """相槌のしきい値を読み込む。stt-gateway は 0 より大きく 1 以下だけを受け付ける。"""
-    value = float(os.environ.get("STT_GATEWAY_BACKCHANNEL_THRESHOLD", "0.4"))
-    return min(1.0, max(0.01, value))
-
-
-def _stt_backchannel_phrases_by_kind() -> tuple[tuple[str, tuple[str, ...]], ...]:
-    """種類別の文言をJSONから読む。値は文字列か、1〜5個の文字列の配列。空の辞書は従来の順番選択を使う指定。"""
-    raw = os.environ.get("STT_GATEWAY_BACKCHANNEL_PHRASES_BY_KIND")
-    if raw is None:
-        return DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND
-    try:
-        value = json.loads(raw)
-    except ValueError as exc:
-        raise ValueError("stt.backchannel_phrases_by_kindはJSONの辞書で指定してください") from exc
-    if not isinstance(value, dict):
-        raise ValueError("stt.backchannel_phrases_by_kindは辞書で指定してください")
-    result = []
-    for kind, raw_phrases in value.items():
-        if kind not in STT_BACKCHANNEL_KINDS:
-            raise ValueError(f"stt.backchannel_phrases_by_kindの種類が不明です: {kind}（{', '.join(STT_BACKCHANNEL_KINDS)}）")
-        phrases = [raw_phrases] if isinstance(raw_phrases, str) else raw_phrases
-        if (
-            not isinstance(phrases, list)
-            or not 1 <= len(phrases) <= STT_BACKCHANNEL_MAX_PHRASES_PER_KIND
-            or not all(isinstance(phrase, str) and 1 <= len(phrase.strip()) <= 20 for phrase in phrases)
-        ):
-            raise ValueError("種類別の相槌は、1〜20文字の文言か、その配列（1〜5個）で指定してください")
-        result.append((kind, tuple(phrase.strip() for phrase in phrases)))
-    return tuple(result)
-
-
-STT_BACKCHANNEL_TIMINGS = ("maai", "silence")
-
-
-def _stt_backchannel_timing() -> str:
-    """相槌のタイミングの決め方を読み込む。空なら stt-gateway の既定に任せる（指定を送らない）。
-
-    maai は相槌モデルの確率だけで決める従来の方式、silence は話していない区間（VAD）が
-    一定時間続いたところで出す方式。
-    """
-    value = os.environ.get("STT_GATEWAY_BACKCHANNEL_TIMING", "").strip().lower()
-    if value and value not in STT_BACKCHANNEL_TIMINGS:
-        raise ValueError(f"stt.backchannel_timingは{'・'.join(STT_BACKCHANNEL_TIMINGS)}のどれかか、空で指定してください")
-    return value
-
-
 def _stt_backchannel_silence_ms() -> int:
-    """silence方式で、無音が続いたとみなす長さ（ミリ秒）を読み込む。0なら stt-gateway の既定に任せる。"""
+    """相槌を打つまでに続く無音の長さ（ミリ秒）を読み込む。0なら stt-gateway の既定に任せる。"""
     value = int(os.environ.get("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "0"))
     return min(2000, max(0, value))
 
@@ -399,20 +331,14 @@ class Settings:
     stt_gateway_ack_timeout_seconds: float = 1.5
     # 調査用に、ストリーミングで送った発話の録音と相槌の記録を残す場所。空なら残さない。
     stt_gateway_debug_recording_dir: str = ""
-    # 相槌を打つ確率のしきい値。低いほど相槌が増える。
-    stt_gateway_backchannel_threshold: float = 0.4
     # 前の相槌から次の相槌までの最短の間隔（音声上のミリ秒）。
     stt_gateway_backchannel_min_interval_ms: int = 1500
     stt_gateway_backchannel_phrases: tuple[str, ...] = DEFAULT_STT_BACKCHANNEL_PHRASES
-    stt_gateway_backchannel_phrases_by_kind: tuple[tuple[str, tuple[str, ...]], ...] = (
-        DEFAULT_STT_BACKCHANNEL_PHRASES_BY_KIND
-    )
     # 届いた相槌を鳴らさずに見送る割合。人も、打てるところで毎回は打たないため。
     stt_gateway_backchannel_skip_rate: float = 0.25
     # 話し始めてからこの時間（音声上のミリ秒）までに届いた相槌は鳴らさない。
     stt_gateway_backchannel_start_delay_ms: int = 2000
-    # 相槌のタイミングの決め方（""=gatewayの既定 / "maai" / "silence"）と、silenceの無音の長さ（0=既定）
-    stt_gateway_backchannel_timing: str = ""
+    # 相槌を打つまでに続く無音の長さ（ミリ秒）。0なら stt-gateway の既定に任せる。
     stt_gateway_backchannel_silence_ms: int = 0
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
@@ -745,17 +671,14 @@ def load_settings() -> Settings:
         ),
         stt_gateway_ack_timeout_seconds=max(0.0, float(os.environ.get("STT_GATEWAY_ACK_TIMEOUT_SECONDS", "1.5"))),
         stt_gateway_debug_recording_dir=os.environ.get("STT_GATEWAY_DEBUG_RECORDING_DIR", ""),
-        stt_gateway_backchannel_threshold=_stt_backchannel_threshold(),
         stt_gateway_backchannel_min_interval_ms=min(
             60000, max(0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS", "1500")))
         ),
         stt_gateway_backchannel_phrases=_stt_backchannel_phrases(),
-        stt_gateway_backchannel_phrases_by_kind=_stt_backchannel_phrases_by_kind(),
         stt_gateway_backchannel_skip_rate=_stt_backchannel_skip_rate(),
         stt_gateway_backchannel_start_delay_ms=max(
             0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "2000"))
         ),
-        stt_gateway_backchannel_timing=_stt_backchannel_timing(),
         stt_gateway_backchannel_silence_ms=_stt_backchannel_silence_ms(),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),

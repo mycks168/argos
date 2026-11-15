@@ -241,32 +241,14 @@ stt:
   backchannel_volume: 0.5
   ack_timeout_seconds: 1.5
   debug_recording_dir: ''
-  backchannel_threshold: 0.4
   backchannel_min_interval_ms: 1500
   backchannel_phrases:
   - そっか
   - なるほど
   - うん
   backchannel_start_delay_ms: 2000
-  # 相槌のタイミングの決め方。silence=話が途切れて無音が続いたところで打つ、maai=相槌モデルの確率だけで決める。
-  # 空ならstt-gatewayの既定に任せる。
-  backchannel_timing: ''
-  # silenceのとき、無音がこの時間（ミリ秒）続いたら相槌を打つ。0ならstt-gatewayの既定（120ms）。
+  # 無音がこの時間（ミリ秒）続いたら相槌を打つ。0ならstt-gatewayの既定に任せる。
   backchannel_silence_ms: 0
-  # 話の種類ごとの相槌。値は文言か、1〜5個の配列（配列は順に使う）。指定しない種類では相槌を打たない。
-  # 空の辞書 {} にすると、種類を判定せず backchannel_phrases を順番に使う。
-  backchannel_phrases_by_kind:
-    continuing: うん
-    hesitating: うん
-    seeking_agreement: うん
-    opinion: うん
-    step_by_step: うん
-    explanation: なるほど
-    sad_or_trouble:
-    - そっか
-    - そっかぁ
-    complaint: そっか
-    news: そっか
   # 届いた相槌を鳴らさずに見送る割合（0〜1）。毎回打つと機械っぽく聞こえるため。
   backchannel_skip_rate: 0.25
 auth:
