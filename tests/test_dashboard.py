@@ -411,8 +411,8 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
         assert "grid-auto-rows: minmax(360px, 1fr)" in grid_html
         assert ".messages { min-height: 0; overflow: auto; padding: 6px 8px; }" in grid_html
         assert ".message { width: fit-content; max-width: 92%; margin: 3px 0; padding: 4px 8px;" in grid_html
-        assert 'const text = String(message.text ?? "").trim();' in grid_html
-        assert '>${renderMessageText(text)}</div>`' in grid_html
+        assert 'text: String(message.text ?? "").trim()' in grid_html
+        assert '<div class="msg-body">${bodyHtml}</div></div>`' in grid_html
         assert '#69b7e4' in grid_html
         assert '#f4d35e0d' in grid_html
         assert 'background: #070b0f' in grid_html
@@ -477,6 +477,17 @@ def test_dashboard_server_serves_html_snapshot_and_authenticated_events(tmp_path
             assert response.headers["Content-Type"] == "application/javascript; charset=utf-8"
             message_text = response.read().decode("utf-8")
         assert "ArgosMessageText" in message_text
+
+        # 会話本文のリッチ表示に使う部品（表示処理・見た目・同梱ライブラリ）も配信する。
+        for static_path, content_type, marker in (
+            ("/static/message_view.js", "application/javascript; charset=utf-8", "ArgosMessageView"),
+            ("/static/message_view.css", "text/css; charset=utf-8", ".msg-lightbox"),
+            ("/static/vendor/markdown-it.min.js", "application/javascript; charset=utf-8", "markdownit"),
+            ("/static/vendor/mermaid.min.js", "application/javascript; charset=utf-8", "mermaid"),
+        ):
+            with urlopen(base_url + static_path, timeout=5) as response:
+                assert response.headers["Content-Type"] == content_type
+                assert marker in response.read().decode("utf-8")
 
         with urlopen(base_url + "/camera/latest.jpg", timeout=2) as response:
             assert response.headers["Content-Type"] == "image/jpeg"
