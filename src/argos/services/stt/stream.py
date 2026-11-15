@@ -16,7 +16,6 @@ from typing import Any
 
 import numpy as np
 
-from argos.config import DEFAULT_STT_BACKCHANNEL_PHRASES
 
 log = logging.getLogger(__name__)
 
@@ -55,34 +54,24 @@ def build_start_options(
     *,
     ack_enabled: bool,
     backchannel_phrases: tuple[str, ...],
-    backchannel_threshold: float,
     backchannel_min_interval_ms: int,
-    backchannel_phrases_by_kind: tuple[tuple[str, tuple[str, ...]], ...] = (),
-    backchannel_timing: str = "",
     backchannel_silence_ms: int = 0,
 ) -> dict[str, Any]:
     """start に付ける、発話ごとの ack と backchannel の指定を作る。
 
-    backchannel_timing（"maai"/"silence"）と backchannel_silence_ms は、指定したときだけ送る。
-    空・0 のときは項目ごと省き、stt-gateway の既定のやり方に任せる（古い gateway でも壊れない）。
+    相槌のタイミングは stt-gateway が無音の長さと区切りの判定で決めるため、ARGOS が送るのは
+    文言（phrases）・相槌の間隔（min_interval_ms）・無音の長さ（silence_ms）だけ。
+    silence_ms は 0 のとき項目ごと省き、stt-gateway の既定に任せる。
 
     ack を読み上げない設定（進捗音声がオフ）のときは "ack": false にして、
     stt-gateway に LLM で返事を作らせない。
     """
     backchannel: dict[str, Any] = {
-        "threshold": backchannel_threshold,
         "min_interval_ms": backchannel_min_interval_ms,
     }
-    if backchannel_timing:
-        backchannel["timing"] = backchannel_timing
     if backchannel_silence_ms > 0:
         backchannel["silence_ms"] = backchannel_silence_ms
-    if backchannel_phrases_by_kind:
-        # 文言が1つなら文字列、複数なら配列で送る。配列は、その種類の中で順に使われる。
-        backchannel["phrases_by_kind"] = {
-            kind: phrases[0] if len(phrases) == 1 else list(phrases) for kind, phrases in backchannel_phrases_by_kind
-        }
-    elif backchannel_phrases:
+    if backchannel_phrases:
         backchannel["phrases"] = list(backchannel_phrases)
     return {
         "ack": json.loads(json.dumps(ARGOS_ACK_OPTIONS)) if ack_enabled else False,
@@ -204,8 +193,6 @@ class SttStreamUtterance:
         encoder_factory: Callable[[int, int], OpusPacketEncoder] = OpusPacketEncoder,
         start_options: dict[str, Any] | None = None,
         backchannel_start_delay_ms: float = 0.0,
-        on_kind_unsupported: Callable[[], None] | None = None,
-        backchannel_fallback_phrases: tuple[str, ...] = DEFAULT_STT_BACKCHANNEL_PHRASES,
     ) -> None:
         """接続先と音声の形式、相槌を受け取ったときの呼び出し先、start に付ける指定を保持する。
 
@@ -223,10 +210,6 @@ class SttStreamUtterance:
         self._start_options = dict(start_options or {})
         self._backchannel_start_delay_ms = max(0.0, float(backchannel_start_delay_ms))
         self._started = False
-        self._start_ready = threading.Event()
-        self._kind_rejected = False
-        self._on_kind_unsupported = on_kind_unsupported
-        self._backchannel_fallback_phrases = backchannel_fallback_phrases
         self._queue: queue.Queue[object] = queue.Queue()
         self._lock = threading.Lock()
         self._ws: Any = None
@@ -321,7 +304,6 @@ class SttStreamUtterance:
             self._closed = True
             ws = self._ws
         self._queue.put(_END)
-        self._start_ready.set()
         self._transcript_ready.set()
         self._ack_ready.set()
         if ws is not None:
@@ -341,7 +323,6 @@ class SttStreamUtterance:
         """失敗を記録し、結果を待っている呼び出し側を起こす。"""
         if self._error is None:
             self._error = exc
-        self._start_ready.set()
         self._transcript_ready.set()
         self._ack_ready.set()
 
@@ -371,23 +352,6 @@ class SttStreamUtterance:
             start = {"type": "start", "encoding": "opus", "language": self._language, **self._start_options}
             ws.send(json.dumps(start, ensure_ascii=False))
             threading.Thread(target=self._receive_loop, args=(ws,), name="stt-stream-recv", daemon=True).start()
-            if "phrases_by_kind" in start.get("backchannel", {}):
-                # startの受理までは音声をためる。拒否された場合も音声を失わず送り直せる。
-                if not self._start_ready.wait(CONNECT_TIMEOUT_SECONDS):
-                    raise SttStreamError("startの受理が時間内に届きませんでした")
-                if self._closed or self.failed:
-                    return
-                if self._kind_rejected:
-                    start["backchannel"] = dict(start["backchannel"])
-                    start["backchannel"].pop("phrases_by_kind")
-                    start["backchannel"]["phrases"] = list(self._backchannel_fallback_phrases)
-                    self._start_options = {key: value for key, value in start.items() if key != "type"}
-                    self._start_ready.clear()
-                    ws.send(json.dumps(start, ensure_ascii=False))
-                    if not self._start_ready.wait(CONNECT_TIMEOUT_SECONDS):
-                        raise SttStreamError("互換指定のstartの受理が時間内に届きませんでした")
-                    if self._closed or self.failed:
-                        return
             while True:
                 item = self._queue.get()
                 if item is _END:
@@ -431,7 +395,6 @@ class SttStreamUtterance:
         kind = event.get("type")
         if kind == "started":
             self._started = True
-            self._start_ready.set()
             self._backchannel_available = bool(event.get("backchannel"))
             self._backchannel_unavailable_reason = event.get("backchannel_unavailable_reason")
             if not self._backchannel_available:
@@ -452,16 +415,6 @@ class SttStreamUtterance:
             code = str(event.get("code", ""))
             detail = str(event.get("detail", ""))
             log.warning("stt-gateway /stream がエラーを返しました: %s %s", code, detail)
-            if (
-                code == "invalid_message" and not self._started and not self._kind_rejected
-                and "phrases_by_kind" in self._start_options.get("backchannel", {})
-            ):
-                self._kind_rejected = True
-                log.warning("分類別の相槌指定を外してstartを再送します。以後の発話も従来の指定を使います")
-                if self._on_kind_unsupported is not None:
-                    self._on_kind_unsupported()
-                self._start_ready.set()
-                return
             # started より前の invalid_message は start が受け付けられなかったことを表す。
             # その発話は始まらず transcript も来ないため、時間切れを待たずに失敗にする。
             if code in FATAL_ERROR_CODES or (code == "invalid_message" and not self._started):
@@ -495,15 +448,13 @@ class SttStreamUtterance:
                 "text": text,
                 "offset_ms": round(offset_ms),
                 "probability": probability,
-                "kind": event.get("kind"),
                 "lag_ms": round(lag_ms),
                 "result": result,
             }
         )
         log.info(
-            "相槌を受信: %s 分類=%s 位置=%.0fms 確率=%s 遅れ=%.0fms 結果=%s",
+            "相槌を受信: %s 位置=%.0fms 確率=%s 遅れ=%.0fms 結果=%s",
             text,
-            event.get("kind"),
             offset_ms,
             probability,
             lag_ms,
@@ -529,7 +480,6 @@ class SttStreamClient:
         connect: Callable[..., Any] | None = None,
         start_options: dict[str, Any] | None = None,
         backchannel_start_delay_ms: float = 0.0,
-        backchannel_fallback_phrases: tuple[str, ...] = DEFAULT_STT_BACKCHANNEL_PHRASES,
     ) -> None:
         """stt-gateway のベース URL、言語、Bearer トークン、Opus のビットレート、start に付ける指定、
         話し始めてから相槌を鳴らさない時間を保持する。"""
@@ -540,16 +490,6 @@ class SttStreamClient:
         self._connect = connect
         self._start_options = start_options
         self._backchannel_start_delay_ms = backchannel_start_delay_ms
-        self._backchannel_fallback_phrases = backchannel_fallback_phrases
-
-    def _disable_kind(self) -> None:
-        """古いgatewayでは、次の発話から分類別の指定を外す。"""
-        options = dict(self._start_options or {})
-        backchannel = dict(options.get("backchannel", {}))
-        backchannel.pop("phrases_by_kind", None)
-        backchannel["phrases"] = list(self._backchannel_fallback_phrases)
-        options["backchannel"] = backchannel
-        self._start_options = options
 
     def open(self, sample_rate: int, on_backchannel: Callable[[str], None] | None = None) -> SttStreamUtterance:
         """新しい発話の送受信を始める。"""
@@ -563,8 +503,6 @@ class SttStreamClient:
             connect=self._connect,
             start_options=self._start_options,
             backchannel_start_delay_ms=self._backchannel_start_delay_ms,
-            on_kind_unsupported=self._disable_kind,
-            backchannel_fallback_phrases=self._backchannel_fallback_phrases,
         )
         utterance.start()
         return utterance

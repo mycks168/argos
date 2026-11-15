@@ -253,14 +253,10 @@ class ArgosApp:
                     # 最初の返事は進捗音声の開始メッセージとして読み上げる。読み上げないなら作らせない。
                     ack_enabled=settings.agent_progress_voice,
                     backchannel_phrases=settings.stt_gateway_backchannel_phrases,
-                    backchannel_phrases_by_kind=settings.stt_gateway_backchannel_phrases_by_kind,
-                    backchannel_threshold=settings.stt_gateway_backchannel_threshold,
                     backchannel_min_interval_ms=settings.stt_gateway_backchannel_min_interval_ms,
-                    backchannel_timing=settings.stt_gateway_backchannel_timing,
                     backchannel_silence_ms=settings.stt_gateway_backchannel_silence_ms,
                 ),
                 backchannel_start_delay_ms=settings.stt_gateway_backchannel_start_delay_ms,
-                backchannel_fallback_phrases=settings.stt_gateway_backchannel_phrases,
             )
             if _uses_stt_stream(settings)
             else None
@@ -1890,14 +1886,7 @@ class ArgosApp:
         threading.Thread(
             target=self._backchannel.prewarm,
             args=(
-                tuple(dict.fromkeys((
-                    *self._settings.stt_gateway_backchannel_phrases,
-                    *(
-                        phrase
-                        for _, phrases in self._settings.stt_gateway_backchannel_phrases_by_kind
-                        for phrase in phrases
-                    ),
-                ))),
+                tuple(dict.fromkeys(self._settings.stt_gateway_backchannel_phrases)),
                 tuple(dict.fromkeys((
                     self._speech.current_speaker_id(),
                     self._settings.voicevox_speaker,

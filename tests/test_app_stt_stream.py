@@ -348,7 +348,7 @@ def test_prewarm_backchannel_runs_only_when_streaming(monkeypatch):
     app._prewarm_backchannel()
     assert called.wait(5)
     # stt-gateway へ送るのと同じ文言を合成しておく。
-    assert set(phrases_seen[0][0]) == {"うん", "なるほど", "そっか", "そっかぁ"}
+    assert set(phrases_seen[0][0]) == {"うん", "なるほど", "そっか"}
     assert app._settings.voicevox_speaker in phrases_seen[0][1]
     assert all(slot.voicevox_speaker in phrases_seen[0][1] for slot in app._settings.agent_slots
                if slot.voicevox_speaker is not None)
@@ -454,11 +454,10 @@ def test_stream_client_sends_argos_options(monkeypatch, progress_voice):
     class CapturingClient:
         """作られたときの引数を記録する。"""
 
-        def __init__(self, *args, start_options=None, backchannel_start_delay_ms=0, backchannel_fallback_phrases=()):
-            """送信指定と互換用の候補を記録する。"""
+        def __init__(self, *args, start_options=None, backchannel_start_delay_ms=0):
+            """送信指定と、話し始めに相槌を鳴らさない時間を記録する。"""
             captured["options"] = start_options
             captured["delay"] = backchannel_start_delay_ms
-            captured["fallback"] = backchannel_fallback_phrases
 
     monkeypatch.setattr("argos.core.app.SttStreamClient", CapturingClient)
     settings = Settings(
@@ -467,7 +466,6 @@ def test_stream_client_sends_argos_options(monkeypatch, progress_voice):
             "dry_run": False,
             "stt_gateway_stream": True,
             "agent_progress_voice": progress_voice,
-            "stt_gateway_backchannel_threshold": 0.4,
             "stt_gateway_backchannel_min_interval_ms": 1200,
             "stt_gateway_backchannel_phrases": ("うん", "へえ"),
             "stt_gateway_backchannel_start_delay_ms": 1800,
@@ -479,14 +477,8 @@ def test_stream_client_sends_argos_options(monkeypatch, progress_voice):
 
     options = captured["options"]
     assert captured["delay"] == 1800
-    assert options["backchannel"] == {
-        "threshold": 0.4, "min_interval_ms": 1200,
-        "phrases_by_kind": {
-            "continuing": "うん", "hesitating": "うん", "seeking_agreement": "うん", "opinion": "うん", "step_by_step": "うん",
-            "explanation": "なるほど", "sad_or_trouble": ["そっか", "そっかぁ"], "complaint": "そっか", "news": "そっか",
-        },
-    }
-    assert captured["fallback"] == ("うん", "へえ")
+    # stt-gateway が受け付ける項目だけを送る（threshold・timing・phrases_by_kind は拒否される）。
+    assert options["backchannel"] == {"min_interval_ms": 1200, "phrases": ["うん", "へえ"]}
     if progress_voice:
         assert options["ack"]["fallback_text"] == "えっと、ちょっと待ってね。"
     else:

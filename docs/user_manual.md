@@ -722,22 +722,11 @@ stt:
   stream: true            # 録りながら送り、相槌と最初の返事を受け取る
   backchannel_volume: 0.5 # 話している途中の相槌の音量（0で鳴らさない）
   ack_timeout_seconds: 1.5
-  backchannel_threshold: 0.4   # 低いほど相槌が増える
-  backchannel_phrases: [そっか, なるほど, うん]
-  backchannel_phrases_by_kind:  # 話の種類ごとの相槌
-    continuing: うん
-    hesitating: うん
-    seeking_agreement: うん
-    opinion: うん
-    step_by_step: うん
-    explanation: なるほど
-    sad_or_trouble: [そっか, そっかぁ]
-    complaint: そっか
-    news: そっか
+  backchannel_phrases: [そっか, なるほど, うん]  # 順に使う
+  backchannel_min_interval_ms: 1500 # 相槌どうしの最短の間隔
   backchannel_skip_rate: 0.25       # 相槌をときどき見送る割合
   backchannel_start_delay_ms: 2000  # 話し始めの相槌を鳴らさない時間
-  backchannel_timing: silence       # 相槌のタイミング（silence=無音を待つ / maai=確率だけ / 空=gatewayの既定）
-  backchannel_silence_ms: 120       # silenceで無音とみなす長さ（0=gatewayの既定）
+  backchannel_silence_ms: 0         # 相槌を打つまでの無音の長さ（0=gatewayの既定）
 voicevox:
   url: http://localhost:50021
   bearer_token: ''
@@ -750,28 +739,9 @@ tts:
     enabled: true
 ```
 
-`stream: true` にすると、PTTやウェイクワードで話している間に、ARGOSが「うん」「そっか」と小さめの声で相槌を打ちます。話し終えると、すぐに「ちょっと見てみるね。」のような最初の返事をしてから、本回答を読み上げます。相槌が少なければ `backchannel_threshold` を下げ、多すぎれば上げてください。相槌が話の途中にかぶるときは、`backchannel_timing: silence` にすると、話が途切れて無音が続いたところで打つようになります（stt-gateway側の対応が必要です）。stt-gateway が WebSocket `/stream` に対応している必要があります。つながらないときは、自動で従来の文字起こしに切り替わります。スピーカーの相槌をマイクが拾って聞き取りが悪くなるときは、`backchannel_volume` を下げるか `0` にしてください。相槌の出方を調べるときは、`debug_recording_dir` に保存先（例：`~/.local/share/argos/stt-debug`）を指定すると、話した録音と、届いた相槌の記録が残ります。声が残るので、調べ終わったら空に戻して、保存先のファイルを消してください。
+`stream: true` にすると、PTTやウェイクワードで話している間に、ARGOSが「うん」「そっか」と小さめの声で相槌を打ちます。話し終えると、すぐに「ちょっと見てみるね。」のような最初の返事をしてから、本回答を読み上げます。相槌のタイミングは stt-gateway が、話が途切れて無音が続いたところで決めます。相槌が多すぎるときは `backchannel_min_interval_ms` を上げるか、`backchannel_skip_rate` を上げてください。stt-gateway が WebSocket `/stream` に対応している必要があります。つながらないときは、自動で従来の文字起こしに切り替わります。スピーカーの相槌をマイクが拾って聞き取りが悪くなるときは、`backchannel_volume` を下げるか `0` にしてください。相槌の出方を調べるときは、`debug_recording_dir` に保存先（例：`~/.local/share/argos/stt-debug`）を指定すると、話した録音と、届いた相槌の記録が残ります。声が残るので、調べ終わったら空に戻して、保存先のファイルを消してください。
 
-`backchannel_phrases_by_kind` で、話の種類ごとの相槌を指定できます。stt-gateway が、相槌のたびにそこまでの話から種類を判定します。種類は次の14個で、指定していない種類では相槌を打ちません。言いよどみ（`hesitating`）にも既定で「うん」を返します。相槌だけが小さく聞こえる場合は`backchannel_volume`を0.5から0.7などへ上げてください。通常の返答音量は変わりません。変更の反映にはARGOS本体の再起動が必要です。
-
-| 種類 | 意味 | 既定の相槌 |
-|---|---|---|
-| `continuing` | 続きを話している | うん |
-| `seeking_agreement` | 同意を求めている | うん |
-| `opinion` | 意見や感想 | うん |
-| `step_by_step` | 順番に説明している途中 | うん |
-| `explanation` | 理由の説明 | なるほど |
-| `sad_or_trouble` | 残念な話・困っている | そっか、そっかぁ |
-| `complaint` | 愚痴や不満 | そっか |
-| `news` | 出来事の報告 | そっか |
-| `surprising` | 驚く話 | （打たない） |
-| `happy` | 嬉しい話 | （打たない） |
-| `hesitating` | 言いよどみ | うん |
-| `question_or_request` | 質問や依頼 | （打たない） |
-| `thinking_aloud` | 考えながら話している | （打たない） |
-| `wrapping_up` | 話をまとめて終えようとしている | （打たない） |
-
-値は文言1つか、1〜5個の配列です。配列にすると、その種類の中で順に使います。`{}` にすると従来の `backchannel_phrases` を順番に使います。古いgatewayが種類の指定を拒否した場合も、自動で従来の指定に切り替えます。起動時には全スロットの話者で相槌を事前合成します。毎回相槌を打つと機械っぽく聞こえるので、`backchannel_skip_rate` の割合（既定0.25）でときどき見送ります。
+相槌の文言は `backchannel_phrases` を順に使います。起動時には全スロットの話者で相槌を事前合成します。毎回相槌を打つと機械っぽく聞こえるので、`backchannel_skip_rate` の割合（既定0.25）でときどき見送ります。相槌だけが小さく聞こえる場合は `backchannel_volume` を0.5から0.7などへ上げてください。通常の返答音量は変わりません。変更の反映にはARGOS本体の再起動が必要です。
 
 読み上げは区切り文字ごとに分割して順に合成します。`.` は `README.md` のような語を途中で割らないよう既定では区切りに含めません。改行は常に区切りとして扱います。
 
