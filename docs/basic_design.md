@@ -712,21 +712,21 @@ Codex固有の `CODEX_HOME` は `ARGOS_CODEX_HOME` で全体設定として指�
 
 ## Antigravity CLI
 
-`provider` が `antigravity` のスロットでは、ARGOS は `agy` CLI を1発話ごとに起動する。初回は次の形で実行する。
+`provider` が `antigravity` のスロットでは、ARGOS は `agy` CLI を1発話ごとに `--output-format json` 付きで起動する。初回は次の形で実行する。
 
 ```bash
-agy --print <prompt>
+agy --output-format json --print <prompt>
 ```
 
-`ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` の場合だけ、同じARGOSプロセス内の継続発話では、Antigravity の `last_conversations.json` から取得した会話IDを使い、次の形で実行する。
+`ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` の場合だけ、継続発話では標準出力のJSON（`conversation_id`）から取得してスロット別に保存した会話IDを使い、次の形で実行する。
 
 ```bash
-agy --conversation <conversation_id> --print <prompt>
+agy --conversation <conversation_id> --output-format json --print <prompt>
 ```
 
 `ARGOS_ANTIGRAVITY_COMMAND` で `agy` のパスを指定する。既定値は `agy` とし、systemd の `PATH` から解決する。Antigravity のキャッシュは `ARGOS_ANTIGRAVITY_HOME` から読み、既定値は `~/.gemini/antigravity-cli` とする。`ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS=true` の場合は `--dangerously-skip-permissions` を渡す。`ARGOS_ANTIGRAVITY_SANDBOX=true` の場合は `--sandbox` を渡す。
 
-Antigravity は会話再開時に過去の画面出力を標準出力へ混ぜることがある。ARGOS は `agy` の標準出力を回答本文としては使わず、実行後に `transcript_full.jsonl` または `transcript.jsonl` の追加分を読み、末尾から `source=MODEL`、`type=PLANNER_RESPONSE`、`status=DONE`、`content` ありのエントリーだけを回答として扱う。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
+ARGOS は `agy --output-format json` が標準出力へ返すJSONから `conversation_id` と最終回答 `response` を直接取り出す。これにより共有キャッシュファイル（`last_conversations.json`）への依存や複数スロット同時実行時の競合を避け、セッションリセット直後や新規スロット追加時にも確実に新しい会話IDを取得できる。JSON出力に対応しない旧ラッパー等のフォールバックとしてのみ、`last_conversations.json` および `transcript_full.jsonl` / `transcript.jsonl` からの `PLANNER_RESPONSE`（`status=DONE`）抽出を残す。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
 transcript にUTF-8として読めないバイトが混ざっている場合でも、ARGOS は読み取りを継続し、壊れた行を無視して最新の完了済み回答を探す。
 
 既定では毎回新規会話として起動し、`--conversation` は渡さない。会話を継続したい場合だけ `ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` を指定する。サービス再起動後も保存済み会話IDを復元したい場合は、さらに `ARGOS_ANTIGRAVITY_RESUME_SAVED=true` を指定する。`ARGOS_ANTIGRAVITY_PROMPT_PREFIX` は任意の固定prefixだが、既定では空にする。読み上げ向けの整形はprovider個別ではなく、共通のTTSフィルター側で扱う。
