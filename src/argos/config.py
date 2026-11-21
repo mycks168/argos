@@ -10,6 +10,7 @@ from pathlib import Path
 
 from argos.yaml_config import apply_yaml_environment
 from argos.agent_slot_options import slot_execution_mode, slot_tmux_timeout
+from argos.hardware.input_profiles import InputProfile, parse_profiles
 
 _PROCESS_ENVIRONMENT = set(os.environ)
 apply_yaml_environment(None, _PROCESS_ENVIRONMENT)
@@ -71,6 +72,34 @@ def _bool_env_with_fallback(name: str, fallback_name: str, default: bool) -> boo
 def _float_env_with_fallback(name: str, fallback_name: str, default: float) -> float:
     """浮動小数の環境変数を、新名優先・旧名フォールバックで読み込む。"""
     return float(_env_with_fallback(name, fallback_name, str(default)))
+
+
+# 話している最中の相槌の文言。stt-gateway へ発話ごとに送り、ARGOS の起動時に合成しておく。
+# VOICEVOX の 3 人の話者で聞き比べて決めた（2026-11-15）。「うんうん」は「う～ん」に、
+# 「へえ」は上がって下がる抑揚が強く、「そうなんだ」は長くて抑揚が不自然に聞こえたため外した。
+DEFAULT_STT_BACKCHANNEL_PHRASES = ("そっか", "なるほど", "うん")
+# stt-gateway が受け付ける相槌の文言の上限（個数・1つの長さ）。超えると発話が始まらないため手前でそろえる。
+STT_BACKCHANNEL_MAX_PHRASES = 10
+STT_BACKCHANNEL_MAX_PHRASE_CHARS = 20
+
+
+def _stt_backchannel_phrases() -> tuple[str, ...]:
+    """相槌の文言を読み込み、stt-gateway が受け付ける個数と長さにそろえる。"""
+    phrases = _split_phrases("STT_GATEWAY_BACKCHANNEL_PHRASES", DEFAULT_STT_BACKCHANNEL_PHRASES)
+    usable = tuple(phrase for phrase in phrases if len(phrase) <= STT_BACKCHANNEL_MAX_PHRASE_CHARS)
+    return usable[:STT_BACKCHANNEL_MAX_PHRASES] or DEFAULT_STT_BACKCHANNEL_PHRASES
+
+
+def _stt_backchannel_silence_ms() -> int:
+    """相槌を打つまでに続く無音の長さ（ミリ秒）を読み込む。0なら stt-gateway の既定に任せる。"""
+    value = int(os.environ.get("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "0"))
+    return min(2000, max(0, value))
+
+
+def _stt_backchannel_skip_rate() -> float:
+    """相槌を見送る割合を読み込み、0〜1にそろえる。"""
+    value = float(os.environ.get("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "0.25"))
+    return min(1.0, max(0.0, value))
 
 
 def _split_phrases(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -179,6 +208,9 @@ class Settings:
     antigravity_home: str
     antigravity_extra_args: tuple[str, ...]
     ptt_bluetooth_mac: str = ""
+    # USBメディアノブのUSB機器ID（例: 514c:8850）。空なら使わない。
+    ptt_knob_device: str = ""
+    ptt_devices: tuple[InputProfile, ...] = ()
     claude_model: str = ""
     # ダッシュボード閲覧用アクセスキー。空なら閲覧制限なし。
     dashboard_view_key: str = ""
@@ -291,6 +323,23 @@ class Settings:
     voicevox_accept_opus: bool = False
     stt_gateway_use_opus: bool = False
     stt_gateway_opus_bitrate: str = "24k"
+    # WebSocket /stream で録音しながら送り、相槌と最初の返事を受け取る。
+    stt_gateway_stream: bool = False
+    # 話している最中の相槌の音量（読み上げ音量に対する倍率）。0なら鳴らさない。
+    stt_gateway_backchannel_volume: float = 0.5
+    # 文字起こしの後、最初の返事（ack）を待つ秒数。過ぎたら従来の開始フレーズにする。
+    stt_gateway_ack_timeout_seconds: float = 1.5
+    # 調査用に、ストリーミングで送った発話の録音と相槌の記録を残す場所。空なら残さない。
+    stt_gateway_debug_recording_dir: str = ""
+    # 前の相槌から次の相槌までの最短の間隔（音声上のミリ秒）。
+    stt_gateway_backchannel_min_interval_ms: int = 1500
+    stt_gateway_backchannel_phrases: tuple[str, ...] = DEFAULT_STT_BACKCHANNEL_PHRASES
+    # 届いた相槌を鳴らさずに見送る割合。人も、打てるところで毎回は打たないため。
+    stt_gateway_backchannel_skip_rate: float = 0.25
+    # 話し始めてからこの時間（音声上のミリ秒）までに届いた相槌は鳴らさない。
+    stt_gateway_backchannel_start_delay_ms: int = 2000
+    # 相槌を打つまでに続く無音の長さ（ミリ秒）。0なら stt-gateway の既定に任せる。
+    stt_gateway_backchannel_silence_ms: int = 0
     tts_cache_enabled: bool = True
     tts_cache_max_chars: int = 30
     tts_cache_max_size_mb: int = 200
@@ -616,6 +665,21 @@ def load_settings() -> Settings:
         stt_gateway_token=os.environ.get("STT_GATEWAY_BEARER_TOKEN", ""),
         stt_gateway_use_opus=_bool_env("STT_GATEWAY_USE_OPUS", False),
         stt_gateway_opus_bitrate=os.environ.get("STT_GATEWAY_OPUS_BITRATE", "24k"),
+        stt_gateway_stream=_bool_env("STT_GATEWAY_STREAM", False),
+        stt_gateway_backchannel_volume=min(
+            1.0, max(0.0, float(os.environ.get("STT_GATEWAY_BACKCHANNEL_VOLUME", "0.5")))
+        ),
+        stt_gateway_ack_timeout_seconds=max(0.0, float(os.environ.get("STT_GATEWAY_ACK_TIMEOUT_SECONDS", "1.5"))),
+        stt_gateway_debug_recording_dir=os.environ.get("STT_GATEWAY_DEBUG_RECORDING_DIR", ""),
+        stt_gateway_backchannel_min_interval_ms=min(
+            60000, max(0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS", "1500")))
+        ),
+        stt_gateway_backchannel_phrases=_stt_backchannel_phrases(),
+        stt_gateway_backchannel_skip_rate=_stt_backchannel_skip_rate(),
+        stt_gateway_backchannel_start_delay_ms=max(
+            0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "2000"))
+        ),
+        stt_gateway_backchannel_silence_ms=_stt_backchannel_silence_ms(),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),
         tts_delimiters=os.environ.get("ARGOS_TTS_DELIMITERS", "。！？!?"),
@@ -692,6 +756,8 @@ def load_settings() -> Settings:
         remote_location_token=os.environ.get("ARGOS_REMOTE_LOCATION_TOKEN", ""),
         ptt_gpio=_optional_int(os.environ.get("ARGOS_PTT_GPIO", os.environ.get("PI3_PTT_GPIO", ""))),
         ptt_bluetooth_mac=os.environ.get("ARGOS_PTT_BLUETOOTH_MAC", "").strip(),
+        ptt_knob_device=os.environ.get("ARGOS_PTT_KNOB_DEVICE", "").strip(),
+        ptt_devices=parse_profiles(os.environ.get("ARGOS_PTT_DEVICES_JSON", "[]")),
         silence_rms_threshold=float(os.environ.get("SILENCE_RMS_THRESHOLD", "200")),
         dry_run=_bool_env("DRY_RUN", False),
         codex_home=os.environ.get("ARGOS_CODEX_HOME", ""),

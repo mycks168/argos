@@ -201,11 +201,13 @@ def test_download_face_models_script_exists():
 
 
 def test_dashboard_kiosk_opens_layout_chosen_by_window_layout():
-    """画面配置ツールが選んだレイアウトを、Cookieより優先するURLパラメーターで開く。"""
+    """自動配置の候補と、明示的な固定レイアウトを別の引数で渡す。"""
     script = (Path(__file__).parents[1] / "scripts" / "open-dashboard-kiosk.sh").read_text()
 
     assert 'LAYOUT_FILE="${XDG_STATE_HOME:-${HOME}/.local/state}/argos/dashboard-layout"' in script
     assert 'KIOSK_LAYOUT="${ARGOS_DASHBOARD_KIOSK_LAYOUT:-}"' in script
     assert "standard|sp|grid)" in script
-    assert 'layout=${KIOSK_LAYOUT}' in script
+    assert 'LAYOUT_QUERY_KEY="startup_layout"' in script
+    assert 'LAYOUT_QUERY_KEY="layout"' in script
+    assert '${LAYOUT_QUERY_KEY}=${KIOSK_LAYOUT}' in script
     assert 'DASHBOARD_URL="${DASHBOARD_URL}?${DASHBOARD_QUERY}"' in script

@@ -1,9 +1,22 @@
 """config.yaml読込と旧.env移行のテスト。"""
 
+import json
+
 import pytest
 import yaml
 
 from argos.yaml_config import apply_yaml_environment, load_yaml_environment, write_yaml_from_environment
+
+
+def test_input_devices_json_round_trip(tmp_path):
+    """機器プロファイルの配列をJSONへ渡し、YAMLへ戻しても内容を保つ。"""
+    path = tmp_path / "config.yaml"
+    payload = [{"id": "1:2", "preset": "media_ptt", "bindings": {"KEY_MUTE": "cancel"}}]
+    path.write_text(yaml.safe_dump({"ptt": {"devices": payload}}))
+    values = load_yaml_environment(path)
+    output = tmp_path / "roundtrip.yaml"
+    write_yaml_from_environment(values, output)
+    assert yaml.safe_load(output.read_text())["ptt"]["devices"] == payload
 
 
 def test_load_hierarchical_yaml(tmp_path):
@@ -244,3 +257,21 @@ notice:
     assert data["notice"]["android"]["enabled"] is True
     assert data["notice"]["android"]["apps"] == [{"package": "com.Slack", "name": "Slack"}]
     assert data["notice"]["android"]["mute"] == [{"conversation": "#監視通知"}]
+
+
+def test_stt_stream_settings_round_trip(tmp_path):
+    """ストリーミングの設定と相槌の文言の一覧を、YAMLと環境変数名の間で往復できる。"""
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "stt:\n  stream: true\n  backchannel_min_interval_ms: 2500\n  backchannel_phrases:\n    - うん\n    - へえ\n",
+        encoding="utf-8",
+    )
+
+    values = load_yaml_environment(path)
+
+    assert values["STT_GATEWAY_STREAM"] == "true"
+    assert values["STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS"] == "2500"
+    assert values["STT_GATEWAY_BACKCHANNEL_PHRASES"] == "うん;へえ"
+    rewritten = tmp_path / "rewritten.yaml"
+    write_yaml_from_environment(values, rewritten)
+    assert yaml.safe_load(rewritten.read_text(encoding="utf-8"))["stt"]["backchannel_phrases"] == ["うん", "へえ"]

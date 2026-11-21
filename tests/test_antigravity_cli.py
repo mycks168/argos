@@ -158,12 +158,64 @@ def test_antigravity_ask_stream_saves_conversation(monkeypatch, tmp_path):
         "30s",
         "--model",
         "Gemini Test",
+        "--output-format",
+        "json",
         "--x",
         "--print",
         "こんにちは",
     ]
     assert calls[0][1] == settings.agent_slots[0].cwd
     assert "conv-1" in Path(settings.agent_state_path).read_text(encoding="utf-8")
+
+
+def test_antigravity_json_output_without_cache_or_transcript_and_reset(monkeypatch, tmp_path):
+    """JSON標準出力から直接conversation_idと回答を取得し、reset_current後は新しい会話IDへ切り替わる。"""
+    settings = _settings(tmp_path)
+    slot = AgentSlot("AG-fast", "antigravity", settings.agent_slots[0].cwd, model="gemini-4-hydrogen-medium")
+    settings = Settings(
+        **{
+            **settings.__dict__,
+            "agent_slots": (slot,),
+            "antigravity_continue_session": True,
+            "antigravity_resume_saved": True,
+        }
+    )
+    # 古いlast_conversations.jsonが壊れていたり古いIDを残していてもJSON出力を優先することを確認
+    cache_path = Path(settings.antigravity_home) / "cache" / "last_conversations.json"
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    cache_path.write_text('{"success":true,"message":"Already on the latest version."}', encoding="utf-8")
+
+    commands: list[list[str]] = []
+    outputs = [
+        json.dumps({"conversation_id": "conv-json-1", "status": "SUCCESS", "response": "1回目の回答\n"}),
+        json.dumps({"conversation_id": "conv-json-2", "status": "SUCCESS", "response": "リセット後の回答\n"}),
+    ]
+
+    class FakeProc:
+        returncode = 0
+
+        def communicate(self):
+            return outputs.pop(0), ""
+
+    def fake_popen(command, stdout, stderr, text, cwd, env, bufsize):
+        commands.append(command)
+        return FakeProc()
+
+    monkeypatch.setattr("argos.services.antigravity.cli.subprocess.Popen", fake_popen)
+
+    client = AntigravityCliClient(settings)
+    assert client.ask("初回") == "1回目の回答"
+    assert "--conversation" not in commands[0]
+    assert json.loads(Path(settings.agent_state_path).read_text(encoding="utf-8"))[_slot_key(slot)] == "conv-json-1"
+
+    # リセットを実行するとメモリ上もファイル上も会話IDが消える
+    client.reset_current()
+    assert json.loads(Path(settings.agent_state_path).read_text(encoding="utf-8")) == {}
+
+    # リセット直後の呼び出しは --conversation を付けずに新規会話を開始し、新しい会話IDを保存する
+    assert client.ask("リセット後") == "リセット後の回答"
+    assert "--conversation" not in commands[1]
+    assert json.loads(Path(settings.agent_state_path).read_text(encoding="utf-8"))[_slot_key(slot)] == "conv-json-2"
 
 
 def test_antigravity_slot_command_and_args_override_global(tmp_path):

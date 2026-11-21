@@ -99,12 +99,12 @@ uv run python -m argos.tools.window_layout split --ratio 50 --restart-android
 
 #### ダッシュボードのレイアウトの自動切り替え
 
-分割のときはARGOSの幅が狭くなるため、ダッシュボードを狭い幅向けのSP表示にします。重ねる表示（overlay）では、中央ペインの計算が通常レイアウトを前提にしているため、通常表示へ戻します。
+まだ手動で表示を選んでいないブラウザでは、分割時はSP表示、重ねる表示（overlay）では通常表示を候補にします。手動で通常・SP・グリッドを選んだ後は、その最後の選択を再起動後も優先します。重ねる表示は中央ペインの計算が通常レイアウトを前提とするため、使用する際は通常表示を選んでください。
 
-- **仕組み**: `window_layout` が、キオスクの起動スクリプトが読むファイル（`~/.local/state/argos/dashboard-layout`）へレイアウト名を書き、**変わったときだけ**キオスク（`argos-dashboard-kiosk`）を再起動します。キオスクは `/?layout=sp` のようにURLで指定して開くので、ブラウザに残っているCookieの設定（設定画面で選んだレイアウト）より優先されます。再起動のあと、ARGOSの窓が出るのを待ってから配置します。
+- **仕組み**: `window_layout` が、キオスクの起動スクリプトが読むファイル（`~/.local/state/argos/dashboard-layout`）へレイアウト名を書き、**変わったときだけ**キオスク（`argos-dashboard-kiosk`）を再起動します。ファイル由来の値は`/?startup_layout=sp`のように初回候補として渡し、手動選択を保存したCookie（`argos_layout`）があればそちらを優先します。古いファイルに`sp`が残っていても、最後に通常を選んでいれば通常へ戻ります。再起動のあと、ARGOSの窓が出るのを待ってから配置します。
 - **対象のモード**: `split` はSP、`pane` は通常です。`hide`（ARGOSだけ）や `android` は今のレイアウトのままで、キオスクも再起動しません（隠す・出すを繰り返しても、画面が乱れません）。
 - **固定する**: `window_layout.dashboard_layout` に `standard`・`sp`・`grid` を書くと、モードによらずそれを使います。既定（空または `auto`）は上の自動切り替えです。
-- **サーバー**: `GET /?layout=standard|sp|grid` を受け付けます（不明な値は無視して、Cookieと既定値に従います）。`grid` は `/grid` へ転送します。環境変数 `ARGOS_DASHBOARD_KIOSK_LAYOUT` でもキオスクに指定できます（最優先）。
+- **サーバー**: `GET /?layout=standard|sp|grid`は明示的な固定指定としてCookieより優先します。`startup_layout`はCookieがない場合だけ使います。不明な値は無視します。`grid`は`/grid`へ転送します。環境変数`ARGOS_DASHBOARD_KIOSK_LAYOUT`、または`window_layout.dashboard_layout`の固定指定は引き続き手動選択より優先します（環境変数が最優先）。
 - **キオスクがない端末**: キオスクをこのユーザーが動かしていない端末では、何もしません。
 - **切り替え中**: キオスクの再起動で、ARGOSの画面が数秒消えます。
 
@@ -306,6 +306,12 @@ BluetoothメディアボタンをPTTに使うと、ARGOSは入力デバイスを
 - labwcはキー割り当てが1つもないと標準の割り当てを使うため、割り当てがない場合は `<default />` も足して標準を残します。割り当て済みのキーは変えません。変更前に `rc.xml.before-argos-media-keys` を残し、labwcへSIGHUPで再読み込みを通知します。
 - 音量キーは割り当てないので、これまでどおりOSの音量操作に使えます。入力デバイスを独占（`EVIOCGRAB`）しないのは、同じ機器の音量キーまでOSに届かなくなるためです。
 - 別のキーボードの再生・曲送りキーも、デスクトップのアプリには届かなくなります。戻すときは、この3つの `<keybind>` を消して `labwc -r` を実行します。
+- USBメディアノブ（`ptt.knob_device`）を設定しているときは、画面分割の有無によらず、`XF86AudioMute`・`XF86AudioRaiseVolume`・`XF86AudioLowerVolume`・`XF86AudioNext`・`XF86AudioPrev` も同じように割り当てます。ノブの音量はARGOSの読み上げ音量に使うため、labwc標準のOS音量操作やWaydroidへは渡しません。この場合は上の「音量キーはOSの音量操作に使える」が当てはまらなくなります。
+
+製品ID別の`ptt.devices`を使う場合は、上記の全機器共通キー抑止ではなく、
+専用機器に限って`exclusive: true`でeventノードを独占できます。
+通常のキーボードは未登録キーも届かなくなるので独占しないでください。
+操作の割り当てと既存キー抑止からの移行は[入力機器の設定](input_devices.md)を参照してください。
 
 ## アプリの通知の読み上げ
 

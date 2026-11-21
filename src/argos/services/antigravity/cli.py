@@ -131,10 +131,15 @@ class AntigravityCliClient:
         if proc.returncode != 0:
             raise RuntimeError(f"antigravity-cli エラー {proc.returncode}: {stderr[-1000:]}")
 
-        conversation_id = _load_last_conversation_id(self._settings, conversation.slot)
+        json_conversation_id, json_answer = _parse_json_output(stdout)
+        conversation_id = json_conversation_id or _load_last_conversation_id(self._settings, conversation.slot)
         if self._settings.antigravity_continue_session and conversation_id and conversation_id != conversation.conversation_id:
             conversation.conversation_id = conversation_id
             self._store.save(_slot_key(conversation.slot), conversation_id)
+
+        if json_answer:
+            yield json_answer
+            return
 
         transcript_path = _resolve_transcript_after_run(self._settings, conversation, snapshot, conversation_id)
         if transcript_path is None:
@@ -165,9 +170,36 @@ class AntigravityCliClient:
             command.extend(["--model", model])
         if self._settings.antigravity_continue_session and conversation.conversation_id:
             command.extend(["--conversation", conversation.conversation_id])
-        command.extend(resolve_agent_slot_extra_args(self._settings, conversation.slot))
+        extra_args = resolve_agent_slot_extra_args(self._settings, conversation.slot)
+        if not any(arg == "--output-format" or arg.startswith("--output-format=") for arg in extra_args):
+            command.extend(["--output-format", "json"])
+        command.extend(extra_args)
         command.extend(["--print", f"{self._settings.antigravity_prompt_prefix}{prompt}"])
         return command
+
+
+def _parse_json_output(stdout: str) -> tuple[str, str]:
+    """agy --output-format json の標準出力から会話IDと最終応答本文を取り出す。"""
+    text = stdout.strip()
+    if not text:
+        return "", ""
+    candidates = [text]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) > 1:
+        candidates.append(lines[-1])
+    for candidate in candidates:
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(data, dict):
+            continue
+        raw_id = data.get("conversation_id") or data.get("conversationId") or ""
+        conversation_id = raw_id.strip() if isinstance(raw_id, str) else ""
+        raw_response = data.get("response")
+        response = raw_response.removesuffix("\n").strip() if isinstance(raw_response, str) else ""
+        return conversation_id, response
+    return "", ""
 
 
 def _load_last_conversation_id(settings: Settings, slot: AgentSlot) -> str:

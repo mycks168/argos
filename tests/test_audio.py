@@ -1,3 +1,4 @@
+import threading
 import os
 import wave
 from io import BytesIO
@@ -639,3 +640,120 @@ def test_audio_player_play_wav_reports_completion(monkeypatch):
     assert player.play_wav(b"voice") is False
     proc.communicate = original
     assert player.play_wav(b"voice") is True
+
+
+def test_stream_recorder_passes_chunks_to_on_audio(monkeypatch, tmp_path):
+    """録りながら、音声チャンクを on_audio へ順に渡す。失敗しても録音は続ける。"""
+    frames = [b"\x00\x40" * 160, b"\x00\xc0" * 160]
+    received = []
+
+    class FakeSubscription:
+        def read(self, timeout=1.0):
+            return frames.pop(0) if frames else b""
+
+        def close(self):
+            pass
+
+    class FakeSource:
+        def subscribe(self):
+            return FakeSubscription()
+
+    def on_audio(data):
+        received.append(data)
+        if len(received) == 1:
+            raise RuntimeError("送信先の失敗")
+
+    monkeypatch.setattr("argos.hardware.audio.WAV_PATH", str(tmp_path / "utterance.wav"))
+    recorder = StreamRecorder(FakeSource(), 16000)
+
+    recorder.start(on_audio=on_audio)
+    import time
+
+    time.sleep(0.05)
+    written = recorder.stop()
+
+    assert received == [b"\x00\x40" * 160, b"\x00\xc0" * 160]
+    with wave.open(written, "rb") as wav_file:
+        assert wav_file.getnframes() > 320
+
+
+class _EndlessArecord:
+    """止められるまで無音を返し続ける arecord の偽物。"""
+
+    def __init__(self, opened):
+        self.stopped = threading.Event()
+        self.stdout = self
+        opened.append(self)
+
+    def read(self, size):
+        if self.stopped.wait(0.01):
+            return b""
+        return b"\x00" * size
+
+    def poll(self):
+        return 0 if self.stopped.is_set() else None
+
+    def send_signal(self, _signum):
+        self.stopped.set()
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        self.stopped.set()
+
+
+def _stream_with_fake_arecord(monkeypatch, **kwargs):
+    """偽の arecord を開く共有マイク入力を作る。"""
+    opened = []
+    stream = AudioInputStream("mic", 16000, 16000, **kwargs)
+    monkeypatch.setattr(stream, "_open_arecord", lambda: _EndlessArecord(opened))
+    return stream, opened
+
+
+def test_audio_input_stream_stops_when_idle(monkeypatch, caplog):
+    """stop_when_idle なら、最後の購読者が抜けたらマイクを閉じ、次の購読で開き直す。"""
+    stream, opened = _stream_with_fake_arecord(monkeypatch, stop_when_idle=True)
+
+    first = stream.subscribe()
+    second = stream.subscribe()
+    assert first.read(timeout=1.0)
+    first.close()
+    assert stream.is_running
+    assert not opened[0].stopped.is_set()
+
+    with caplog.at_level("ERROR"):
+        second.close()
+    assert not stream.is_running
+    assert opened[0].stopped.is_set()
+    assert "失敗" not in caplog.text
+
+    again = stream.subscribe()
+    assert again.read(timeout=1.0)
+    assert len(opened) == 2
+    again.close()
+    assert not stream.is_running
+
+
+def test_audio_input_stream_keeps_running_by_default(monkeypatch):
+    """既定（ウェイクワードあり）では、購読者がいなくなってもマイクを開いたままにする。"""
+    stream, opened = _stream_with_fake_arecord(monkeypatch)
+
+    subscription = stream.subscribe()
+    assert subscription.read(timeout=1.0)
+    subscription.close()
+
+    assert stream.is_running
+    stream.stop()
+    assert not stream.is_running
+    assert opened[0].stopped.is_set()
+
+
+def test_audio_input_stream_idle_stop_skips_when_not_running(monkeypatch):
+    """動いていないときに購読を解除しても何もしない。"""
+    stream, opened = _stream_with_fake_arecord(monkeypatch, stop_when_idle=True)
+    monkeypatch.setattr(stream, "start", lambda: None)
+
+    stream.subscribe().close()
+
+    assert opened == []

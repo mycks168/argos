@@ -281,6 +281,10 @@ def _create_handler(
                 layout_morsel = cookie.get(LAYOUT_COOKIE)
                 cookie_layout = _normalize_layout(layout_morsel.value) if layout_morsel else None
                 target_layout = cookie_layout if cookie_layout else default_layout
+                # 自動配置の記録は初回の候補にとどめ、前回の手動選択を上書きしない。
+                startup_layout = str(query.get("startup_layout", [""])[0]).strip().lower()
+                if not cookie_layout and startup_layout in LAYOUT_CHOICES:
+                    target_layout = startup_layout
                 # キオスクなどから、Cookieや既定値より優先して表示するレイアウトを指定できる。
                 requested_layout = str(query.get("layout", [""])[0]).strip().lower()
                 if requested_layout in LAYOUT_CHOICES:

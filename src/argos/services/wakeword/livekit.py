@@ -236,8 +236,14 @@ class WakeWordListener:
         vad_check_seconds: float = 0.32,
         score_log_path: str = "",
         embedding_hef_path: str = "",
+        on_recording_audio: Callable[..., None] | None = None,
     ) -> None:
-        """監視対象デバイスと検知後録音の条件を保持する。"""
+        """監視対象デバイスと検知後録音の条件を保持する。
+
+        on_recording_audio を渡すと、検知後に録音する音声を、録りながら順に渡す
+        （stt-gateway へストリーミングで送るため）。検知より前の先読み分は
+        pre_roll=True を付けて渡す。
+        """
         self._devices = tuple(device for device in devices if device)
         if not self._devices:
             raise ValueError("ウェイクワード入力デバイス候補が空です")
@@ -250,6 +256,7 @@ class WakeWordListener:
         self._on_recording_ready = on_recording_ready
         self._on_detected = on_detected
         self._on_followup_expired = on_followup_expired
+        self._on_recording_audio = on_recording_audio
         self._followup_seconds = max(0.0, followup_seconds)
         # 追いかけ受付窓の締め切り時刻（monotonic）。0.0 は窓が閉じている状態。
         self._followup_deadline = 0.0
@@ -522,6 +529,7 @@ class WakeWordListener:
     def _record_utterance_rms(self, read_chunk: Callable[[], bytes], pre_roll_frames: list[bytes] | None = None) -> str:
         """検知後の発話をRMS無音判定または最大秒数までWAVへ保存する。"""
         frames: list[bytes] = list(pre_roll_frames or [])
+        self._emit_recording_audio(frames, pre_roll=True)
         started_at = time.monotonic()
         silent_since: float | None = None
         while not self._stop.is_set():
@@ -534,6 +542,7 @@ class WakeWordListener:
             if not model_data:
                 continue
             frames.append(model_data)
+            self._emit_recording_audio([model_data])
             elapsed = time.monotonic() - started_at
             rms = _pcm16_rms(model_data)
             if elapsed >= self._record_min_seconds and rms < self._silence_rms_threshold:
@@ -559,6 +568,7 @@ class WakeWordListener:
     ) -> str:
         """検知後の発話をVADの発話終了判定または最大秒数までWAVへ保存する。"""
         frames: list[bytes] = list(pre_roll_frames or [])
+        self._emit_recording_audio(frames, pre_roll=True)
         samples = _pcm16_frames_to_float(frames)
         started_at = time.monotonic()
         last_check = 0.0
@@ -575,6 +585,7 @@ class WakeWordListener:
             if not model_data:
                 continue
             frames.append(model_data)
+            self._emit_recording_audio([model_data])
             chunk_samples = _pcm16_frames_to_float([model_data])
             samples = np.concatenate([samples, chunk_samples]) if samples.size else chunk_samples
             elapsed = time.monotonic() - started_at
@@ -600,6 +611,17 @@ class WakeWordListener:
         wav_path.parent.mkdir(parents=True, exist_ok=True)
         _write_wav(wav_path, frames)
         return str(wav_path)
+
+    def _emit_recording_audio(self, frames: list[bytes], *, pre_roll: bool = False) -> None:
+        """録音中の音声を呼び出し先へ渡す。失敗しても録音は続ける。"""
+        if self._on_recording_audio is None:
+            return
+        for frame in frames:
+            try:
+                self._on_recording_audio(frame, pre_roll=pre_roll)
+            except Exception:
+                log.exception("録音中の音声を渡せませんでした")
+                return
 
     def _load_vad_model(self) -> object | None:
         """Silero VADモデルを遅延読み込みする。"""

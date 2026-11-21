@@ -52,6 +52,8 @@ notice:
 ptt:
   gpio: ''
   bluetooth_mac: ''  # Bluetoothメディアボタンのアドレス。空なら無効
+  knob_device: ''  # USBメディアノブのUSB機器ID（例: 514c:8850）。空なら無効
+  devices: []  # USB・Bluetooth共通の製品ID別操作設定。記入例はdocs/input_devices.md
 network:
   wifi_status_refresh_seconds: 10
 runtime:
@@ -235,6 +237,20 @@ stt:
   bearer_token: ''
   use_opus: false
   opus_bitrate: 24k
+  stream: false
+  backchannel_volume: 0.5
+  ack_timeout_seconds: 1.5
+  debug_recording_dir: ''
+  backchannel_min_interval_ms: 1500
+  backchannel_phrases:
+  - そっか
+  - なるほど
+  - うん
+  backchannel_start_delay_ms: 2000
+  # 無音がこの時間（ミリ秒）続いたら相槌を打つ。0ならstt-gatewayの既定に任せる。
+  backchannel_silence_ms: 0
+  # 届いた相槌を鳴らさずに見送る割合（0〜1）。毎回打つと機械っぽく聞こえるため。
+  backchannel_skip_rate: 0.25
 auth:
   enabled: false
   keyword_hash: ''

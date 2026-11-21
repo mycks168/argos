@@ -180,6 +180,8 @@ DESCRIPTION_BY_KEY = {
     "audio.sample_rate": "録音音声の1秒あたりのサンプル数です。通常は16000のまま使います。",
     "ptt.gpio": "PTTボタンを接続したGPIOのBCM番号です。使わない場合は空にします。",
     "ptt.bluetooth_mac": "Bluetoothメディアボタンのアドレスです。再生の長押しは録音、短押しは音声キャンセル、曲送り・戻しはスロット切り替え。空なら使いません。",
+    "ptt.knob_device": "旧USBノブ設定です。同じ機器IDをptt.devicesへ登録するとそちらを優先します。空なら使いません。",
+    "ptt.devices": "USB・Bluetooth共通の製品ID別操作設定です。id、preset（media_knobまたはmedia_ptt）、bindingsを配列で指定します。exclusiveは専用機器だけtrueにしてください。記入例はdocs/input_devices.md。変更後は本体再起動が必要です。",
     "tts.delimiters": "ストリーミング回答を読み上げ単位へ区切る文字です。",
     "tts.url": "読み上げ前の辞書変換サービスのURLです。",
     "tts.cache.enabled": "同じ読み上げ音声を再利用して応答を速くします。",
@@ -242,6 +244,15 @@ DESCRIPTION_BY_KEY = {
     "stt.language": "音声認識で優先する言語です。",
     "stt.use_opus": "録音をOpusへ圧縮してSTTへ送り、通信量を減らします。",
     "stt.opus_bitrate": "STTへ送るOpus音声のビットレートです。",
+    "stt.stream": "録音しながら音声認識APIへ送り、話している途中の相槌と最初の返事を受け取ります。",
+    "stt.backchannel_volume": "話している途中の相槌の音量です。読み上げ音量に対する倍率で、0なら鳴らしません。",
+    "stt.debug_recording_dir": "相槌の調査用に、話した録音と相槌の記録を残す場所です。声が残るため、調べるときだけ指定します。",
+    "stt.backchannel_min_interval_ms": "相槌から次の相槌までの最短の間隔（ミリ秒）です。",
+    "stt.backchannel_phrases": "話している途中の相槌の言葉です。順番に使います（最大10個、1つ20文字まで）。",
+    "stt.backchannel_start_delay_ms": "話し始めてからこの時間（ミリ秒）は相槌を鳴らしません。話し始めの割り込みを防ぎます。",
+    "stt.backchannel_silence_ms": "無音がこの時間（ミリ秒）続いたら相槌を打ちます。0ならstt-gatewayの既定に任せます。",
+    "stt.backchannel_skip_rate": "届いた相槌を鳴らさずに見送る割合（0〜1）。毎回打つと機械っぽく聞こえるのを防ぎます。",
+    "stt.ack_timeout_seconds": "文字起こしの後、最初の返事を待つ秒数です。過ぎたら決まった言葉で返事します。",
     "auth.enabled": "音声キーワードによる本人確認を有効にします。",
     "auth.keyword_hash": "本人確認キーワードのハッシュ値です。元の言葉は保存しません。",
     "auth.trust_seconds": "本人確認後に再確認なしで操作できる時間です。",
@@ -479,6 +490,12 @@ def _fallback_description(key: str) -> str:
 
 def _validate_dynamic_value(key: str, current: Any, value: Any) -> Any:
     """既存値の型に合わせて全設定エディターの入力を検証する。"""
+    if key == "ptt.devices":
+        import json
+        from argos.hardware.input_profiles import parse_profiles
+
+        parse_profiles(json.dumps(value, ensure_ascii=False))
+        return value
     if key in FIELD_BY_KEY and FIELD_BY_KEY[key]["type"] not in {"audio-input", "audio-output", "audio-input-list"}:
         return _validate_value(FIELD_BY_KEY[key], value)
     if isinstance(current, bool):

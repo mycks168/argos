@@ -18,7 +18,7 @@ from collections.abc import Callable, Iterable
 from argos.config import Settings
 from argos.core.status_controller import StatusController
 from argos.services.dashboard.state import DashboardState
-from argos.services.response_text import text_for_speech
+from argos.services.response_text import SpeechStreamFilter, text_for_speech
 from argos.services.tts.chunker import TextChunker
 
 log = logging.getLogger(__name__)
@@ -205,6 +205,8 @@ class SpeechController:
             return full_response
 
         stream_generation = self._current_generation()
+        # 図・表・コードなど、画面にだけ出すものを読み上げから外す。
+        speech_filter = SpeechStreamFilter()
         tts_queue: queue.Queue[str | None] = queue.Queue()
         worker = threading.Thread(target=self._tts_worker, args=(tts_queue, stream_generation, slot_key), daemon=True)
         worker.start()
@@ -214,7 +216,7 @@ class SpeechController:
             if dashboard_message_id:
                 self._dashboard_state.append_message(dashboard_message_id, delta)
             log.info("エージェント応答差分: %s", delta[:120])
-            for chunk in chunker.push(text_for_speech(delta)):
+            for chunk in chunker.push(speech_filter.push(delta)):
                 if self._current_generation() != stream_generation:
                     log.info("キャンセル済みのため TTS チャンクを読み上げません: %s", chunk[:80])
                     continue
@@ -224,10 +226,14 @@ class SpeechController:
                 log.info("TTS チャンク投入: %s", chunk[:80])
                 tts_queue.put(chunk)
 
+        final_chunks = chunker.push(speech_filter.finish())
         rest = chunker.flush()
-        if rest and self._current_generation() == stream_generation and (not slot_key or self._is_current_slot(slot_key)):
-            log.info("TTS 最終チャンク投入: %s", rest[:80])
-            tts_queue.put(rest)
+        if rest:
+            final_chunks.append(rest)
+        for chunk in final_chunks:
+            if self._current_generation() == stream_generation and (not slot_key or self._is_current_slot(slot_key)):
+                log.info("TTS 最終チャンク投入: %s", chunk[:80])
+                tts_queue.put(chunk)
         tts_queue.put(None)
         worker.join(timeout=300)
         return full_response
@@ -247,20 +253,24 @@ class SpeechController:
             ("audio", wav_bytes): 文単位で合成したWAVバイト列。
         """
         chunker = TextChunker(self._settings.tts_delimiters)
+        speech_filter = SpeechStreamFilter()
         for delta in deltas:
             if delta:
                 yield ("text", delta)
             if self._settings.dry_run:
                 continue
-            for chunk in chunker.push(text_for_speech(delta)):
+            for chunk in chunker.push(speech_filter.push(delta)):
                 wav_data = self._synthesize_chunk(chunk, slot_key)
                 if wav_data is not None:
                     yield ("audio", wav_data)
         if self._settings.dry_run:
             return
+        final_chunks = chunker.push(speech_filter.finish())
         rest = chunker.flush()
         if rest:
-            wav_data = self._synthesize_chunk(rest, slot_key)
+            final_chunks.append(rest)
+        for chunk in final_chunks:
+            wav_data = self._synthesize_chunk(chunk, slot_key)
             if wav_data is not None:
                 yield ("audio", wav_data)
 

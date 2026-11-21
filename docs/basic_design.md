@@ -74,6 +74,57 @@ location:
 `STT_GATEWAY_URL` が空の場合は stt-gateway を使わず、faster-whisper でローカル文字起こしを行う。`STT_GATEWAY_URL` が設定済みでも、stt-gateway でエラーが起きた場合はダッシュボードに `stt-gateway` エラーを通知し、その録音を faster-whisper で文字起こしする。faster-whisper が未導入（`uv sync --extra whisper` をしていない）なら、試さずに飛ばし、stt-gateway の失敗（または未設定）と、ローカルも未導入であることをまとめた1つのエラー（`文字起こし` エラー）にする。フォールバックが使えないのに、`stt-gateway` エラーと `faster-whisper が未導入です` エラーを2つ並べない。
 文字起こし結果が空文字だった場合は発話をエージェントへ送らず、ログに録音ファイルパスとRMSを出し、ダッシュボード通知に「音声を認識できませんでした。」を表示する。
 
+#### ストリーミング（WebSocket `/stream`）
+
+`STT_GATEWAY_STREAM=true`（`stt.stream: true`）のときは、PTTとウェイクワードの録音を、録りながら stt-gateway の WebSocket `/stream` へ送る。話している最中の相槌（`backchannel`）と、文字起こしの後の最初の返事（`ack`）を受け取るため。`/stream` の仕様は stt-gateway の基本設計（2.4）に従う。端末（PiZero・ブラウザ）からの音声ターンは、WAVがまとめて届くため対象外で、従来どおり `POST /transcribe` を使う。
+
+- 接続先は `STT_GATEWAY_URL` の `http`/`https` を `ws`/`wss` に替えた `<URL>/stream`。認証は `/transcribe` と同じ `Authorization: Bearer <STT_GATEWAY_BEARER_TOKEN>` ヘッダ（トークン未設定時は付けない）。
+- 発話ごとに1本の接続を張る。録音開始で接続し、`{"type":"start","encoding":"opus","language":<STT_GATEWAY_LANGUAGE>,"ack":...,"backchannel":...}` を送る。つながるまでの音声はためておき、つながったら送る。
+- `start` の `ack` と `backchannel` は、stt-gateway の「発話ごとの指定」（2026-11-15 追加）。`backchannel` は `phrases`（`STT_GATEWAY_BACKCHANNEL_PHRASES`、既定「そっか・なるほど・うん」）、`min_interval_ms`（`STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS`、既定1500）、`silence_ms`（`STT_GATEWAY_BACKCHANNEL_SILENCE_MS`、0〜2000、0なら送らない）だけを送る。stt-gateway は、この3つ以外（`threshold`・`timing`・`phrases_by_kind` など）を `invalid_message` で拒否し、その発話は始まらない。文言は stt-gateway の上限（1〜10個、1つ20文字まで）に収まるよう、設定の読み込み時にそろえる。
+- `ack` は、ARGOS向けの返事の作り方（下の「最初の返事」）。`ARGOS_AGENT_PROGRESS_VOICE=false` のときは `"ack": false` を送り、返事を作らせない。
+- `start` が受け付けられず、`started` より前に `invalid_message` が届いたときは、その発話は始まらない。`transcript` を待たずに失敗とし、録音ファイルでの文字起こしに切り替える。
+- 音声は Opus の生パケット（コンテナなし、モノラル、20ms）。PyAV（libopus）でエンコードする。ビットレートは `STT_GATEWAY_OPUS_BITRATE`。録音のサンプリングレートが libopus の対応値（8/12/16/24/48kHz）以外のときは16kHzに変換する。
+- 録音終了で残りの音声と `{"type":"end"}` を送り、`transcript` を待つ（30秒まで）。`ack` を受け取るか、待ち時間を過ぎたら接続を閉じる。
+- 録りながら音声を渡せるのは共有マイク入力（`StreamRecorder`）だけのため、ストリーミング有効時はウェイクワードが無効でも共有マイク入力を使う。このときは常時聞く処理が無いため、購読者（PTTの録音）がいなくなったら arecord を止め、次の録音で開き直す（`stop_when_idle`）。マイクを開くのはPTTの録音中だけで、マイクを外したままでも開き直しの失敗ログは出続けない。ウェイクワード有効時は、従来どおり開いたままにする。
+- ウェイクワード後の録音は、検知より前の先読み分（`ARGOS_WAKEWORD_PRE_ROLL_SECONDS`）も送る。文字起こしにウェイクワードが含まれるため、従来どおり呼びかけの確認と除去ができる。先読み分の位置に届いた相槌は鳴らさない。
+- 録音ファイルも従来どおり保存する。接続できない、`transcript` が届かない、`transcribe_failed` などで文字起こしを得られない場合は、ダッシュボードに `stt-gateway（ストリーミング）` エラーを通知し、その録音ファイルで `POST /transcribe`（さらに失敗すれば faster-whisper）に切り替える。
+- キャンセル、マイクOFF、終了のときは、送りかけの発話を閉じる。
+
+相槌（`backchannel`）:
+
+- 相槌のタイミングは stt-gateway が決める。Silero VAD で無音が続いたところ（既定90ms、`silence_ms` で変更可）を候補にし、区切りらしさの判定や、新しく1秒以上話したかなどで出すかどうかを決める。文言は `phrases` を順に回す。
+- 経緯（2026-11-15〜16）：相槌モデル（MaAI）の確率でタイミングを決める方式では、ARGOS のマイクの音だと相槌がすべて話の途中（息継ぎ）に出てかぶった。話の種類（Kev-0.8B、14種類）で文言を選ぶ方式も試したが、ARGOS での話し方はほぼ「うん」で足り、種類の判定が相槌を消したり合わない文言を選んだりしたため、stt-gateway 側でどちらも外した。ARGOS からも、しきい値（`threshold`）・タイミングの方式（`timing`）・種類別の文言（`phrases_by_kind`）の設定を外した。
+- 届いた相槌のうち `STT_GATEWAY_BACKCHANNEL_SKIP_RATE`（0〜1、既定0.25）の割合を、鳴らさずに見送る。人は相槌を打てるところで毎回打つわけではなく、毎回打つと機械っぽく聞こえたため。見送った相槌はログに出す。
+- 相槌の文言は、起動時に全スロットの話者（現在の話者・既定の話者も含む）で事前合成する。
+- 録音を止めずに、VOICEVOX（失敗時はKokoro）で合成した相槌を鳴らす。音量は読み上げ音量に `STT_GATEWAY_BACKCHANNEL_VOLUME`（0〜1、既定0.5）を掛けたもの。0なら鳴らさない。
+- 話し始め（ウェイクワードの先読み分を除いた、送った音声の先頭）から `STT_GATEWAY_BACKCHANNEL_START_DELAY_MS`（既定2000ms）までの位置に届いた相槌は鳴らさない。話し始めた直後の相槌は割り込みに聞こえたため。マイクの音量（RMS）は使わない。車内ではロードノイズで音量が高く、話しているかの判断に使えないため。
+- 相槌の文言は、VOICEVOXの3人の話者（四国めたん・春日部つむぎ・†聖騎士 紅桜†）で聞き比べて決めた（2026-11-15）。「うんうん」は1語として低→高→低と読まれ「う～ん」に聞こえ、「へえ」は上がって下がる抑揚が強く、「ええ」は不自然で、「そうなんだ」は長く、話者によって抑揚が不自然だった。`audio_query` の音の高さや間を書き換える方法も試したが、元の読み方より聞き取りにくくなったため使わない。「うん。」のように句点を付けても、1文だけでは読み方は変わらない。
+- 鳴らすのは、ダッシュボードの状態が録音中（`listening`/`auth_listening`）で、ほかの音を鳴らしておらず、ミュート・他アプリ優先の保留中でないときだけ。前の相槌を鳴らしている間に届いた相槌は捨てる。
+- 合成した相槌は話者ごとにメモリへ覚える。stt-gateway へ送る文言（`STT_GATEWAY_BACKCHANNEL_PHRASES`）は起動時に合成しておく。
+- スピーカーの相槌をマイクが拾うと、文字起こしや、ウェイクワード後の発話終了の判定（VAD）に影響することがある。エコーキャンセルの無い環境では、音量を下げるか0にする。
+
+相槌の調査:
+
+- 届いた相槌はすべて、文言・位置（`offset_ms`）・確率（届いた場合）・遅れ・扱い（`delivered` 鳴らす側へ渡した、`pre_roll` 先読み分、`too_early` 話し始めてすぐ、`after_end` 録音終了後、`empty` 文言なし）をログ（`相槌を受信:`）に出す。遅れは、届いた時点で送り終えていた音声の長さから位置を引いたもので、話してから届くまでの時間の目安。
+- 鳴らさなかったときは理由（ミュート中、ほかの音を再生中、録音中ではない、前の相槌を再生中など）を、鳴らしたときは受け取ってから再生を始めるまでの時間と、合成済みだったかをログに出す。
+- `STT_GATEWAY_DEBUG_RECORDING_DIR`（`stt.debug_recording_dir`）を指定したときだけ、ストリーミングで送った発話の録音（WAV）と記録（JSON）を同じ名前で保存する。記録には、送った音声の長さ、発話の開始位置（`live_from_ms`）、文字起こし、最初の返事、失敗の内容、相槌を使えたか、届いた相槌の一覧、WAVの先頭に足した無音の長さ（`wav_leading_silence_ms`。PTTは200ms、ウェイクワードは0）を入れる。利用者の声が残るため既定では保存しない。保存先は権限700、ファイルは600にし、新しい50件だけ残す。
+
+最初の返事（`ack`）:
+
+- ARGOSでは、最初の返事の後にエージェントの本回答が続く。stt-gateway の既定のプロンプトは相手の言葉を繰り返してよいとしているため、「違和感あるんだね。」の後に本回答が「しっくりこないんだね。」と同じ受け止めを繰り返したり、「どうだった？」と聞き返した後に別の本回答が始まったりして不自然だった。そこで `start` の `ack` で、中身のない「つなぎ」の一言にするプロンプトを送る（stt-gateway の README の、本回答が後に続くクライアント向けの推奨のまま）。
+  - `system_prompt`：会話の聞き手として相槌を一言打つ。答えを知らないので質問や依頼には答えず「ちょっと見てみるね」「考えるね」のように受け止めるだけ。相手の言葉は繰り返さず、聞き返さない。日本語で、15文字以内、くだけた口調、1文。
+  - `examples`：「明日の天気ってどう？」→「ちょっと見てみるね。」など4組。
+  - `fallback_text`：「えっと、ちょっと待ってね。」（LLMが時間切れなどのとき stt-gateway が返す）。
+  - 「聞き手」「答えを知らない」「日本語で」は外さない。外すと、小型のLLMが質問に答えて事実でない内容を言い切ったり、日本語以外で返したりする（stt-gateway の変更履歴 2026-11-15）。
+  - プロンプトは stt-gateway の推奨から変えない。2026-11-15 に実機の発話7件（`gemma4:e2b`）で、「わかった」「なるほどね」のような話を終える言い方を禁じる版と、「見てみるね」「考えるね」のように、これからすることで終えるよう指示する版を試した。どちらも推奨より悪く、7件中4〜6件が「わかった」「なるほどね」になった（小型のLLMは、禁止として書いた言葉に引っ張られる）。推奨のプロンプトでも、質問でない発話（「それは別でいいや」「待ってて」）には話を終える言い方になる。
+- 最初の返事を読み上げたときは、エージェントへの依頼の末尾に補足を付ける：「（音声会話の補足：あなたの回答の前に、ARGOSがすでに短い返事をしています。回答は受け止めや相槌の言葉から始めず、本題から話してください。）」。付けないと、本回答が「うん、〜なんだね」と同じ受け止めを繰り返し、返事が2回続く。
+  - 同じ7件を Codex で比べると、補足なしでは「うん、了解！」「うん、〜なんだね」で始まることが多く、補足ありでは7件中5件で受け止めから始まらなくなった。
+  - 補足に返事の言葉そのものは書かない。書いた版では、7件中2件で、エージェントがその言葉の良し悪しを語り始めた。
+  - 補足を付けるのは、stt-gateway の返事を開始メッセージとして読み上げたときだけ。従来の候補や相槌 API（`/select`）の開始メッセージには付けない。ダッシュボードの表示と会話の記録には、補足のない元の発話を残す（エージェントの会話履歴には補足が残る）。
+
+- 文字起こし結果をエージェントへ渡す処理で、進捗音声の開始メッセージに `ack` を使う。`transcript` の後、`STT_GATEWAY_ACK_TIMEOUT_SECONDS`（既定1.5秒）まで待つ。来なければ、従来どおり相槌 API（`POST /select`）または候補から選ぶ。
+- `ARGOS_AGENT_PROGRESS_VOICE=false` のときは、`ack` も読み上げない。
+
 faster-whisper は `ARGOS_WHISPER_MODEL_SIZE`、`ARGOS_WHISPER_DEVICE`、`ARGOS_WHISPER_COMPUTE_TYPE` で調整する。既定モデルは `small`。faster-whisper を使う環境では `uv sync --extra whisper` を実行する。
 
 ### tts-filter
@@ -128,6 +179,10 @@ ARGOS は短い読み上げ文の合成結果をWAVファイルとしてロー�
 `ARGOS_LCD_ENABLED=true` の場合、ARGOS は読み上げる文を ST7789 LCD にも表示する。物理解像度は既定で 76x284 とし、横向き表示になるよう描画内容を90度回転して転送する。日本語フォントは IPA Gothic、IPA P Gothic、IPAex Gothic の順に探し、`ARGOS_LCD_FONT_PATH` が指定されている場合はそれを優先する。IPA系フォントが見つからない場合、LCD表示だけを無効化する。夜間でも明るくなりすぎないよう、ST7789 の色反転を無効にして黒背景に白文字で表示する。
 
 HDMIダッシュボードは、現在の状態、現在のエージェントスロット名、provider、Wi-Fi接続状態、会話履歴、通知を表示する。PTT短押しで録音を破棄した場合や、PTTダブルクリックでスロットを切り替えた場合は、認証状態に応じて表示を待機中またはロック中へ戻し、録音中表示を残さない。本人確認が必要なロック中にPTTを押した場合は、通常の録音中ではなく「本人確認録音中」と表示し、PTT解放後は「本人確認中」と表示する。これにより、発話が本人確認用であることと、PTT入力が認識されたことを画面上でも示す。
+
+USB・Bluetoothのキー入力は`ptt.devices`の製品ID別プロファイルを`ProfileInput`が監視する。`media_knob`・`media_ptt`の既定割り当てへ、キーごとの操作・音量幅・連打抑止を上書きできる。同製品2台の識別は対象外。複合機器の関連eventノードをまとめて扱い、旧BluetoothのMAC指定と重なる場合は新設定が優先される。旧USBノブ設定も内部で共通プロファイルへ変換する。GPIOは従来の入力を維持する。新設定はlabwcへ全キーボード共通の抑止を追加せず、必要ならeventノード単位の独占を明示指定する。詳細・制限は`docs/input_devices.md`。
+
+旧USBメディアノブ設定（`ptt.knob_device`）は共通入力の`media_knob`プロファイルへ変換する。既定の`KEY_MUTE`は押下ごとに録音開始／停止・送信を切り替え、0.3秒以内の重複を抑止する。音量は±5、スロット切替は回転が0.8秒止まるまで次を抑止する。音量の保存は最後の操作から1秒後にまとめ、終了時も保存待ちを反映する。押し込みと解放をまとめて送る機器では長押しPTTを使わず、切替式を選ぶ。旧`UsbKnobInput`は互換コードとして残すが、本体は共通の`ProfileInput`を使う。
 
 Bluetoothメディアボタンの入力デバイスを開けた状態を接続、読み取り終了を切断として扱い、変化が0.7秒続いた場合だけ接続は上昇、切断は下降する短い2音を出す。起動から3秒以内と前回通知から1.5秒以内の変化は無音とし、未設定時は監視も通知もしない。再生は既存AudioPlayerへ渡し、ミュート・録音・他アプリ優先中は省く。Bluetoothスピーカー自体の切断を知らせるものではない。
 
@@ -215,7 +270,7 @@ GPIO や SPI などのホストデバイス操作が必要な場合は、`ARGOS_
 
 ARGOS は `--json` を強制して Codex CLI の JSONL イベントを読み取る。`item.completed`（`item.type == "agent_message"`）から応答テキストを抽出する（旧バージョンの `event_msg`/`response_item` 形式にも互換対応する）。
 
-CodexのWeb検索回答に含まれる私用領域文字の引用マーカーは、応答ストリームから除去する。引用された参照IDはCodexセッションJSONLの`web_search_end.results`へ照合し、取得できたタイトルとHTTP(S) URLを回答末尾の出典一覧として追加する。ダッシュボードはURLだけを安全なリンクとして描画する。回答本文と出典一覧は履歴へ残すが、TTSには本文だけを渡し、内部引用タグ、出典一覧、URLは読み上げない。
+CodexのWeb検索回答に含まれる私用領域文字の引用マーカーは、応答ストリームから除去する。引用された参照IDはCodexセッションJSONLの`web_search_end.results`へ照合し、取得できたタイトルとHTTP(S) URLを回答末尾の出典一覧として追加する。ダッシュボードはHTTP(S)のURLを安全なリンクとして描画する。回答本文と出典一覧は履歴へ残すが、TTSには本文だけを渡し、内部引用タグ、出典一覧、URLは読み上げない（読み上げ本文の取り出しは後述の「会話本文のリッチ表示」を参照）。
 
 `ARGOS_CODEX_STREAM_MODE` で読み上げ方式を切り替えられる。
 
@@ -251,7 +306,7 @@ ARGOS は、`--include-partial-messages` を付けた NDJSON ストリームの 
 
 既存の `/` は車載・固定ディスプレイ向け表示として維持する。`/sp` はスマートフォン・タブレット向け表示を提供し、状態欄と通知欄を左右のドロワーとして開閉する。SP表示ではツールバー左上のメニューボタン（`☰`）を押すことで、左側のステータスパネルを常時固定表示するモード（`sp-left-pinned`）と非表示モードを直接切り替えることができる。左枠固定時は中央の会話領域の幅と位置が自動調整され、背景バックドロップを非表示にしてスムーズに操作できる。固定状態はブラウザの `localStorage`（`argos-sp-left-pinned`）に保持される。SP表示では、新しい通知が届いたとき通知欄（右ドロワー）を自動で開いて、`dashboard.sp_notice_seconds`（`ARGOS_DASHBOARD_SP_NOTICE_SECONDS`、既定8秒、0以下で無効）たつと閉じる（`static/sp_notice_popup.js` の `NoticePopup`）。対象は、`source` が `ARGOS` 以外の通知と、`priority` が `high` の通知で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は、バッジだけで自動では開かない。ページを開いた時点の通知は既存のものとして扱い、開かない。利用者が通知欄を操作（ベル・背景の押下、通知欄への接触・スクロール）したら、自動では閉じない。自動で開いた通知は既読にする。バッジは、未確認があるあいだ、大きく赤く表示して拡大縮小する（`prefers-reduced-motion` では止める）。
 
-また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。
+また、設定画面（⚙️ 設定）および環境変数 `ARGOS_DASHBOARD_DEFAULT_LAYOUT`（`standard` または `sp`、既定は `standard`）によって、ダッシュボードの初期表示レイアウト（通常 ⇔ SP）を選択・切り替えることができる。ブラウザの設定で変更したデフォルトレイアウトは `localStorage` および Cookie（`argos_layout`）に保存され、トップページ（`/`）アクセス時にも選択したデフォルトレイアウトで表示される。キオスクの起動時も最後の手動選択（通常・SP・グリッド）を復元する。表示の優先順位は、明示的な`layout`指定、保存済みCookie、自動配置の初回候補`startup_layout`、サーバー既定値の順とする。`dashboard-layout`ファイルの値は初回候補としてだけ渡し、過去の分割用SP設定で手動選択を上書きしない。`ARGOS_DASHBOARD_KIOSK_LAYOUT`および`window_layout.dashboard_layout`の固定指定は引き続き明示的な`layout`として扱う。
 
 SP表示ではページ全体を固定ビューポートに収め、本文スクロールを禁止する。スクロール対象は会話履歴、状態ドロワー、通知ドロワーに限定する。`VisualViewport` の高さと上端位置を反映し、iOSのソフトウェアキーボード開閉時にも入力欄を表示領域内へ維持する。通知到着時はドロワーを自動表示せず、通知ボタンの未確認件数だけを更新してテキスト入力を妨げない。通知ドロワーを開いた時点で確認済みにし、最新確認時刻をブラウザの `localStorage` に保存する。通知履歴は削除せず、確認状態は端末ごとに独立させる。ダッシュボードHTMLはブラウザへキャッシュさせず、更新後の操作UIを再読み込み時に反映する。
 
@@ -268,9 +323,57 @@ LANへ広げる場合は `ARGOS_DASHBOARD_VIEW_KEY` に閲覧用アクセスキ�
 
 複数端末への一斉通知は、当面は送信側が各端末の `/api/events` を順に叩くファンアウト方式とし、ARGOS本体には配信・中継機構を持たせない。通知イベントの任意項目 `target`（宛先ラベル）は将来の一斉通知向けに受理して無視するだけとし、バリデーションで弾かない。端末レジストリ（ホスト名・部屋・人）、死活監視、自動登録、宛先グループ、ブロードキャストAPIは今後の拡張点として別途設計する。
 ARGOS 起動時はステータスを `booting` にして、HDMIダッシュボードへスプラッシュアニメーションを表示する。起動音はVOICEVOXに依存しない合成WAVを生成し、既存の音声出力先へ再生する。
+
+ダッシュボードは選択中スロットが実行中なら、サーバーから一時的に `ready` が届いても「考え中」と表示する。`speaking` が届いた場合も処理中のまま「待機中」に置き換えず、読み上げ状態を残す。PTT解放直後から回答完了まで、未完了の対話を待機中に見せないためである。
 画面は会話、状態、通知を分けて差分描画する。会話ストリーミング中も通知画像のDOMを維持し、不要な再取得とちらつきを防ぐ。
 動作状態は文字だけでなく画面外周の発光枠でも示す。`listening` と `auth_listening` は黄色の明滅枠、`transcribing` は赤橙の流れる枠、`thinking` と `authenticating` は水色の流れる枠、`speaking` は青の枠、`locked`、`alert`、`error` は赤系の枠を表示する。枠はCSS疑似要素で描画し、タッチ操作やオーバーレイ操作を妨げない。枠色はPiSugarモバイル端末（argos-terminal）のLED色と揃えてあり、`transcribing`＝赤橙・`speaking`＝青は端末側と一致する（端末は `thinking` も赤橙で扱う点だけ異なる）。
-中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルの `CURRENT SLOT` 表示は外観を維持した選択ボタンとし、タップすると直下へスクロール可能なスロット一覧を重ねて表示する。一覧では現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
+中央の会話欄には保持している会話履歴を表示し、タッチ操作による縦スクロールを有効にする。会話本文はMarkdownとして描画し、図・表・画像も表示する（次の「会話本文のリッチ表示」）。会話欄・入力欄・開いたスロット一覧・設定画面・重ね表示以外の場所で回したホイールは、既定動作を止めて会話欄の縦スクロールへ付け替える（`wheel_redirect.js`。Ctrl併用の拡大操作と横スクロールは対象外、会話欄が非表示なら付け替えない）。会話履歴は現在のエージェントスロットごとに分けて保持し、スロット切替と同時に中央の会話欄もそのスロットの履歴へ切り替える。左側パネルの `CURRENT SLOT` 表示は外観を維持した選択ボタンとし、タップすると直下へスクロール可能なスロット一覧を重ねて表示する。一覧では現在スロット、処理中スロット、未読応答があるスロットを見分けられるようにする。現在表示していないスロットの応答は中央の会話履歴へ保存するが読み上げず、応答完了時に未読表示と通知を出す。PTTダブルクリックでそのスロットへ切り替えたときに未読応答を別スレッドで読み上げ、未読表示を解除する。未読応答の読み上げも通常応答と同じく句読点単位で分割し、シングルタップで現在の読み上げだけを止められるようにする。末尾を表示している場合のみ、新しい会話へ自動追従する。右側の通知欄も保持している通知を新しい順に全件表示し、タッチ操作による縦スクロールを有効にする。
+#### 会話本文のリッチ表示
+
+エージェント（Claude、Codex、agyなど）の回答とユーザーの発話は、標準ダッシュボードとタイルレイアウト（Grid）の両方で、同じ部品を使ってMarkdownとして描画する。
+
+| 書き方 | 画面での表示 |
+|---|---|
+| 見出し、強調、箇条書き、引用、区切り線、インラインコード、コードブロック | Markdownの見た目で表示する。シンタックスハイライトはしない |
+| 表 | 罫線つきの表。幅が足りなければ表の中で横スクロールする |
+| `![説明](URL)` | 画像。`http(s)://` と、`/uploads/` などダッシュボード自身のパスを表示できる |
+| ` ```mermaid ` のコードブロック | mermaidの図（フローチャート、シーケンス図など） |
+| ` ```svg ` のコードブロック、または行頭から書いた `<svg>…</svg>` | SVG画像 |
+| `http(s)://` で始まるURL | 別タブで開くリンク |
+
+部品の分担は次のとおりとする。
+
+- `message_text.js`（`ArgosMessageText`）：本文をHTML文字列へ変換する。DOMに触れないためNode.jsで単体テストできる。Markdownの解釈は自作せず、同梱した markdown-it に任せる。コードブロックの言語名ごとに描画器を登録する仕組み（`registerFenceRenderer`）を持ち、`mermaid` と `svg` はこの仕組みで実装している。今後グラフや数式などを増やすときも、描画器を1つ登録すればよい。
+- `message_view.js`（`ArgosMessageView`）：会話欄のDOMを受け持つ。メッセージ単位の差分更新（`sync`）、mermaidの図の描画、タップでの拡大表示を行う。
+- `message_view.css`：本文の見た目。両画面で共用する。
+- `vendor/markdown-it.min.js`、`vendor/mermaid.min.js`：同梱ライブラリ（いずれもMITライセンス、ライセンス文を同じ場所に置く）。CDNは使わず、オフラインの車内でも表示できる。mermaidは約5.5MBあるため、ページでは読み込まず、最初の図が出たときにだけ読み込む。
+
+安全のための決まりは次のとおりとする。
+
+- 本文中の生のHTMLは実行せず、文字として表示する（markdown-itの `html: false`）。`javascript:` などの危険なリンク先はリンクにしない。
+- SVGは `<img>` のdata URLとして表示する。この方法では、SVGの中のスクリプトや外部ファイルの読み込みは動かない。
+- mermaidは `securityLevel: strict` で描画し、図の中のHTMLやクリック動作を無効にする。
+- 自動リンクは `http(s)://` で始まるものだけにする（`main.py` のようなファイル名をリンクにしない）。
+
+描画の決まりは次のとおりとする。
+
+- 会話欄は、メッセージID（無ければ並び順）をキーにして、内容が変わったメッセージの要素だけを作り直す。ストリーミング中に伸びていく回答が、他のメッセージの画像や図を描き直させない。
+- 描いた図は、ソースをキーにして最大100件まで覚えておく。ストリーミングで同じメッセージを作り直すときは、覚えた結果をその場で入れ、ちらつかせない。
+- ストリーミング中で、まだ閉じていない `mermaid` と `svg` のコードブロックは、完成するまで薄いコード表示のままにする。閉じた時点で図に変える。
+- 描画できなかったmermaidの図は、ソースのコードを残して「図を描画できなかったよ」と添える。
+- 図・表・画像はタップすると画面全体に拡大表示し、もう一度のタップかEscキーで閉じる。
+- 図や画像が後から入って会話欄が伸びた場合も、末尾を表示している間は自動追従する。
+- 寸法は文字サイズ（em）と画面比（vw、vh）だけで決め、画面の大きさを決め打ちしない。縦440pxの車載ディスプレイ、フルHDや4KのPCブラウザ、スマートフォンで同じ部品を使う。
+
+読み上げは、画面と同じ本文から地の文だけを取り出して行う（`response_text.py` の `SpeechStreamFilter`）。
+
+- 読み上げないもの：コードブロック（mermaidの図、SVGを含む）、行頭から書いたSVG、表、区切り線、画像、URL、内部引用タグ、出典一覧。
+- 記号を外して読むもの：見出し、箇条書き（チェックボックスを含む）、引用、強調、インラインコード、リンク（表示文字だけを読む）。
+- 応答はどこで分割されて届くか分からないため、行頭だけでは図や表の始まりか決められない間と、リンクやURLが書きかけの間は、続きが届くまで読み上げへ回さない。それ以外は、行が終わる前でも句読点や空白まで届いた分を先に読み上げへ回し、最初の一言を遅らせない。
+- 母艦での読み上げ、遠隔端末向けの音声合成、未読応答の読み上げのすべてで同じ取り出し方を使う。
+
+エージェントには、既定のシステム指示で「画面はMarkdown、mermaidの図、SVG、画像を表示できること」「目で見た方が伝わる内容は図や表を積極的に使うこと」「図・表・コードは読み上げられないので、要点は必ず地の文で短く話すこと」を伝える。
+
 `ARGOS_DASHBOARD_SCREENSAVER_SECONDS` で指定した秒数だけ画面操作がない場合、ダッシュボードは全画面の黒いオーバーレイを表示する。0以下を指定すると無効化する。この段階ではバックライトやHDMI出力は消さず、タッチ、ポインター、キー、ホイール操作、PTT録音開始、または音声読み上げ開始で黒表示を解除する。マイクOFF中でPTTを押した場合は、録音や本人確認はしないが黒表示だけは解除する。
 左側のブランド領域には読み上げミュートボタンを表示する。ボタンはARGOSロゴ直下の操作行に置き、狭い画面でも折り返して見切れないようにする。通常時の文言は「ミュート」とし、薄いグレーで表示する。ミュート中は文言を「ミュート中」に変え、黄色の枠で強調する。操作は `POST /api/control` で受け付け、`mute`、`unmute`、`toggle_mute` をサポートする。このAPIも `ARGOS_DASHBOARD_TOKEN` によるBearer認証を必須とする。インストーラーは `config.yaml` の `dashboard.token` が空の場合、`--apply` または `--update` 実行時にランダムなトークンを自動生成する。ミュートON時は再生中の音声を停止し、TTSワーカーは次のチャンク再生前に待機する。解除後はキューに残っている読み上げを再開する。音声コマンドによるミュート切替は行わない。ミュート状態はボタン表示で示し、録音中、考え中、読み上げ中などの動作ステータスは上書きしない。変更したミュート状態は `ARGOS_AUDIO_STATE_PATH` のJSONへ保存し、ARGOS再起動後に復元する。
 同じ領域にマイクOFFボタンを表示する。操作は `enable_microphone`、`disable_microphone`、`toggle_microphone` で受け付ける。マイクOFF中はPTT押下とウェイクワード検知による録音を行わず、進行中の録音があれば破棄する。ただしマイクOFF中でもPTT押下でスクリーンセーバー（黒表示）だけは解除する。これは読み上げミュートとは独立した一時停止で、再起動後の永続化はしない。
@@ -390,7 +493,7 @@ Raspberry Pi Zero 2 W に PiSugar HAT（LCD・PTTボタン・スピーカー）�
 
 Codex CLI が最終回答前に `item.completed`（`agent_message`）イベントを出す場合、`ARGOS_CODEX_STREAM_MODE=stream`（既定）であればARGOSはその差分を順次処理する。途中イベントを一切取得できない場合や `final` モードの場合は、完了後の出力を句読点単位で分割して読み上げる。
 
-エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。Web音声ターンではエージェント差分の読取だけを別スレッドで行い、最初の差分を待つ間もSSE接続へ`progress`イベントを返す。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
+エージェント呼び出し直後は、ARGOS が短い進捗メッセージを読み上げる（provider共通）。stt-gateway のストリーミング（`STT_GATEWAY_STREAM=true`）で受け取った最初の返事（`ack`）があれば、それを開始メッセージにする（「stt-gateway」の「ストリーミング」を参照）。`ARGOS_ACKNOWLEDGEMENT_URL` が設定されている場合は、ユーザーの発話テキストをそのURLへ `POST /select` 送信し、返答された進捗メッセージを読み上げる（認証は `ARGOS_ACKNOWLEDGEMENT_TOKEN` を使用）。設定がない場合やエラー時は、候補からランダムに選ぶ。応答本文が届く前に待機時間が長くなった場合は、`ARGOS_AGENT_PROGRESS_FIRST_DELAY_SECONDS` 後から `ARGOS_AGENT_PROGRESS_INTERVAL_SECONDS` 間隔で追加の待機メッセージを読み上げる。進捗音声の有効/無効は `ARGOS_AGENT_PROGRESS_VOICE` で切り替える。読み上げるフレーズは `ARGOS_AGENT_PROGRESS_START_PHRASES` と `ARGOS_AGENT_PROGRESS_WAIT_PHRASES`（セミコロン/改行区切り）で上書きでき、未設定なら組み込みの既定フレーズを使う。これらの設定は旧 `ARGOS_CODEX_PROGRESS_*` 名も後方互換で読み込む（新名が優先）。メッセージはAI名を出さず、「確認するね」や「もう少し待ってね」のように音声で聞きやすい短い言い方を複数候補からランダムに選ぶ。Web音声ターンではエージェント差分の読取だけを別スレッドで行い、最初の差分を待つ間もSSE接続へ`progress`イベントを返す。応答本文の差分が届いた時点で進捗メッセージは停止し、進捗メッセージの再生完了を待ってから通常の応答読み上げに切り替える。
 
 ### 発話時の挨拶
 
@@ -511,7 +614,7 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
   - 前提: 自己音声（スピーカー→マイクのエコー）で自分の「アルゴス」に反応してしまうため、マイク入力を音響エコーキャンセル(AEC)済みの仮想ソースに差し替えることが必須。実機検証ではPipeWire `module-echo-cancel`（WebRTC AEC3）でエコーを閾値下(約0.05)まで抑制でき、ユーザ発話（ダブルトーク）は残ることを確認済み。線形AEC（speexdsp）は不十分
   - 二重防御: AECで消し切れない残響対策として、ARGOS自身がウェイクワードを含むチャンクを読み上げている最中（`SpeechController.is_speaking_wakeword()`）はバージインを抑止する
   - ALSA直の橋渡し: ARGOSはTTSを`aplay`、ウェイクワード/STTを`arecord`で鳴らし、どちらもALSAを直接叩く（PipeWireを経由しない）。PipeWireのノード名`ec-source`/`ec-sink`（ハイフン）はそのままでは`aplay`/`arecord`が開けないため、ALSA↔PipeWireを橋渡しするALSA PCM`ec_source`/`ec_sink`（アンダースコア、`type pipewire`）を`/etc/asound.conf`に定義し、`config.yaml`にはこの**ALSA名**を指定する。橋渡しには`pipewire-alsa`パッケージが要る。（`~/.asoundrc`はRaspberry Pi OS等で再起動時に消えることがあるため、システムの`/etc/asound.conf`に置く）
-  - 音切れ対策: エコーキャンセルを挟むとHDMI出力で2種のプチプチが出る。(a) 無音時にHDMIがアイドルでサスペンド↔再開を繰り返す音、(b) Pi 5でDMA headroomが小さく再生が間に合わずxrunする音。対策としてWirePlumberのドロップインで`alsa_output`に`session.suspend-timeout-seconds = 0`（サスペンド無効化）と`api.alsa.headroom = 8192`（DMAバッファ余裕）を設定する
+  - 音切れ対策: エコーキャンセルを挟むとHDMI出力で2種のプチプチが出る。(a) 無音時にHDMIがアイドルでサスペンド↔再開を繰り返す音、(b) Pi 5でDMA headroomが小さく再生が間に合わずxrunする音。`scripts/setup-echo-cancel.sh`はWirePlumberのドロップインで`alsa_output`に`session.suspend-timeout-seconds = 0`（サスペンド無効化）と`api.alsa.headroom = 8192`（DMAバッファ余裕）を設定する。HDMI→UVCキャプチャへ直接出力するこの実機では、`~/.config/wireplumber/wireplumber.conf.d/51-argos-hdmi-stability.conf`でHDMI出力ノードのサスペンドだけを無効化する。バッファ増量の効果は確認できなかったため適用しない。既存の`setup-echo-cancel.sh`を適用するときは設定が重複しないよう、この実機用ドロップインを見直す
   - 音量: ARGOSのTTSは従来`aplay`でHDMIへ直出し＝PipeWire音量をバイパスして大音量だったが、`ec_sink`経由にするとTTS音量がPipeWireの既定sink音量に従う。そのため既定sink音量を100%に固定し、音量調整はARGOS内部のvolume設定で行う
   - 導入手順: `scripts/setup-echo-cancel.sh` が (1) PipeWire永続ドロップイン（既定入出力に追従する`ec-source`/`ec-sink`ノード）、(2) `/etc/asound.conf`のブリッジPCM`ec_source`/`ec_sink`（sudo要）、(3) WirePlumberドロップイン（サスペンド無効化＋HDMI headroom増）、(4) 既定sink音量100%固定 を書き込む。`default`は変更しないため通常運用には影響しない。依存が不足していれば案内して中断し、`--install-deps`で`pipewire-alsa`と`libspa-0.2-modules`をapt導入できる。反映（`systemctl --user restart pipewire pipewire-pulse wireplumber`）後は`aplay -D ec_sink ...`で疎通確認してから、`config.yaml`の`audio.output_device: ec_sink`、`audio.input_devices: [ec_source]`、`wakeword.bargein_enabled: true`を設定する。デバイス名は環境で変わるためPipeWireの既定デバイスに紐付けて移植性を確保しており、Raspberry Pi OS / Ubuntu 共通。これらの設定はファイルとして永続するため再起動後も有効。車載やデスクトップUbuntuなど環境が変わる場合は同条件でエコー抑制を再計測する
   - 元に戻す: `scripts/setup-echo-cancel.sh --revert` でPipeWireドロップイン、`/etc/asound.conf`のARGOSブロック、WirePlumberドロップインを削除する（`default`や既存`config.yaml`、既定sink音量には触れない）。反映は `systemctl --user restart pipewire pipewire-pulse wireplumber`。`config.yaml`側で入出力デバイスや`wakeword.bargein_enabled`を変更していた場合はそちらも戻す
@@ -599,7 +702,7 @@ ARGOS_TTS_DELIMITERS=。！？!?、，
 
 Argos が管理するセッションIDは `ARGOS_AGENT_STATE_PATH` に保存する。既定値は `~/.argos/agent-sessions.json` とする。これはCodexの設定ではなくArgos自身の状態なので、`CODEX_HOME` には保存しない。旧 `CODEX_HOME/argos-sessions.json` が存在する場合は互換のため読み込み、保存は新しい `ARGOS_AGENT_STATE_PATH` へ行う。
 
-ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
+ARGOS は各スロットの会話開始時だけ、車載音声アシスタントとしての振る舞い、短い日本語回答、画面で使える表現（Markdown、mermaidの図、SVG、画像）と読み上げとの使い分け、スキル配置場所などの共通システム指示をエージェントへ付与する。注入済み状態は `ARGOS_AGENT_SYSTEM_PROMPT_STATE_PATH` に保存し、同じスロットの2回目以降の発話では通常のユーザー発話だけを送る。`/reset` で現在スロットを新規会話にした場合は注入済み状態も消し、次の発話で再度システム指示を付与する。追加指示は `ARGOS_AGENT_SYSTEM_PROMPT` または `ARGOS_AGENT_SYSTEM_PROMPT_FILE` で指定でき、スキル配置場所は `ARGOS_AGENT_SKILLS_DIR` で指定する。組み込みの車載向け既定指示そのものを差し替えたい場合は `ARGOS_AGENT_DEFAULT_SYSTEM_PROMPT` に全文を設定する（別用途へ転用する際に使う。空なら既定文面を使う）。
 
 Codex固有の `CODEX_HOME` は `ARGOS_CODEX_HOME` で全体設定として指定する。`ARGOS_CODEX_MODEL` はスロットにモデルがない場合の後方互換フォールバックとして扱う。
 
@@ -609,21 +712,21 @@ Codex固有の `CODEX_HOME` は `ARGOS_CODEX_HOME` で全体設定として指�
 
 ## Antigravity CLI
 
-`provider` が `antigravity` のスロットでは、ARGOS は `agy` CLI を1発話ごとに起動する。初回は次の形で実行する。
+`provider` が `antigravity` のスロットでは、ARGOS は `agy` CLI を1発話ごとに `--output-format json` 付きで起動する。初回は次の形で実行する。
 
 ```bash
-agy --print <prompt>
+agy --output-format json --print <prompt>
 ```
 
-`ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` の場合だけ、同じARGOSプロセス内の継続発話では、Antigravity の `last_conversations.json` から取得した会話IDを使い、次の形で実行する。
+`ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` の場合だけ、継続発話では標準出力のJSON（`conversation_id`）から取得してスロット別に保存した会話IDを使い、次の形で実行する。
 
 ```bash
-agy --conversation <conversation_id> --print <prompt>
+agy --conversation <conversation_id> --output-format json --print <prompt>
 ```
 
 `ARGOS_ANTIGRAVITY_COMMAND` で `agy` のパスを指定する。既定値は `agy` とし、systemd の `PATH` から解決する。Antigravity のキャッシュは `ARGOS_ANTIGRAVITY_HOME` から読み、既定値は `~/.gemini/antigravity-cli` とする。`ARGOS_ANTIGRAVITY_SKIP_PERMISSIONS=true` の場合は `--dangerously-skip-permissions` を渡す。`ARGOS_ANTIGRAVITY_SANDBOX=true` の場合は `--sandbox` を渡す。
 
-Antigravity は会話再開時に過去の画面出力を標準出力へ混ぜることがある。ARGOS は `agy` の標準出力を回答本文としては使わず、実行後に `transcript_full.jsonl` または `transcript.jsonl` の追加分を読み、末尾から `source=MODEL`、`type=PLANNER_RESPONSE`、`status=DONE`、`content` ありのエントリーだけを回答として扱う。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
+ARGOS は `agy --output-format json` が標準出力へ返すJSONから `conversation_id` と最終回答 `response` を直接取り出す。これにより共有キャッシュファイル（`last_conversations.json`）への依存や複数スロット同時実行時の競合を避け、セッションリセット直後や新規スロット追加時にも確実に新しい会話IDを取得できる。JSON出力に対応しない旧ラッパー等のフォールバックとしてのみ、`last_conversations.json` および `transcript_full.jsonl` / `transcript.jsonl` からの `PLANNER_RESPONSE`（`status=DONE`）抽出を残す。`agy` の標準出力と標準エラーは調査用に `/tmp/argos/antigravity-raw.log` と `/tmp/argos/antigravity-error.log` へ保存する。
 transcript にUTF-8として読めないバイトが混ざっている場合でも、ARGOS は読み取りを継続し、壊れた行を無視して最新の完了済み回答を探す。
 
 既定では毎回新規会話として起動し、`--conversation` は渡さない。会話を継続したい場合だけ `ARGOS_ANTIGRAVITY_CONTINUE_SESSION=true` を指定する。サービス再起動後も保存済み会話IDを復元したい場合は、さらに `ARGOS_ANTIGRAVITY_RESUME_SAVED=true` を指定する。`ARGOS_ANTIGRAVITY_PROMPT_PREFIX` は任意の固定prefixだが、既定では空にする。読み上げ向けの整形はprovider個別ではなく、共通のTTSフィルター側で扱う。

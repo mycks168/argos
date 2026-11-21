@@ -11,6 +11,20 @@ from argos.config import (
 )
 
 
+def test_input_device_profiles_load_from_environment(monkeypatch):
+    """入力機器の製品IDと個別割り当てを設定へ渡す。"""
+    monkeypatch.setenv("ARGOS_PTT_DEVICES_JSON", '[{"id":"1:2","bindings":{"KEY_F13":"ptt"}}]')
+    settings = load_settings()
+    assert settings.ptt_devices[0].id == "0001:0002"
+    assert settings.ptt_devices[0].bindings[183].action == "ptt"
+
+
+def test_backchannel_volume_can_be_raised(monkeypatch):
+    """相槌の音量だけを変更できる。"""
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_VOLUME", "0.7")
+    assert load_settings().stt_gateway_backchannel_volume == 0.7
+
+
 @pytest.fixture(autouse=True)
 def _clear_unified_slots(monkeypatch):
     """各テストが実機config.yamlのスロット設定に影響されないようにする。"""
@@ -786,3 +800,77 @@ def test_agent_runner_job_retention_days(monkeypatch):
     assert load_settings().agent_runner_job_retention_days == 7.0
     monkeypatch.setenv("ARGOS_AGENT_RUNNER_JOB_RETENTION_DAYS", "3")
     assert load_settings().agent_runner_job_retention_days == 3.0
+
+
+def test_load_stt_stream_settings(monkeypatch):
+    """ストリーミングの設定を読み込み、音量と待ち時間を範囲に収める。"""
+    for name in ("STT_GATEWAY_STREAM", "STT_GATEWAY_BACKCHANNEL_VOLUME", "STT_GATEWAY_ACK_TIMEOUT_SECONDS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert settings.stt_gateway_stream is False
+    assert settings.stt_gateway_backchannel_volume == 0.5
+    assert settings.stt_gateway_ack_timeout_seconds == 1.5
+
+    monkeypatch.setenv("STT_GATEWAY_STREAM", "true")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_VOLUME", "3")
+    monkeypatch.setenv("STT_GATEWAY_ACK_TIMEOUT_SECONDS", "-1")
+    settings = load_settings()
+    assert settings.stt_gateway_stream is True
+    assert settings.stt_gateway_backchannel_volume == 1.0
+    assert settings.stt_gateway_ack_timeout_seconds == 0.0
+
+
+def test_load_stt_backchannel_options(monkeypatch):
+    """相槌の間隔・文言を読み込み、stt-gateway が受け付ける範囲にそろえる。"""
+    for name in (
+        "STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS",
+        "STT_GATEWAY_BACKCHANNEL_PHRASES",
+        "STT_GATEWAY_BACKCHANNEL_START_DELAY_MS",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_start_delay_ms == 2000
+    assert settings.stt_gateway_backchannel_min_interval_ms == 1500
+    assert settings.stt_gateway_backchannel_phrases == ("そっか", "なるほど", "うん")
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_MIN_INTERVAL_MS", "99999")
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES", ";".join(["はい", "あ" * 21] + [f"え{i}" for i in range(12)]))
+    settings = load_settings()
+    assert settings.stt_gateway_backchannel_min_interval_ms == 60000
+    assert settings.stt_gateway_backchannel_phrases[0] == "はい"
+    assert len(settings.stt_gateway_backchannel_phrases) == 10
+    assert "あ" * 21 not in settings.stt_gateway_backchannel_phrases
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_PHRASES", "あ" * 21)
+    assert load_settings().stt_gateway_backchannel_phrases == ("そっか", "なるほど", "うん")
+
+
+def test_load_stt_backchannel_start_delay(monkeypatch):
+    """話し始めてから相槌を鳴らさない時間を読み込み、負の値は0にする。"""
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "-5")
+    assert load_settings().stt_gateway_backchannel_start_delay_ms == 0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "1200")
+    assert load_settings().stt_gateway_backchannel_start_delay_ms == 1200
+
+
+def test_load_stt_backchannel_skip_rate(monkeypatch):
+    """相槌を見送る割合を読み込み、0〜1にそろえる。"""
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", raising=False)
+    assert load_settings().stt_gateway_backchannel_skip_rate == 0.25
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "1.5")
+    assert load_settings().stt_gateway_backchannel_skip_rate == 1.0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "-1")
+    assert load_settings().stt_gateway_backchannel_skip_rate == 0.0
+
+
+def test_load_stt_backchannel_silence_ms(monkeypatch):
+    """相槌を打つまでの無音の長さを読み込み、0〜2000にそろえる。"""
+    monkeypatch.delenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", raising=False)
+    assert load_settings().stt_gateway_backchannel_silence_ms == 0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "120")
+    assert load_settings().stt_gateway_backchannel_silence_ms == 120
+
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "-1")
+    assert load_settings().stt_gateway_backchannel_silence_ms == 0
+    monkeypatch.setenv("STT_GATEWAY_BACKCHANNEL_SILENCE_MS", "99999")
+    assert load_settings().stt_gateway_backchannel_silence_ms == 2000
