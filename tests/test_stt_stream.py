@@ -402,6 +402,21 @@ def test_argos_ack_prompt_keeps_listener_wording():
     assert len(ARGOS_ACK_OPTIONS["fallback_text"]) <= 50
 
 
+def test_argos_ack_prompt_varies_by_kind_without_promising_work():
+    """返事は話の種類ごとに取りかかる言い方を選び、作業の中身は約束しない。例も同じ方針にそろえる。"""
+    prompt = ARGOS_ACK_OPTIONS["system_prompt"]
+    for phrase in ("別の担当", "調べるね", "やってみるね", "見てみるね", "考えるね", "あいさつ", "中身は言わず"):
+        assert phrase in prompt
+    replies = [example["reply"] for example in ARGOS_ACK_OPTIONS["examples"]]
+    # 例の返事もプロンプトの文字数に収め、書き出しを散らして「なるほど」に偏らせない。
+    assert all(len(reply) <= 15 for reply in replies)
+    assert not any(reply.startswith("なるほど") for reply in replies)
+    assert len({reply[:2] for reply in replies}) >= 5
+    # 作業の依頼の例でも、作業の中身（電源を切るなど）は返事に入れない。
+    power = next(example for example in ARGOS_ACK_OPTIONS["examples"] if "電源" in example["user"])
+    assert "電源" not in power["reply"] and "切" not in power["reply"]
+
+
 def test_start_message_includes_options():
     """start に指定を付けて送る。"""
     ws = FakeWebSocket(on_end=_reply())
