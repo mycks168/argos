@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import random
+import re
 import threading
 from collections.abc import Callable
 from typing import Any
@@ -31,37 +33,60 @@ _END = object()
 # 最初の返事（ack）の作り方。ARGOS では ack の後にエージェントの本回答が続くため、
 # 内容を受け止める（言葉を繰り返す・聞き返す）と本回答と同じ受け止めが 2 回続いて不自然になる。
 # 一方で中身のない「つなぎ」の一言だけにすると、gemma4:e4b では「なるほどね。」に偏り
-# （206件中87件）、これから取りかかる感じが出なかった。そこで、後で別の担当が答えることを伝え、
+# （206件中84件）、これから取りかかる感じが出なかった。そこで、後で別の担当が答えることを伝え、
 # 話の種類（質問・作業の依頼・困りごと・相談や雑談・あいさつ）ごとに、取りかかる言い方
-# （調べる・やってみる・見てみる・考える）を選ばせる（stt-gateway 側の検証 2026-11-22、
-# always_varied 案）。実際の作業はエージェントが行い、断ったり失敗したりすることもあるため、
-# 「電源切るね」のように作業の中身は言わせず、4つの言い方で終えさせる。小型の LLM は禁止として
-# 書いた言葉に引っ張られる（2026-11-15）ので、禁止語は並べず、使う言い方を示す形で指示する。
+# （調べる・やってみる・見てみる・考える）を選ばせる（stt-gateway 側の検証 2026-11-22）。
+# 実際の作業はエージェントが行い、断ったり失敗したりすることもあるため、作業の中身は言わせない。
+# 小型の LLM は禁止として書いた言葉に引っ張られる（2026-11-15）ので、禁止語は並べず、
+# 使う言い方を示す形で指示する。
+# 書き出し（「じゃあ、」など）はモデルに作らせない。出力1トークンは入力の約75トークン分重く、
+# 書き出しの約3トークンで約25ms遅くなるうえ、リクエストごとに独立しているため「毎回変える」指示が
+# 効かず「じゃあ」に偏った（206件中122件）。書き出しは ARGOS 側で付ける（add_ack_opener）。
+# 例は種類ごとに1組。「やってみるね」の例が2組あると、質問にも「やってみるね」と返しがちだった
+# （質問94件中38件）。質問の例は聞き方を変えて入れる。
 # 「聞き手」「答えを知らない」「日本語で」を外すと、小型の LLM が質問に答えて言い切ったり、
 # 日本語以外で返したりする（stt-gateway の変更履歴 2026-11-15）。
 ARGOS_ACK_OPTIONS: dict[str, Any] = {
     "system_prompt": (
         "あなたは会話の聞き手です。あなたの返事の後に、別の担当が相手にきちんと答えます。"
         "あなたは答えを知らないので、質問や依頼には答えず、これから取りかかることだけを一言で伝えます。"
-        "言い方は話の種類で選びます。質問なら「調べるね」、作業の依頼なら「やってみるね」、"
-        "困りごとや不具合なら「見てみるね」、相談や雑談なら「考えるね」。あいさつにだけは、あいさつで返します。"
-        "何をするかの中身は言わず、この4つの言い方のどれかで終えます。"
-        "書き出しは「えっと」「じゃあ」「うん」「よし」などから選び、毎回同じにしません。"
+        "言い方は話の種類で選びます。質問（どう？・なに？・どうやるの？など）なら「調べるね。」、"
+        "作業の依頼なら「やってみるね。」、困りごとや不具合なら「見てみるね。」、"
+        "相談や雑談なら「考えるね。」。あいさつにだけは、あいさつで返します。"
+        "何をするかの中身は言わず、この4つの言い方だけで返します。"
         "相手の言葉は繰り返しません。聞き返しもしません。"
-        "日本語で、15文字以内、くだけた口調、1文だけ。"
+        "日本語で、10文字以内、くだけた口調、1文だけ。"
     ),
     "examples": [
-        {"user": "明日の天気ってどう？", "reply": "えっと、調べるね。"},
-        {"user": "近くのガソリンスタンド探してくれる", "reply": "じゃあ、やってみるね。"},
-        {"user": "一回電源切っておいて", "reply": "うん、やってみるね。"},
-        {"user": "なんか画面が固まってるんだけど", "reply": "ちょっと見てみるね。"},
-        {"user": "ミニゲームとか作ったら面白いかな", "reply": "うーん、考えてみるね。"},
-        {"user": "この関数どこで呼ばれてるんだっけ", "reply": "よし、調べてみる。"},
-        {"user": "最近ちょっと疲れてるんだよね", "reply": "そっか、考えてみるね。"},
-        {"user": "お疲れさま、今日はもういいよ", "reply": "うん、お疲れさま！"},
+        {"user": "拡大表示ってどうやって実装してるの", "reply": "調べるね。"},
+        {"user": "近くのガソリンスタンド探してくれる", "reply": "やってみるね。"},
+        {"user": "なんか画面が固まってるんだけど", "reply": "見てみるね。"},
+        {"user": "ミニゲームとか作ったら面白いかな", "reply": "考えるね。"},
+        {"user": "お疲れさま、今日はもういいよ", "reply": "お疲れさま！"},
     ],
     "fallback_text": "えっと、ちょっと待ってね。",
 }
+
+# 最初の返事の前に ARGOS が付ける書き出し。空文字は「付けない」。直前と同じものは選ばない。
+ACK_OPENERS = ("えっと、", "じゃあ、", "うん、", "よし、", "")
+# 書き出しを付けるのは、取りかかる言い方で終わる短い返事だけ。あいさつや、gateway の
+# 固定の文言（すでに書き出しがある）には付けない。
+_ACK_ACTION_PATTERN = re.compile(r"^(?:ちょっと)?(?:調べ|やって|見て|考え|探し|確認し)(?:て?み)?る?ね[。！]?$")
+_ACK_OPENER_STARTS = tuple(opener for opener in ACK_OPENERS if opener) + ("えーっと", "うーん", "そっか", "なるほど")
+_last_opener: str | None = None
+_opener_lock = threading.Lock()
+
+
+def add_ack_opener(text: str, choice: Callable[[list[str]], str] = random.choice) -> str:
+    """取りかかる言い方の返事に、直前とは違う書き出しを付けて返す。対象外の返事はそのまま返す。"""
+    global _last_opener
+    stripped = text.strip()
+    if not _ACK_ACTION_PATTERN.match(stripped) or stripped.startswith(_ACK_OPENER_STARTS):
+        return stripped
+    with _opener_lock:
+        opener = choice([candidate for candidate in ACK_OPENERS if candidate != _last_opener])
+        _last_opener = opener
+    return opener + stripped
 
 
 def build_start_options(
@@ -306,7 +331,8 @@ class SttStreamUtterance:
             if not self._ack_ready.wait(max(0.0, timeout)):
                 log.info("stt-gateway の最初の返事が%.1f秒以内に届きませんでした", timeout)
                 return None
-            return self._ack or None
+            # 書き出しはモデルに作らせず、ここで付ける（ARGOS_ACK_OPTIONS の説明を参照）。
+            return add_ack_opener(self._ack) if self._ack else None
         finally:
             self.close()
 
