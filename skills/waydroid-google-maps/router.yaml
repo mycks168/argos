@@ -1,0 +1,45 @@
+# 高速振り分け（argos.router）とエージェントの argos-tool が使うツール定義。
+# 書き方は docs/basic_design.md の「ツール置き場」を参照。保存すれば再起動なしで反映される。
+tools:
+  - name: map_zoom
+    description: Googleマップを拡大または縮小する
+    params:
+      direction:
+        type: enum
+        choices: [in, out]
+        description: in=拡大（詳しく）、out=縮小（広域）
+    command: ["{python}", "{skill_dir}/scripts/map_control.py", "zoom-{direction}"]
+    reply: {by: direction, in: 地図を拡大したよ。, out: 地図を広域にしたよ。}
+    examples: [地図拡大して, もっと広域にして]
+  - name: map_overview
+    description: GPS追従を止めて、ルート全体または現在地周辺の広域地図を表示する
+    params:
+      destination:
+        type: string
+        required: false
+        max_length: 40
+        description: 目的地。言われたときだけ
+    command: ["{python}", "{skill_dir}/scripts/map_control.py", "overview", "{destination}"]
+    reply: ルート全体を表示したよ。
+    examples: [ルート全体見せて]
+  - name: map_tracking
+    description: 地図の現在地GPS追従を一時停止または再開する
+    params:
+      action:
+        type: enum
+        choices: [pause, resume]
+    command: ["{python}", "{skill_dir}/scripts/map_control.py", "{action}-tracking"]
+    reply: {by: action, pause: 追従を止めたよ。, resume: 追従を再開したよ。}
+    examples: [追従ストップして, 追従再開して]
+  - name: map_navigate
+    description: 目的地までのGoogleマップのナビを開始する
+    safety: confirm
+    params:
+      destination:
+        type: string
+        max_length: 40
+        description: 発話に出てきた目的地の名前
+    command: ["{python}", "{skill_dir}/scripts/map_control.py", "navigate", "{destination}"]
+    reply: "{destination}へのナビを始めたよ。"
+    timeout_seconds: 30
+    examples: [熊本駅までナビして]

@@ -13,7 +13,10 @@ STATIC_DIR = PROJECT_ROOT / "src/argos/services/dashboard/static"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.jsがない環境では実行しない")
-@pytest.mark.parametrize("script", ["tests/js/test_message_text.js", "tests/js/test_message_view.js"])
+@pytest.mark.parametrize(
+    "script",
+    ["tests/js/test_message_text.js", "tests/js/test_message_view.js", "tests/js/test_message_time_labels.js"],
+)
 def test_message_display_javascript(script: str) -> None:
     """本文のHTML化と、会話欄の差分更新・図の描画・拡大表示を検証する。"""
     result = subprocess.run(

@@ -645,6 +645,8 @@
     .message { border-left: 3px solid #526775; padding: 4px 0 4px 12px; }
     .message[data-role="user"] { border-color: #f4d35e; }
     .message[data-role="assistant"] { border-color: #69b7e4; }
+    .message .time { margin-left: 8px; opacity: 0.6; font-variant-numeric: tabular-nums; }
+    .message .message-gap { margin: 6px 0 8px -12px; text-align: center; font-size: 0.8em; opacity: 0.55; }
     .meta { color: #8ca0ad; font-size: 11px; font-weight: 700; }
     .text { margin-top: 3px; font-size: var(--message-font-size); line-height: 1.38; overflow-wrap: anywhere; }
     .text a { color: #78c8f5; text-decoration: underline; }
@@ -1553,6 +1555,31 @@
     let changingVolume = false;
     let previousDisplayActivitySequence = null;
     let sessionResetConfirmTimer = null;
+    // 会話の1件ごとに時刻（今日は「9:41」、それ以前は「11/21 22:10」）と、
+    // 前の会話から30分以上空いたときの区切り（「2時間ぶり」など）を付けたコピーを返す。
+    function withTimeLabels(list) {
+      const today = new Date();
+      let previous = null;
+      return (list || []).map(item => {
+        const at = item.created_at ? new Date(item.created_at) : null;
+        let time_label = "";
+        let gap_label = "";
+        if (at && !Number.isNaN(at.getTime())) {
+          const hm = `${at.getHours()}:${String(at.getMinutes()).padStart(2, "0")}`;
+          time_label = at.toDateString() === today.toDateString() ? hm : `${at.getMonth() + 1}/${at.getDate()} ${hm}`;
+          if (previous) {
+            const minutes = Math.floor((at - previous) / 60000);
+            if (minutes >= 30) {
+              gap_label = minutes < 60 ? `${minutes}分ぶり`
+                : minutes < 48 * 60 ? `${Math.floor(minutes / 60)}時間ぶり` : `${Math.floor(minutes / 1440)}日ぶり`;
+            }
+          }
+          previous = at;
+        }
+        return { ...item, time_label, gap_label };
+      });
+    }
+
     const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, char => (
       {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]
     ));
@@ -1725,7 +1752,7 @@
       // スロットスタックを先に反映し、会話/通知へ戻る場合は描画キャッシュを破棄する
       renderSlots(state);
 
-      const visibleMessages = state.messages;
+      const visibleMessages = withTimeLabels(state.messages);
       const nextMessages = JSON.stringify(visibleMessages);
       if (!consoleView.isEnabled && nextMessages !== previousMessages) {
         const shouldFollow = followLatestMessage || isNearLatestMessage();
@@ -1734,7 +1761,8 @@
         ArgosMessageView.sync(messages, visibleMessages, {
           renderShell: (item, bodyHtml) => `
         <article class="message" data-role="${escapeHtml(item.role)}">
-          <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"} ${item.streaming ? "..." : ""}</div>
+          ${item.gap_label ? `<div class="message-gap">── ${escapeHtml(item.gap_label)} ──</div>` : ""}
+          <div class="meta">${item.role === "user" ? "YOU" : "ARGOS"}<span class="time">${escapeHtml(item.time_label || "")}</span> ${item.streaming ? "..." : ""}</div>
           <div class="text msg-body">${bodyHtml}</div>
         </article>`,
           emptyHtml: `<div class="empty">会話待機中</div>`,
