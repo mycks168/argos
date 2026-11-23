@@ -170,10 +170,15 @@ class ToolSpec:
             argv.append(_PLACEHOLDER.sub(lambda m: fixed.get(m.group(1), values.get(m.group(1), "")), part))
         return argv
 
-    def format_reply(self, values: dict[str, str]) -> str:
-        """読み上げる結果の文に引数を埋めて返す。値ごとの返事があればそれを使う。"""
+    def format_reply(self, values: dict[str, str], stdout: str = "") -> str:
+        """読み上げる結果の文に引数を埋めて返す。値ごとの返事があればそれを使う。
+
+        {stdout} は、コマンドの標準出力の最後の空でない行に置き換える（残り時間など、毎回変わる返事のため）。
+        """
         text = dict(self.reply_map).get(values.get(self.reply_by, ""), self.reply) if self.reply_by else self.reply
-        return _PLACEHOLDER.sub(lambda m: values.get(m.group(1), ""), text)
+        lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+        filled = {**values, "stdout": lines[-1] if lines else ""}
+        return _PLACEHOLDER.sub(lambda m: filled.get(m.group(1), ""), text)
 
 
 @dataclass
@@ -309,8 +314,10 @@ def parse_tool(raw: Any, source: Path) -> ToolSpec:
     undo = _str_tuple(raw.get("undo"), f"{name}: undo")
     known = set(RESERVED_PLACEHOLDERS) | {param.name for param in params}
     for part in (*command, *undo, reply, *(text for _, text in reply_map)):
+        # {stdout} は返事の中だけで使える。
+        allowed = known | ({"stdout"} if part == reply or part in dict(reply_map).values() else set())
         for placeholder in _PLACEHOLDER.findall(part):
-            if placeholder not in known:
+            if placeholder not in allowed:
                 raise ToolError(f"{name}: 知らない置き換え {{{placeholder}}} があります")
     safety = raw.get("safety", "display")
     if safety not in SAFETY_LEVELS:
@@ -441,6 +448,6 @@ class ToolRegistry:
         log.info("ツール実行: %s %s 結果=%s (%.0fms)", name, json.dumps(values, ensure_ascii=False),
                  "成功" if ok else f"失敗({proc.returncode})", elapsed)
         return ToolResult(
-            name, ok, spec.format_reply(values) if ok and not undo else "", proc.returncode,
+            name, ok, spec.format_reply(values, proc.stdout) if ok and not undo else "", proc.returncode,
             stdout=proc.stdout[-2000:], stderr=proc.stderr[-2000:], elapsed_ms=elapsed, args=values,
         )
