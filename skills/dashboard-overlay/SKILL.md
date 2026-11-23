@@ -190,6 +190,12 @@ uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/s
 uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot center
 ```
 
+中央と右に重なっている表示を全部消すときは、`all` を指定します（1回で既定の表示まで戻ります）。
+
+```bash
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot all
+```
+
 ## 中央と右を入れ替える
 
 ```bash

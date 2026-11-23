@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from http.client import HTTPConnection
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -1345,3 +1346,47 @@ def test_has_unread_slot_by_name():
     assert state.has_unread_slot("Claude") is True
     assert state.has_unread_slot("Codex") is False
     assert state.has_unread_slot("存在しない") is False
+
+
+def test_clear_overlay_all_layers_removes_stacked_overlays():
+    """all_layers なら、重なった表示を1回ですべて消す。指定がなければ一番上だけ消す。"""
+    state = DashboardState()
+    for title in ("1枚目", "2枚目"):
+        state.push_overlay("center", "html", title, url="/static/rain_radar.html")
+        state.push_overlay("right", "markdown", title, content="x")
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "center"})
+    assert state.snapshot()["slot_stacks"]["center"][-1]["title"] == "1枚目"
+
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "all", "all_layers": True})
+    snapshot = state.snapshot()
+    assert len(snapshot["slot_stacks"]["center"]) == 1
+    assert len(snapshot["slot_stacks"]["right"]) == 1
+    assert snapshot["overlay"]["active"] is False
+
+    # all_layers は真偽値の true だけ受け付ける（文字列は一番上だけ消す扱い）。
+    for title in ("1枚目", "2枚目"):
+        state.push_overlay("center", "html", title, url="/x")
+    _apply_event(state, {"type": "clear_overlay", "target_slot": "center", "all_layers": "yes"})
+    assert state.snapshot()["slot_stacks"]["center"][-1]["title"] == "1枚目"
+
+
+def test_send_overlay_clear_all_payload():
+    """send_overlay.py の clear は、all のときだけ all_layers を付ける。"""
+    import importlib.util
+    import sys
+
+    path = Path(__file__).resolve().parents[1] / "skills/dashboard-overlay/scripts/send_overlay.py"
+    spec = importlib.util.spec_from_file_location("send_overlay_for_test", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["send_overlay_for_test"] = module
+    spec.loader.exec_module(module)
+
+    class Args:
+        """build_payload に渡す引数の代わり。"""
+
+        type = "clear"
+        target_slot = "all"
+
+    assert module.build_payload(Args) == {"type": "clear_overlay", "target_slot": "all", "all_layers": True}
+    Args.target_slot = "center"
+    assert module.build_payload(Args) == {"type": "clear_overlay", "target_slot": "center"}
