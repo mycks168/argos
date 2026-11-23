@@ -97,10 +97,11 @@ def apply_preset(args):
 def build_payload(args):
     """CLI引数からARGOSダッシュボードイベントpayloadを組み立てる。"""
     if args.type == "clear":
-        return {
-            "type": "clear_overlay",
-            "target_slot": args.target_slot
-        }
+        payload = {"type": "clear_overlay", "target_slot": args.target_slot}
+        # all は中央と右の、重なった表示をすべて消す（「全部消して」）。
+        if args.target_slot == "all":
+            payload["all_layers"] = True
+        return payload
     if args.type == "swap":
         return {
             "type": "swap_slots"
@@ -218,8 +219,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="ARGOSダッシュボードにオーバーレイイベントを送信します。")
     parser.add_argument("-t", "--type", choices=["map", "nav", "markdown", "image", "html", "clear", "swap"],
                         help="表示タイプ（clearで非表示、swapで左右スワップ）")
-    parser.add_argument("--target-slot", choices=["center", "right"], default="right",
-                        help="対象スロット（center または right、デフォルトは right）")
+    parser.add_argument("--target-slot", choices=["center", "right", "all"], default="right",
+                        help="対象スロット（center または right、デフォルトは right。all は clear のとき中央と右をすべて消す）")
     parser.add_argument("--preset", choices=sorted(MAP_PRESETS),
                         help="よく使う地図プリセット")
     parser.add_argument("--title", help="表示タイトル")

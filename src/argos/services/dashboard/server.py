@@ -980,7 +980,8 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
         target_slot = _optional_text(payload, "target_slot", 20) or "all"
         if target_slot not in {"center", "right", "all"}:
             raise ValueError(f"無効な target_slot です: {target_slot}")
-        state.pop_overlay(target_slot)
+        # all_layers が真なら、重なった表示をすべて消す（「全部消して」）。
+        state.pop_overlay(target_slot, all_layers=payload.get("all_layers") is True)
         return {"status": "overlay_cleared"}
     if event_type == "swap_slots":
         state.swap_slots()

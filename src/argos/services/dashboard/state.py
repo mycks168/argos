@@ -562,14 +562,19 @@ class DashboardState:
             }
             self._publish_locked()
 
-    def pop_overlay(self, target_slot: str) -> None:
-        """指定したスロット（またはすべて）から一時コンテンツを消去（スタックからPop）。"""
+    def pop_overlay(self, target_slot: str, all_layers: bool = False) -> None:
+        """指定したスロット（またはすべて）から一時コンテンツを消去（スタックからPop）。
+
+        all_layers=True なら、重なっている一時コンテンツをすべて消し、既定の表示へ戻す。
+        """
         with self._lock:
             slots = ["center", "right"] if target_slot == "all" else [target_slot]
             for s in slots:
                 stack = self._slot_stack_center if s == "center" else self._slot_stack_right
-                if len(stack) > 1:
+                while len(stack) > 1:
                     stack.pop()
+                    if not all_layers:
+                        break
             # 互換用 _overlay の更新
             has_active = len(self._slot_stack_center) > 1 or len(self._slot_stack_right) > 1
             if not has_active:
