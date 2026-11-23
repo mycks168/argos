@@ -111,7 +111,7 @@ def test_fire_notifies_and_updates_screen(timer, capsys, monkeypatch):
     assert capsys.readouterr().out.strip() == "テストのタイマーが終わったよ。"
     notice = timer.calls["events"][-1]
     assert notice["type"] == "notification" and notice["title"] == "テストのタイマーが終わったよ"
-    assert notice["text"] == "20秒たちました。" and notice["sound"] and notice["speak"]
+    assert notice["text"] == "20秒たちました。" and notice["sound"] == "alarm" and notice["speak"]
     overlay = timer.calls["events"][-2]
     assert overlay["type"] == "overlay" and "テスト" not in urllib.parse.unquote(overlay["url"])
 

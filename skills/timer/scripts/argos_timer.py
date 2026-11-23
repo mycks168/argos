@@ -265,7 +265,7 @@ def cmd_fire(args: argparse.Namespace) -> str:
     message = f"{timer['label']}のタイマーが終わったよ"
     post_event({
         "type": "notification", "title": message, "text": f"{format_duration(int(timer['seconds']))}たちました。",
-        "source": "タイマー", "priority": "high", "sound": True, "speak": True,
+        "source": "タイマー", "priority": "high", "sound": "alarm", "speak": True,
     })
     return message + "。"
 
