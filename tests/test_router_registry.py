@@ -232,7 +232,10 @@ def test_default_dirs_and_bundled_definitions():
     assert dirs[1] == Path("~/.config/argos/router-tools").expanduser()
     registry = ToolRegistry((dirs[0],))
     tools = registry.tools()
-    assert {"map_zoom", "map_overview", "map_tracking", "map_navigate", "screen_layout", "dashboard_clear"} <= set(tools)
+    assert {"map_zoom", "map_overview", "map_tracking", "map_navigate", "screen_layout", "dashboard_clear", "rain_radar"} <= set(tools)
     assert registry.errors == {}
     assert tools["map_navigate"].safety == "confirm"
     assert tools["map_zoom"].format_reply({"direction": "in"}) == "地図を拡大したよ。"
+    radar = tools["rain_radar"]
+    assert radar.build_argv(radar.validate_args({}))[-1] == "center"  # 地名がなければ --query を渡さない
+    assert radar.build_argv(radar.validate_args({"place": "テスト駅"}))[-1] == "--query=テスト駅"

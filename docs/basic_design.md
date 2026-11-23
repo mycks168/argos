@@ -259,7 +259,7 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
 
 - 実行は `subprocess.run`（シェルなし）で、終了コード0を成功とする。引数は型・長さ・範囲・選択肢を検証し、知らない引数と制御文字ははじく。`uv run` は起動に約1秒かかるため使わず、`{python}` で直接動かす。
 - ツールが増えると判断が遅くなる（入力1トークン約0.12ms、出力1トークン約9ms。1ツール60トークンなら50個で約+360ms）。説明と例は短くする。増えすぎたら、分類を選んでからツールを選ぶ2段階にする。
-- 同梱の定義：`waydroid-google-maps`（`map_zoom`・`map_overview`・`map_tracking`・`map_navigate`（confirm））、`argos-screen-layout`（`screen_layout`）、`dashboard-overlay`（`dashboard_clear`）。
+- 同梱の定義：`waydroid-google-maps`（`map_zoom`・`map_overview`・`map_tracking`・`map_navigate`（confirm））、`argos-screen-layout`（`screen_layout`）、`dashboard-overlay`（`dashboard_clear`・`rain_radar`）。
 
 `argos-tool`（エージェント向け）：
 
