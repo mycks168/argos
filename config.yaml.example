@@ -184,6 +184,8 @@ runner:
   # ARGOSへ届け終わったジョブの記録（依頼内容と返事）を残す日数。0以下なら消さない。
   job_retention_days: 7
 dashboard:
+  # 雨雲レーダーで現在地が取れないときの地点（「緯度,経度,表示名」）。空なら東京
+  rain_radar_default: ''
   enabled: true
   host: 127.0.0.1
   port: 8765
