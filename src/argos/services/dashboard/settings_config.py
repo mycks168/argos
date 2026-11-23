@@ -190,6 +190,7 @@ DESCRIPTION_BY_KEY = {
     "tts.cache.dir": "音声キャッシュの保存場所です。",
     "network.wifi_status_refresh_seconds": "Wi-Fi状態をダッシュボードへ更新する間隔です。",
     "dashboard.camera_snapshot_path": "ダッシュボードに表示する最新カメラ画像の保存先です。",
+    "dashboard.rain_radar_default": "雨雲レーダーで現在地が取れないときに表示する地点です（緯度,経度,表示名）。空なら東京です。",
     "dashboard.enabled": "ARGOSのダッシュボードWebサーバーを起動します。",
     "dashboard.host": "ダッシュボードが待ち受けるアドレスです。0.0.0.0はLANからも接続できます。",
     "dashboard.port": "ダッシュボードWebサーバーのポート番号です。",

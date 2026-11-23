@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>雨雲レーダー</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b1117;
+      --panel: rgba(11, 17, 23, 0.88);
+      --border: rgba(255, 255, 255, 0.18);
+      --text: #edf3f7;
+      --muted: #9eb1bd;
+      --accent: #69b7e4;
+      --gold: #f4d35e;
+    }
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow: hidden;
+    }
+    #map {
+      width: 100%;
+      height: 100%;
+      background: #0d151c;
+    }
+    /* ベース地図のペインだけにダークフィルターを適用し、雨雲タイルの色相は反転させない */
+    .leaflet-base-map-pane {
+      filter: invert(100%) hue-rotate(180deg) brightness(90%) contrast(95%);
+    }
+    .leaflet-rain-pane {
+      opacity: 0.72;
+    }
+    .map-label {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: #fff;
+      font: 700 12px/1.2 system-ui, sans-serif;
+      padding: 4px 8px;
+      white-space: nowrap;
+    }
+    .leaflet-tooltip-top.map-label::before {
+      border-top-color: var(--panel);
+    }
+    .current-location-marker {
+      align-items: center;
+      background: #28a8ff;
+      border: 3px solid #fff;
+      border-radius: 999px;
+      box-shadow: 0 0 0 5px rgba(40, 168, 255, 0.25), 0 3px 10px rgba(0, 0, 0, 0.55);
+      display: flex;
+      height: 18px;
+      justify-content: center;
+      width: 18px;
+    }
+    .current-location-marker::after {
+      background: #fff;
+      border-radius: 999px;
+      content: "";
+      height: 6px;
+      width: 6px;
+    }
+    .radar-legend {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 800;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      backdrop-filter: blur(6px);
+      font-size: clamp(10px, 1.3vw, 12px);
+      font-weight: 700;
+    }
+    .legend-bar {
+      display: flex;
+      height: 8px;
+      width: clamp(56px, 8vw, 96px);
+      border-radius: 999px;
+      overflow: hidden;
+    }
+    .legend-bar span { flex: 1; }
+    .radar-controls {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      transform: translateX(-50%);
+      z-index: 800;
+      width: min(94%, 640px);
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding: 8px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+      background: var(--panel);
+      backdrop-filter: blur(8px);
+      box-sizing: border-box;
+    }
+    .radar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .radar-btn {
+      border: 1px solid #526775;
+      border-radius: 8px;
+      background: #101820;
+      color: var(--text);
+      font: inherit;
+      font-size: clamp(12px, 1.5vw, 14px);
+      font-weight: 800;
+      padding: 5px 10px;
+      cursor: pointer !important;
+      white-space: nowrap;
+    }
+    .radar-btn.is-playing {
+      border-color: var(--accent);
+      background: #102536;
+      color: var(--accent);
+    }
+    .radar-time {
+      margin-left: auto;
+      font-variant-numeric: tabular-nums;
+      font-size: clamp(12px, 1.6vw, 15px);
+      font-weight: 800;
+      color: var(--gold);
+      white-space: nowrap;
+    }
+    .radar-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 999px;
+      background: rgba(105, 183, 228, 0.16);
+      color: var(--accent);
+      margin-right: 4px;
+    }
+    .radar-badge.is-forecast {
+      background: rgba(244, 211, 94, 0.18);
+      color: var(--gold);
+    }
+    .radar-slider {
+      flex: 1;
+      min-width: 120px;
+      accent-color: var(--accent);
+      cursor: pointer !important;
+    }
+    .radar-status {
+      font-size: 11px;
+      color: var(--muted);
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+
+  <div class="radar-legend" aria-label="降水強度の凡例">
+    <span>弱</span>
+    <div class="legend-bar">
+      <span style="background:#a0d2ff"></span>
+      <span style="background:#218cff"></span>
+      <span style="background:#0041ff"></span>
+      <span style="background:#faf500"></span>
+      <span style="background:#ff9900"></span>
+      <span style="background:#ff2800"></span>
+      <span style="background:#b40068"></span>
+    </div>
+    <span>猛烈</span>
+  </div>
+
+  <div class="radar-controls">
+    <div class="radar-row">
+      <button id="play-btn" class="radar-btn" type="button">▶ 再生</button>
+      <button id="prev-btn" class="radar-btn" type="button">-5分</button>
+      <button id="next-btn" class="radar-btn" type="button">+5分</button>
+      <button id="refresh-btn" class="radar-btn" type="button" title="最新データに更新">↻</button>
+      <div id="time-display" class="radar-time">読込中...</div>
+    </div>
+    <div class="radar-row">
+      <input id="time-slider" class="radar-slider" type="range" min="0" max="0" value="0" step="1" aria-label="時刻スライダー">
+    </div>
+    <div id="status-line" class="radar-status">気象庁 高解像度降水ナウキャストを取得中...</div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    // 位置の指定がなく、現在地も取れないときの地点。既存の地図（map.html・nav.html）と同じ東京にそろえる。
+    // 利用者の地域はソースに書かず、show_rain_radar.py が設定（dashboard.rain_radar_default）から座標を渡す。
+    const DEFAULT_LAT = 35.6895;
+    const DEFAULT_LNG = 139.6917;
+    const DEFAULT_LABEL = "東京";
+    const JMA_N1_URL = "https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N1.json";
+    const JMA_N2_URL = "https://www.jma.go.jp/bosai/jmatile/data/nowc/targetTimes_N2.json";
+
+    const params = new URLSearchParams(window.location.search);
+    const paramLat = parseFloat(params.get("lat"));
+    const paramLng = parseFloat(params.get("lng"));
+    const paramZoom = parseInt(params.get("zoom") || "10", 10);
+    const paramLabel = params.get("label") || "";
+    const autoPlay = params.get("play") !== "0";
+
+    const playBtn = document.getElementById("play-btn");
+    const prevBtn = document.getElementById("prev-btn");
+    const nextBtn = document.getElementById("next-btn");
+    const refreshBtn = document.getElementById("refresh-btn");
+    const timeSlider = document.getElementById("time-slider");
+    const timeDisplay = document.getElementById("time-display");
+    const statusLine = document.getElementById("status-line");
+
+    const map = L.map("map", { zoomControl: false }).setView(
+      [!isNaN(paramLat) ? paramLat : DEFAULT_LAT, !isNaN(paramLng) ? paramLng : DEFAULT_LNG],
+      isNaN(paramZoom) ? 10 : paramZoom
+    );
+
+    const basePane = map.createPane("baseMapPane");
+    basePane.classList.add("leaflet-base-map-pane");
+    basePane.style.zIndex = 200;
+
+    const rainPane = map.createPane("rainPane");
+    rainPane.classList.add("leaflet-rain-pane");
+    rainPane.style.zIndex = 350;
+
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      pane: "baseMapPane",
+      attribution: "&copy; OpenStreetMap contributors"
+    }).addTo(map);
+
+    L.control.scale({ imperial: false }).addTo(map);
+
+    let focusMarker = null;
+    let timeline = [];
+    let activeLayer = null;
+    let currentIndex = 0;
+    let playTimer = null;
+    const layerCache = new Map();
+
+    /** YYYYMMDDHHMMSS (UTC) を日本時間の Date に変換する。 */
+    function parseJmaUtc(stamp) {
+      const y = Number(stamp.slice(0, 4));
+      const m = Number(stamp.slice(4, 6)) - 1;
+      const d = Number(stamp.slice(6, 8));
+      const hh = Number(stamp.slice(8, 10));
+      const mm = Number(stamp.slice(10, 12));
+      return new Date(Date.UTC(y, m, d, hh, mm, 0));
+    }
+
+    /** 時刻エントリを日本語表示に整形する。 */
+    function formatFrameLabel(frame) {
+      const validDate = parseJmaUtc(frame.validtime);
+      const baseDate = parseJmaUtc(frame.latestBase);
+      const diffMinutes = Math.round((validDate.getTime() - baseDate.getTime()) / 60000);
+      const jst = new Date(validDate.getTime() + 9 * 3600 * 1000);
+      const hh = String(jst.getUTCHours()).padStart(2, "0");
+      const mm = String(jst.getUTCMinutes()).padStart(2, "0");
+      let badge = '<span class="radar-badge">実況</span>';
+      let offsetText = "";
+      if (diffMinutes > 0) {
+        badge = '<span class="radar-badge is-forecast">予測</span>';
+        offsetText = ` (+${diffMinutes}分)`;
+      } else if (diffMinutes < 0) {
+        offsetText = ` (${diffMinutes}分)`;
+      }
+      return `${badge}${hh}:${mm}${offsetText}`;
+    }
+
+    /** 対象地点にマーカーを表示する。 */
+    function setFocusPoint(lat, lng, label) {
+      map.setView([lat, lng], isNaN(paramZoom) ? 10 : paramZoom);
+      if (focusMarker) {
+        map.removeLayer(focusMarker);
+      }
+      const icon = L.divIcon({
+        className: "current-location-marker",
+        iconSize: [18, 18],
+        iconAnchor: [9, 9]
+      });
+      focusMarker = L.marker([lat, lng], { icon }).addTo(map);
+      if (label) {
+        focusMarker.bindTooltip(label, {
+          permanent: true,
+          direction: "top",
+          offset: [0, -10],
+          className: "map-label"
+        });
+      }
+    }
+
+    /** 指定がなければ /api/location を参照し、不可なら東京へフォールバックする。 */
+    async function resolveInitialLocation() {
+      if (!isNaN(paramLat) && !isNaN(paramLng)) {
+        setFocusPoint(paramLat, paramLng, paramLabel || "指定地点");
+        return;
+      }
+      try {
+        const res = await fetch("/api/location");
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.available && typeof data.lat === "number" && typeof data.lng === "number") {
+            setFocusPoint(data.lat, data.lng, paramLabel || "現在地");
+            return;
+          }
+        }
+      } catch (_err) {
+        // フォールバックへ進む
+      }
+      setFocusPoint(DEFAULT_LAT, DEFAULT_LNG, paramLabel || DEFAULT_LABEL);
+    }
+
+    /** 指定インデックスの雨雲タイルを表示する。 */
+    function showFrame(index) {
+      if (!timeline.length) return;
+      const safeIndex = ((index % timeline.length) + timeline.length) % timeline.length;
+      currentIndex = safeIndex;
+      timeSlider.value = String(safeIndex);
+
+      const frame = timeline[safeIndex];
+      const key = `${frame.basetime}/${frame.validtime}`;
+      let nextLayer = layerCache.get(key);
+      if (!nextLayer) {
+        const tileUrl = `https://www.jma.go.jp/bosai/jmatile/data/nowc/${frame.basetime}/none/${frame.validtime}/surf/hrpns/{z}/{x}/{y}.png`;
+        nextLayer = L.tileLayer(tileUrl, {
+          pane: "rainPane",
+          maxNativeZoom: 10,
+          maxZoom: 16,
+          attribution: "気象庁 高解像度降水ナウキャスト"
+        });
+        layerCache.set(key, nextLayer);
+      }
+
+      if (activeLayer && activeLayer !== nextLayer) {
+        map.removeLayer(activeLayer);
+      }
+      if (!map.hasLayer(nextLayer)) {
+        nextLayer.addTo(map);
+      }
+      activeLayer = nextLayer;
+      timeDisplay.innerHTML = formatFrameLabel(frame);
+    }
+
+    /** 自動再生を開始・停止する。 */
+    function setPlaying(shouldPlay) {
+      if (playTimer) {
+        clearInterval(playTimer);
+        playTimer = null;
+      }
+      if (shouldPlay && timeline.length > 1) {
+        playBtn.textContent = "⏸ 停止";
+        playBtn.classList.add("is-playing");
+        playTimer = setInterval(() => {
+          showFrame(currentIndex + 1);
+        }, 900);
+      } else {
+        playBtn.textContent = "▶ 再生";
+        playBtn.classList.remove("is-playing");
+      }
+    }
+
+    /** 気象庁から実況（直近30分）＋予測（+60分）の時刻リストを取得する。 */
+    async function loadNowcastTimes() {
+      statusLine.textContent = "気象庁 高解像度降水ナウキャストを更新中...";
+      try {
+        const [resN1, resN2] = await Promise.all([
+          fetch(`${JMA_N1_URL}?_=${Date.now()}`),
+          fetch(`${JMA_N2_URL}?_=${Date.now()}`)
+        ]);
+        if (!resN1.ok || !resN2.ok) {
+          throw new Error("気象庁データ取得エラー");
+        }
+        const n1List = await resN1.json();
+        const n2List = await resN2.json();
+
+        // N1は降順（最新が先頭）なので直近6件（約25〜30分）を取り、古い順に並べる
+        const pastAndNow = n1List.slice(0, 6).reverse();
+        const latestBase = pastAndNow.length ? pastAndNow[pastAndNow.length - 1].basetime : (n2List[0]?.basetime || "");
+        const forecast = n2List.slice().reverse();
+
+        const merged = [];
+        const seen = new Set();
+        for (const item of [...pastAndNow, ...forecast]) {
+          if (!item || !item.validtime || seen.has(item.validtime)) continue;
+          seen.add(item.validtime);
+          merged.push({
+            basetime: item.basetime,
+            validtime: item.validtime,
+            latestBase
+          });
+        }
+
+        timeline = merged;
+        layerCache.clear();
+        timeSlider.min = "0";
+        timeSlider.max = String(Math.max(0, timeline.length - 1));
+
+        // 初期位置は「現在（実況）」にする
+        const nowIndex = Math.max(0, pastAndNow.length - 1);
+        showFrame(nowIndex);
+        statusLine.textContent = "出典: 気象庁 高解像度降水ナウキャスト（5分刻み・最大60分先）";
+        setPlaying(autoPlay);
+      } catch (err) {
+        statusLine.textContent = `雨雲データの取得に失敗しました: ${err.message}`;
+      }
+    }
+
+    playBtn.addEventListener("click", () => setPlaying(!playTimer));
+    prevBtn.addEventListener("click", () => {
+      setPlaying(false);
+      showFrame(currentIndex - 1);
+    });
+    nextBtn.addEventListener("click", () => {
+      setPlaying(false);
+      showFrame(currentIndex + 1);
+    });
+    refreshBtn.addEventListener("click", loadNowcastTimes);
+    timeSlider.addEventListener("input", () => {
+      setPlaying(false);
+      showFrame(Number(timeSlider.value));
+    });
+
+    resolveInitialLocation();
+    loadNowcastTimes();
+  </script>
+</body>
+</html>
