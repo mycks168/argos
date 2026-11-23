@@ -239,3 +239,14 @@ def test_default_dirs_and_bundled_definitions():
     radar = tools["rain_radar"]
     assert radar.build_argv(radar.validate_args({}))[-1] == "center"  # 地名がなければ --query を渡さない
     assert radar.build_argv(radar.validate_args({"place": "テスト駅"}))[-1] == "--query=テスト駅"
+
+
+def test_stdout_placeholder_only_in_reply(tmp_path):
+    """{stdout} は返事の中だけで使え、コマンドの出力の最後の行に置き換わる。"""
+    ok = "tools: [{name: a, description: x, command: ['{python}', -c, \"print('1行目'); print('結果だよ')\"], reply: '{stdout}'}]"
+    _write(tmp_path, "t/router.yaml", ok)
+    result = ToolRegistry((tmp_path,)).run("a")
+    assert result.ok and result.reply == "結果だよ"
+    bad = "tools: [{name: a, description: x, command: ['{stdout}'], reply: x}]"
+    with pytest.raises(ToolError, match="知らない置き換え"):
+        load_file(_write(tmp_path, "bad.yaml", bad))

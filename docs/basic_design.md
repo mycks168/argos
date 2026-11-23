@@ -250,7 +250,7 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
   | `description` | 何をするツールか。短く書く（LLMが読む） |
   | `params` | 引数。`type` は `string`（`max_length`、既定40・最大200）、`integer`（`minimum`・`maximum`）、`enum`（`choices`）。`required`（既定 true）、`description` |
   | `command` | 実行するコマンドの配列。シェルは通さない。`{引数名}` と、`{python}`（ARGOSの仮想環境のPython）、`{skill_dir}`（定義ファイルのフォルダ）、`{argos_root}` を置き換える。値のない任意引数を含む要素は省く |
-  | `reply` | 成功したときに読み上げる文。`{引数名}` を置き換える。`{by: <enum引数>, <値>: <文>, default: <文>}` で値ごとに変えられる |
+  | `reply` | 成功したときに読み上げる文。`{引数名}` を置き換える。`{by: <enum引数>, <値>: <文>, default: <文>}` で値ごとに変えられる。`{stdout}` はコマンドの標準出力の最後の空でない行（残り時間など毎回変わる返事に使う。`reply` の中だけで使える） |
   | `safety` | `display`（既定。表示の操作など、誤ってもすぐ戻せるもの）か `confirm` |
   | `timeout_seconds` | 0より大きく120以下（既定15） |
   | `undo` | 元に戻すコマンド（任意）。`argos-tool run --undo` で使う |
@@ -259,7 +259,17 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
 
 - 実行は `subprocess.run`（シェルなし）で、終了コード0を成功とする。引数は型・長さ・範囲・選択肢を検証し、知らない引数と制御文字ははじく。`uv run` は起動に約1秒かかるため使わず、`{python}` で直接動かす。
 - ツールが増えると判断が遅くなる（入力1トークン約0.12ms、出力1トークン約9ms。1ツール60トークンなら50個で約+360ms）。説明と例は短くする。増えすぎたら、分類を選んでからツールを選ぶ2段階にする。
-- 同梱の定義：`waydroid-google-maps`（`map_zoom`・`map_overview`・`map_tracking`・`map_navigate`（confirm））、`argos-screen-layout`（`screen_layout`）、`dashboard-overlay`（`dashboard_clear`・`rain_radar`）。
+- 同梱の定義：`waydroid-google-maps`（`map_zoom`・`map_overview`・`map_tracking`・`map_navigate`（confirm））、`argos-screen-layout`（`screen_layout`）、`dashboard-overlay`（`dashboard_clear`・`rain_radar`）、`timer`（`timer_start`・`timer_list`・`timer_cancel`）。
+
+タイマー（`skills/timer`）：
+
+- ARGOS本体は変えず、ツール置き場のツールとして作る。`scripts/argos_timer.py` の `start`（`--hours`・`--minutes`・`--seconds`・`--label`）・`list`・`cancel`（`--label`、なければ全部）・`fire`（`--id`）。
+- 時間を数えるのは systemd のユーザータイマー（`systemd-run --user --on-active=<秒>s --timer-property=AccuracySec=1s`、ユニット名 `argos-timer-<id>`）。タイマーごとに使い捨てのユニットを作るので、同時にいくつでも動き（同時に10個まで）、ARGOSを再起動しても消えない。常駐する見張り役は作らない。時間になると systemd が `fire` を呼ぶ。
+- 状態（id・名前・長さ・終わる時刻、画面に出しているか）は `~/.local/state/argos-timer/timers.json` に、ファイルロックをかけて保存する。終わる時刻を過ぎたものは読むときに外す。
+- 名前がなければ「タイマー1」から空いている番号、同じ名前があれば「パスタ2」のように番号を付ける（20文字まで）。`cancel --label` は完全一致、なければ前方一致の1つだけを止める（「パスタ」で「パスタ2」まで止めない）。
+- 画面：動いているタイマーを、ダッシュボードの右側に `/static/timers.html?t=<JSON>`（名前 `l`・終わる時刻のミリ秒 `e`・長さの秒 `s` の配列）で出す。ページは終わる順にリングを並べ、ブラウザの中で残り時間を数える（サーバーへは問い合わせない）。色は残り30秒で琥珀、10秒で赤、0で点滅。始める・止める・終わるたびに出し直し、2回目以降は `replace_top` で差し替える。全部なくなったら閉じる。1つ用の既存の `timer.html` とは別のページ。
+- 時間になったら、通知イベント（題名「〇〇のタイマーが終わったよ」、本文「3分たちました。」、`priority: high`、`sound`・`speak`）を1回送る。実測では、終わる時刻から通知が届くまで約0.9秒。読み上げは、ARGOSの通知の読み上げの順番待ちに従う。
+- ダッシュボードの場所とトークンは、環境変数、なければ `ARGOS_CONFIG_FILE`、なければ ARGOS のフォルダの `config.yaml` から読む（systemd から呼ばれるときは ARGOS の環境変数がないため）。
 
 `argos-tool`（エージェント向け）：
 

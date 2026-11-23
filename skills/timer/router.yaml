@@ -1,0 +1,34 @@
+# 高速振り分け（argos.router）とエージェントの argos-tool が使うツール定義。
+# 書き方は docs/basic_design.md の「ツール置き場」を参照。保存すれば再起動なしで反映される。
+tools:
+  - name: timer_start
+    description: タイマーを始める。いくつでも同時に動かせ、ダッシュボードの右側に残り時間を出す
+    params:
+      hours: {type: integer, minimum: 0, maximum: 24, required: false, description: 時間}
+      minutes: {type: integer, minimum: 0, maximum: 1440, required: false, description: 分}
+      seconds: {type: integer, minimum: 0, maximum: 86400, required: false, description: 秒}
+      label:
+        type: string
+        required: false
+        max_length: 20
+        description: 何のタイマーか（パスタ、洗濯など）。言われたときだけ
+    command: ["{python}", "{skill_dir}/scripts/argos_timer.py", "start", "--hours={hours}", "--minutes={minutes}",
+              "--seconds={seconds}", "--label={label}"]
+    reply: "{stdout}"
+    examples: [3分タイマー, パスタ7分で教えて, 30秒たったら教えて]
+  - name: timer_list
+    description: 動いているタイマーの残り時間を答える
+    command: ["{python}", "{skill_dir}/scripts/argos_timer.py", "list"]
+    reply: "{stdout}"
+    examples: [タイマーあと何分]
+  - name: timer_cancel
+    description: タイマーを止める。名前がなければ全部止める
+    params:
+      label:
+        type: string
+        required: false
+        max_length: 20
+        description: 止めるタイマーの名前。言われたときだけ
+    command: ["{python}", "{skill_dir}/scripts/argos_timer.py", "cancel", "--label={label}"]
+    reply: "{stdout}"
+    examples: [パスタのタイマー止めて, タイマー全部止めて]
