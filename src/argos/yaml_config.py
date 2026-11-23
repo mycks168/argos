@@ -46,12 +46,14 @@ SECTION_PREFIXES = {
     "notice": "ARGOS_NOTICE_",
     "notice.android": "ARGOS_NOTICE_ANDROID_",
     "window_layout": "ARGOS_WINDOW_LAYOUT_",
+    "router": "ARGOS_ROUTER_",
 }
 
 LIST_MAPPINGS = {
     ("audio", "input_devices"): ("AUDIO_INPUT_DEVICES", ";"),
     ("audio", "yield_to_apps"): ("AUDIO_YIELD_TO_APPS", ","),
     ("wakeword", "aliases"): ("ARGOS_WAKEWORD_ALIASES", ","),
+    ("router", "tool_dirs"): ("ARGOS_ROUTER_TOOL_DIRS", ";"),
     ("agent", "progress_start_phrases"): ("ARGOS_AGENT_PROGRESS_START_PHRASES", ";"),
     ("agent", "progress_wait_phrases"): ("ARGOS_AGENT_PROGRESS_WAIT_PHRASES", ";"),
     ("stt", "backchannel_phrases"): ("STT_GATEWAY_BACKCHANNEL_PHRASES", ";"),

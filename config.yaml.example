@@ -56,6 +56,15 @@ ptt:
   devices: []  # USB・Bluetooth共通の製品ID別操作設定。記入例はdocs/input_devices.md
 network:
   wifi_status_refresh_seconds: 10
+router:
+  # 文字起こしの後、ローカルLLMでツールに振り分ける（docs/basic_design.md「高速振り分けとツール置き場」）
+  enabled: false
+  mode: shadow            # shadow=判断を記録するだけ / active=ツールで片付けばエージェントを呼ばない
+  url: http://localhost:11434   # ollama（認証なし。信頼できるLAN内だけ）
+  model: gemma4:e4b
+  timeout_seconds: 0.8
+  tool_dirs: []           # 空なら skills/*/router.yaml と ~/.config/argos/router-tools/*.yaml
+  history_limit: 5        # ARGOSだけで済ませた会話を、次のエージェント依頼に付ける件数
 runtime:
   dry_run: false
 wakeword:

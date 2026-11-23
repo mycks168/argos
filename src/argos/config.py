@@ -96,6 +96,23 @@ def _stt_backchannel_silence_ms() -> int:
     return min(2000, max(0, value))
 
 
+ROUTER_MODES = ("shadow", "active")
+
+
+def _router_mode() -> str:
+    """高速振り分けの動かし方を読む。shadow=判断だけ記録、active=ツールで実行する。"""
+    value = os.environ.get("ARGOS_ROUTER_MODE", "shadow").strip().lower() or "shadow"
+    if value not in ROUTER_MODES:
+        raise ValueError("router.modeはshadowかactiveで指定してください")
+    return value
+
+
+def _router_tool_dirs() -> tuple[str, ...]:
+    """ツール定義を探す場所を読む。空なら既定（skills と ~/.config/argos/router-tools）。"""
+    raw = os.environ.get("ARGOS_ROUTER_TOOL_DIRS", "")
+    return tuple(part.strip() for part in raw.replace("\n", ";").split(";") if part.strip())
+
+
 def _stt_backchannel_skip_rate() -> float:
     """相槌を見送る割合を読み込み、0〜1にそろえる。"""
     value = float(os.environ.get("STT_GATEWAY_BACKCHANNEL_SKIP_RATE", "0.25"))
@@ -338,6 +355,14 @@ class Settings:
     stt_gateway_backchannel_skip_rate: float = 0.25
     # 話し始めてからこの時間（音声上のミリ秒）までに届いた相槌は鳴らさない。
     stt_gateway_backchannel_start_delay_ms: int = 2000
+    # 高速振り分け（argos.router）。発話をローカルLLMでツールに振り分け、片付くものはエージェントを呼ばない。
+    router_enabled: bool = False
+    router_mode: str = "shadow"
+    router_url: str = "http://localhost:11434"
+    router_model: str = "gemma4:e4b"
+    router_timeout_seconds: float = 0.8
+    router_tool_dirs: tuple[str, ...] = ()
+    router_history_limit: int = 5
     # 相槌を打つまでに続く無音の長さ（ミリ秒）。0なら stt-gateway の既定に任せる。
     stt_gateway_backchannel_silence_ms: int = 0
     tts_cache_enabled: bool = True
@@ -679,6 +704,13 @@ def load_settings() -> Settings:
         stt_gateway_backchannel_start_delay_ms=max(
             0, int(os.environ.get("STT_GATEWAY_BACKCHANNEL_START_DELAY_MS", "2000"))
         ),
+        router_enabled=_bool_env("ARGOS_ROUTER_ENABLED", False),
+        router_mode=_router_mode(),
+        router_url=os.environ.get("ARGOS_ROUTER_URL", "http://localhost:11434").strip() or "http://localhost:11434",
+        router_model=os.environ.get("ARGOS_ROUTER_MODEL", "gemma4:e4b").strip() or "gemma4:e4b",
+        router_timeout_seconds=min(5.0, max(0.1, float(os.environ.get("ARGOS_ROUTER_TIMEOUT_SECONDS", "0.8")))),
+        router_tool_dirs=_router_tool_dirs(),
+        router_history_limit=min(20, max(0, int(os.environ.get("ARGOS_ROUTER_HISTORY_LIMIT", "5")))),
         stt_gateway_backchannel_silence_ms=_stt_backchannel_silence_ms(),
         tts_filter_url=os.environ.get("TTS_FILTER_URL", ""),
         tts_filter_token=os.environ.get("TTS_FILTER_BEARER_TOKEN", ""),

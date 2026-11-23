@@ -1,0 +1,12 @@
+# 高速振り分け（argos.router）とエージェントの argos-tool が使うツール定義。
+tools:
+  - name: dashboard_clear
+    description: ARGOSダッシュボードの中央または右に出している表示を消す
+    params:
+      slot:
+        type: enum
+        choices: [center, right]
+        description: center=中央、right=右
+    command: ["{python}", "{skill_dir}/scripts/send_overlay.py", "--type", "clear", "--target-slot", "{slot}"]
+    reply: {by: slot, center: 中央の表示を消したよ。, right: 右の表示を消したよ。}
+    examples: [中央の表示を消して]

@@ -1,0 +1,16 @@
+# 高速振り分け（argos.router）とエージェントの argos-tool が使うツール定義。
+tools:
+  - name: screen_layout
+    description: ARGOSの画面とWaydroidの地図の配置を切り替える
+    params:
+      mode:
+        type: enum
+        choices: [show, hide, android, swap]
+        description: show=地図を出す、hide=地図を隠してARGOSだけ、android=地図を最大、swap=左右入れ替え
+    command: ["{python}", "-m", "argos.tools.window_layout", "{mode}"]
+    cwd: "{argos_root}"
+    env:
+      WAYLAND_DISPLAY: wayland-0
+      XDG_RUNTIME_DIR: /run/user/1000
+    reply: {by: mode, show: 地図を出したよ。, hide: 地図を隠したよ。, android: 地図を最大にしたよ。, swap: 左右を入れ替えたよ。}
+    examples: [地図を出して, 地図を隠して, 地図を最大にして]
