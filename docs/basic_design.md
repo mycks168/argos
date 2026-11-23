@@ -263,12 +263,12 @@ Runner起動時に状態ディレクトリへ `running`/`queued` のジョブが
 
 タイマー（`skills/timer`）：
 
-- ARGOS本体は変えず、ツール置き場のツールとして作る。`scripts/argos_timer.py` の `start`（`--hours`・`--minutes`・`--seconds`・`--label`）・`list`・`cancel`（`--label`、なければ全部）・`fire`（`--id`）。
+- タイマーの管理はツール置き場のツールとして作り、本体の通知APIを使う。`scripts/argos_timer.py` の `start`（`--hours`・`--minutes`・`--seconds`・`--label`）・`list`・`cancel`（`--label`、なければ全部）・`fire`（`--id`）。
 - 時間を数えるのは systemd のユーザータイマー（`systemd-run --user --on-active=<秒>s --timer-property=AccuracySec=1s`、ユニット名 `argos-timer-<id>`）。タイマーごとに使い捨てのユニットを作るので、同時にいくつでも動き（同時に10個まで）、ARGOSを再起動しても消えない。常駐する見張り役は作らない。時間になると systemd が `fire` を呼ぶ。
 - 状態（id・名前・長さ・終わる時刻、画面に出しているか）は `~/.local/state/argos-timer/timers.json` に、ファイルロックをかけて保存する。終わる時刻を過ぎたものは読むときに外す。
 - 名前がなければ「タイマー1」から空いている番号、同じ名前があれば「パスタ2」のように番号を付ける（20文字まで）。`cancel --label` は完全一致、なければ前方一致の1つだけを止める（「パスタ」で「パスタ2」まで止めない）。
 - 画面：動いているタイマーを、ダッシュボードの右側に `/static/timers.html?t=<JSON>`（名前 `l`・終わる時刻のミリ秒 `e`・長さの秒 `s` の配列）で出す。ページは終わる順にリングを並べ、ブラウザの中で残り時間を数える（サーバーへは問い合わせない）。色は残り30秒で琥珀、10秒で赤、0で点滅。始める・止める・終わるたびに出し直し、2回目以降は `replace_top` で差し替える。全部なくなったら閉じる。1つ用の既存の `timer.html` とは別のページ。
-- 時間になったら、通知イベント（題名「〇〇のタイマーが終わったよ」、本文「3分たちました。」、`priority: high`、`sound`・`speak`）を1回送る。実測では、終わる時刻から通知が届くまで約0.9秒。読み上げは、ARGOSの通知の読み上げの順番待ちに従う。
+- 時間になったら、通知イベント（題名「〇〇のタイマーが終わったよ」、本文「3分たちました。」、`priority: high`、`sound: "alarm"`・`speak: true`）を1回送る。実測では、終わる時刻から通知が届くまで約0.9秒。外部通知の処理で、再生中の音声が終わるのを待って専用音を鳴らし、そのあとに終了を1回読み上げる。汎用の通知読み上げは重ねない。
 - ダッシュボードの場所とトークンは、環境変数、なければ `ARGOS_CONFIG_FILE`、なければ ARGOS のフォルダの `config.yaml` から読む（systemd から呼ばれるときは ARGOS の環境変数がないため）。
 
 `argos-tool`（エージェント向け）：
@@ -688,6 +688,8 @@ AUDIO_INPUT_DEVICES=plughw:CARD=H2,DEV=0;plughw:CARD=Microphone,DEV=0
   - 導入手順: `scripts/setup-echo-cancel.sh` が (1) PipeWire永続ドロップイン（既定入出力に追従する`ec-source`/`ec-sink`ノード）、(2) `/etc/asound.conf`のブリッジPCM`ec_source`/`ec_sink`（sudo要）、(3) WirePlumberドロップイン（サスペンド無効化＋HDMI headroom増）、(4) 既定sink音量100%固定 を書き込む。`default`は変更しないため通常運用には影響しない。依存が不足していれば案内して中断し、`--install-deps`で`pipewire-alsa`と`libspa-0.2-modules`をapt導入できる。反映（`systemctl --user restart pipewire pipewire-pulse wireplumber`）後は`aplay -D ec_sink ...`で疎通確認してから、`config.yaml`の`audio.output_device: ec_sink`、`audio.input_devices: [ec_source]`、`wakeword.bargein_enabled: true`を設定する。デバイス名は環境で変わるためPipeWireの既定デバイスに紐付けて移植性を確保しており、Raspberry Pi OS / Ubuntu 共通。これらの設定はファイルとして永続するため再起動後も有効。車載やデスクトップUbuntuなど環境が変わる場合は同条件でエコー抑制を再計測する
   - 元に戻す: `scripts/setup-echo-cancel.sh --revert` でPipeWireドロップイン、`/etc/asound.conf`のARGOSブロック、WirePlumberドロップインを削除する（`default`や既存`config.yaml`、既定sink音量には触れない）。反映は `systemctl --user restart pipewire pipewire-pulse wireplumber`。`config.yaml`側で入出力デバイスや`wakeword.bargein_enabled`を変更していた場合はそちらも戻す
 - 通知の読み上げ: 運転中など画面を見られないときのため、通知を声でも知らせる（`notice.speak`、`ARGOS_NOTICE_SPEAK`、既定は有効。dry-runでは無効）。`DashboardState.add_notification_listener` に登録した `NoticeSpeaker`（`argos.core.notice_speaker`）が、追加された通知を順番に読み上げる。
+  - 明示的な音声指定: `/api/events` の通知に `speak` がある場合は、状態に `sender_speaks: true` を付け、汎用の通知読み上げを省く。`speak: true` は外部通知の処理だけが題名と本文を1回読み、`speak: false` は読まない。どちらも画面の通知は残す。`speak` 省略時は従来の読み上げ基準を使う。
+  - 通知音: `sound: "alarm"` は短い電子音4回を3組（約2.64秒）鳴らすタイマー専用音。`sound: true` は従来どおり起動ジングルを使う。音量はARGOSの音量設定に従い、`speak: true` なら通知音のあとに読み上げる。
   - 対象: ダッシュボードのSP表示で通知欄を自動で開く対象と同じ基準（`argos.services.notice_speech.should_speak`）。外部の通知と優先度が高い通知が対象で、ARGOS自身の通常の通知（`source: ARGOS`、優先度 `normal`）は読まない。ただし、別のスロットで応答が終わった通知（`source: ARGOS`、題名が「応答完了」で終わるもの。「Claude 応答完了」「Codex 端末応答完了」など）は、そのスロットの応答が切り替えるまで声に出ないため、読み上げ・通知欄の自動表示の対象にする。読み上げは「<スロット名>の応答が終わったよ。」で、通知ごとに別のkeyにするので、続けて届いても抑制しない。
   - 内容: 外部の通知は「<発信元>から通知だよ。<題名>。<本文>」の形で、URLと改行を除き、本文は `notice.speak_max_chars`（既定60文字）で切る。内部エラーは、生のエラー文を読まず、決まった言葉（`ERROR_PHRASES`: `音声合成`=「声を作れなかったよ。」、`音声認識`・`文字起こし`=「音声を認識できなかったよ。」、`音声再生`=「音声を再生できなかったよ。」）だけを読む。VOICEVOX・stt-gatewayの失敗（代替で続く）と、エージェントの失敗（別に読み上げる）は、二重に知らせないため読まない。
   - 重ならない・待つ条件: 通知の声は、いまの会話の邪魔にならないよう、次の間は待つ。

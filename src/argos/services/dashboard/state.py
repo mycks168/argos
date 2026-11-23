@@ -400,6 +400,7 @@ class DashboardState:
         duration_seconds: float = 0.0,
         speech_title: str = "",
         speech_text: str = "",
+        sender_speaks: bool = False,
     ) -> str:
         """外部通知を追加し、通知IDを返す。
 
@@ -408,6 +409,9 @@ class DashboardState:
         中央アラートの自動消去秒数で、0以下ならタップで閉じるまで残す。
         speech_title と speech_text は読み上げ用の題名と本文（要約など）で、指定がなければ
         title と text を読み上げる。
+        sender_speaks は、送り手が読み上げるかどうかを指定した（イベントに speak がある）通知。
+        その場合は外部通知の処理（ArgosApp._announce_dashboard_notification）が読み上げを決めるので、
+        通知の読み上げ（NoticeSpeaker）は読まない（同じ通知を2回読まないため）。
         """
         notification_id = uuid.uuid4().hex
         with self._lock:
@@ -427,6 +431,8 @@ class DashboardState:
                 notice["speech_title"] = speech_title
             if speech_text:
                 notice["speech_text"] = speech_text
+            if sender_speaks:
+                notice["sender_speaks"] = True
             self._notifications.append(notice)
             if display == "center":
                 self._center_alert = {"active": True, **notice, "updated_at": _now_iso()}

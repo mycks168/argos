@@ -947,6 +947,8 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
             link_url=_optional_text(payload, "link_url", 2000),
             display=display,
             duration_seconds=_optional_number(payload, "duration_seconds"),
+            # speak を指定した通知は、外部通知の処理が読み上げを決める（通知の読み上げとの二重読みを防ぐ）。
+            sender_speaks="speak" in payload,
         )
         return {"id": notification_id}
     if event_type == "clear_center_alert":

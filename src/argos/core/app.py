@@ -71,7 +71,7 @@ from argos.services.bluetooth_chime import BluetoothConnectionChime, build_bluet
 from argos.services.bluetooth_devices import read_connected_bluetooth_types
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
-from argos.services.startup import build_startup_chime
+from argos.services.startup import build_alarm_sound, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.stt.debug_recording import save_debug_recording
 from argos.services.stt.stream import SttStreamClient, SttStreamUtterance, build_start_options
@@ -1756,7 +1756,10 @@ class ArgosApp:
         self._wait_for_notification_audio_slot()
         if payload.get("sound") and not self._settings.dry_run:
             try:
-                self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
+                # sound: "alarm" はタイマーなど、気づいてほしい通知のアラーム音。それ以外の真値は通知のジングル。
+                rate = self._settings.voicevox_sample_rate
+                sound = build_alarm_sound(rate) if payload.get("sound") == "alarm" else build_startup_chime(rate)
+                self._audio.play_wav(sound)
             except Exception as exc:
                 log.exception("通知音の再生に失敗しました")
                 self._report_error("通知音", exc)
