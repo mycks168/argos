@@ -481,7 +481,7 @@ Chromiumは接続待ち画面 `scripts/kiosk-splash.html` をsnapからアクセ
 
 4. **雨雲レーダー表示（`rain_radar.html`）**
    - `/static/rain_radar.html` は、Leaflet 上に気象庁「高解像度降水ナウキャスト」（`targetTimes_N1.json` の直近実況と `targetTimes_N2.json` の最大60分先予測、5分刻み）を重ねて表示する。ベース地図のペインのみダーク反転フィルターを掛け、雨雲タイル自体は元の降水強度色（弱〜猛烈）のまま透過表示する。
-   - 位置指定がない場合は `/api/location` を参照し、現在地が取得できない環境では、`dashboard.rain_radar_default`（`ARGOS_DASHBOARD_RAIN_RADAR_DEFAULT`、「緯度,経度,表示名」）の地点を表示する。設定がない、または読めないときは、既存の地図と同じ東京（`35.6895, 139.6917`）にする。利用者の地域をソースに書かないため、地点は設定で決める。`show_rain_radar.py` が地点を決めてURLの `lat`・`lng`・`label` で渡す。下部コントロールバーはどの解像度でも収まるレスポンシブ配置とし、5分刻みのスライダー操作と自動再生の切り替えに対応する。
+   - 位置指定がない場合は `/api/location` を参照し、現在地が取得できない環境では、`dashboard.rain_radar_default`（`ARGOS_DASHBOARD_RAIN_RADAR_DEFAULT`、「緯度,経度,表示名」）の地点を表示する。設定がない、または読めないときは、既存の地図と同じ東京（`35.6895, 139.6917`）にする。利用者の地域をソースに書かないため、地点は設定で決める。`show_rain_radar.py` が地点を決めてURLの `lat`・`lng`・`label` で渡す。設定は環境変数、なければ `ARGOS_CONFIG_FILE`、それもなければ ARGOS のフォルダの `config.yaml` から読む（作業フォルダに左右されないため。ツール置き場から動かすと作業フォルダはスキルのフォルダになる）。下部コントロールバーはどの解像度でも収まるレスポンシブ配置とし、5分刻みのスライダー操作と自動再生の切り替えに対応する。
 
 5. **現在地取得API (`GET /api/location`)**
    - 既定ではローカルのgpsdを優先し、使えない場合だけGPSデバイスから短時間だけNMEAを読み、現在地をJSONで返す。

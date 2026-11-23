@@ -18,6 +18,8 @@ import send_overlay  # noqa: E402
 # 既存の地図（map.html・nav.html）と同じ東京の座標にそろえる。利用者の地域はソースに書かない。
 FALLBACK_LOCATION = (35.6895, 139.6917, "東京")
 DEFAULT_ENV = "ARGOS_DASHBOARD_RAIN_RADAR_DEFAULT"
+# このスクリプトは <ARGOS>/skills/dashboard-overlay/scripts/ にある。
+ARGOS_ROOT = Path(__file__).resolve().parents[3]
 
 
 def parse_default_location(value: str) -> tuple[float, float, str] | None:
@@ -42,7 +44,9 @@ def default_location() -> tuple[float, float, str]:
         try:
             from argos.yaml_config import load_yaml_environment
 
-            value = load_yaml_environment().get(DEFAULT_ENV, "")
+            # 作業フォルダに関係なく読めるよう、ARGOS_CONFIG_FILE がなければ ARGOS のフォルダの config.yaml を読む。
+            config = os.environ.get("ARGOS_CONFIG_FILE") or str(ARGOS_ROOT / "config.yaml")
+            value = load_yaml_environment(Path(config).expanduser()).get(DEFAULT_ENV, "")
         except Exception:
             value = ""
     return parse_default_location(value) or FALLBACK_LOCATION
