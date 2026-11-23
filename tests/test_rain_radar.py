@@ -143,10 +143,23 @@ def test_default_location_from_setting(monkeypatch):
     monkeypatch.delenv(mod.DEFAULT_ENV)
     import argos.yaml_config as yaml_config
 
-    monkeypatch.setattr(yaml_config, "load_yaml_environment", lambda: {mod.DEFAULT_ENV: "33.5,130.4,設定の地点"})
-    assert mod.default_location() == (33.5, 130.4, "設定の地点")
+    read = []
 
-    def broken():
+    def fake_load(path):
+        """読んだ設定ファイルを記録して、設定を返す。"""
+        read.append(path)
+        return {mod.DEFAULT_ENV: "33.5,130.4,設定の地点"}
+
+    monkeypatch.setattr(yaml_config, "load_yaml_environment", fake_load)
+    monkeypatch.delenv("ARGOS_CONFIG_FILE", raising=False)
+    assert mod.default_location() == (33.5, 130.4, "設定の地点")
+    # 作業フォルダではなく、ARGOS のフォルダの config.yaml を読む。
+    assert read[-1] == mod.ARGOS_ROOT / "config.yaml"
+    monkeypatch.setenv("ARGOS_CONFIG_FILE", "/tmp/other.yaml")
+    mod.default_location()
+    assert str(read[-1]) == "/tmp/other.yaml"
+
+    def broken(path):
         """設定を読めない場合。"""
         raise OSError("no config")
 
