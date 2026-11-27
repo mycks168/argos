@@ -9,6 +9,8 @@ import threading
 import numpy as np
 import pytest
 
+import argos.services.stt.stream as stream_module
+
 from argos.services.stt.stream import (
     ARGOS_ACK_OPTIONS,
     build_start_options,
@@ -401,6 +403,44 @@ def test_argos_ack_prompt_keeps_listener_wording():
     assert 0 < len(ARGOS_ACK_OPTIONS["examples"]) <= 8
     assert len(ARGOS_ACK_OPTIONS["fallback_text"]) <= 50
 
+
+def test_argos_ack_prompt_varies_by_kind_without_promising_work():
+    """返事は話の種類ごとに取りかかる言い方だけを選び、作業の中身や書き出しは作らせない。"""
+    prompt = ARGOS_ACK_OPTIONS["system_prompt"]
+    for phrase in ("別の担当", "調べるね", "やってみるね", "見てみるね", "考えるね", "あいさつ", "中身は言わず"):
+        assert phrase in prompt
+    replies = [example["reply"] for example in ARGOS_ACK_OPTIONS["examples"]]
+    # 例は種類ごとに1組。書き出しを付けず、「やってみるね」は1組だけにする。
+    assert len(replies) == 5
+    assert all(len(reply) <= 10 for reply in replies)
+    assert sum("やってみる" in reply for reply in replies) == 1
+    assert not any(reply.startswith(stream_module.ACK_OPENERS[:-1]) for reply in replies)
+
+
+def test_add_ack_opener_varies_and_skips_non_action(monkeypatch):
+    """取りかかる言い方の返事だけに、直前と違う書き出しを付ける。"""
+    monkeypatch.setattr(stream_module, "_last_opener", None)
+    first = stream_module.add_ack_opener("調べるね。", choice=lambda options: options[0])
+    assert first == "えっと、調べるね。"
+    # 直前の「えっと、」は候補から外れる。
+    second = stream_module.add_ack_opener("見てみるね。", choice=lambda options: options[0])
+    assert second == "じゃあ、見てみるね。"
+    # 空の書き出し（付けない）も選べる。
+    assert stream_module.add_ack_opener("考えるね。", choice=lambda options: "") == "考えるね。"
+    # あいさつ・固定の文言・すでに書き出しがある返事には付けない。
+    for text in ("お疲れさま！", "えっと、ちょっと待ってね。", "うん、やってみるね。", "電源切るね。"):
+        assert stream_module.add_ack_opener(text, choice=lambda options: "よし、") == text
+    assert stream_module.add_ack_opener("ちょっと確認してみるね。", choice=lambda options: "よし、") == "よし、ちょっと確認してみるね。"
+
+
+def test_wait_ack_adds_opener(monkeypatch):
+    """wait_ack は、届いた返事に書き出しを付けて返す。"""
+    monkeypatch.setattr(stream_module, "add_ack_opener", lambda text: "うん、" + text)
+    ws = FakeWebSocket(on_end=_reply(transcript="天気どう？", ack="調べるね。"))
+    utterance, _ = _utterance(ws)
+    utterance.feed(_pcm(0.3))
+    assert utterance.finish(timeout=5) == "天気どう？"
+    assert utterance.wait_ack(5) == "うん、調べるね。"
 
 def test_start_message_includes_options():
     """start に指定を付けて送る。"""

@@ -190,6 +190,12 @@ uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/s
 uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot center
 ```
 
+中央と右に重なっている表示を全部消すときは、`all` を指定します（1回で既定の表示まで戻ります）。
+
+```bash
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/send_overlay.py --type clear --target-slot all
+```
+
 ## 中央と右を入れ替える
 
 ```bash
@@ -229,5 +235,25 @@ uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/g
 - `--dry-run`: ダッシュボードに送信せず、HTML生成のみを行う
 
 生成されたHTMLはダッシュボードの静的ディレクトリ（`/static/typhoon_map.html`）に保存され、ダッシュボードに送信されます。
+
+## 雨雲レーダー（高解像度降水ナウキャスト）の表示
+
+気象庁の高解像度降水ナウキャスト（直近30分の実況〜最大60分先の予測、5分刻み）を地図上へ重ねてアニメーション表示します。
+
+```bash
+# 現在地（GPS取得不可時は config.yaml の dashboard.rain_radar_default、なければ東京）の雨雲レーダーを中央へ表示
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/show_rain_radar.py --target-slot center
+
+# 地名を指定して右ペインへ表示
+uv run python ${ARGOS_SKILLS_DIR:-/opt/argos/skills}/dashboard-overlay/scripts/show_rain_radar.py -q "東京駅" --target-slot right
+```
+
+- `-q / --query`: 表示したい地名・駅名（国土地理院APIで座標を解決。省略時は `/api/location` → `dashboard.rain_radar_default` → 東京）
+- `--lat` / `--lng`: 中心の緯度・経度を直接指定
+- `--zoom`: 初期ズームレベル（既定: `10`）
+- `--target-slot`: 表示先スロット（`center` または `right`、既定: `center`）
+- `--no-play`: 自動再生アニメーションをオフにして初期表示する
+- `--dry-run`: 送信せずペイロードJSONのみを確認する
+
 
 

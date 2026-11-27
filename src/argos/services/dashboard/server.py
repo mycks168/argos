@@ -947,6 +947,8 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
             link_url=_optional_text(payload, "link_url", 2000),
             display=display,
             duration_seconds=_optional_number(payload, "duration_seconds"),
+            # speak を指定した通知は、外部通知の処理が読み上げを決める（通知の読み上げとの二重読みを防ぐ）。
+            sender_speaks="speak" in payload,
         )
         return {"id": notification_id}
     if event_type == "clear_center_alert":
@@ -980,7 +982,8 @@ def _apply_event(state: DashboardState, payload: dict[str, Any]) -> dict[str, An
         target_slot = _optional_text(payload, "target_slot", 20) or "all"
         if target_slot not in {"center", "right", "all"}:
             raise ValueError(f"無効な target_slot です: {target_slot}")
-        state.pop_overlay(target_slot)
+        # all_layers が真なら、重なった表示をすべて消す（「全部消して」）。
+        state.pop_overlay(target_slot, all_layers=payload.get("all_layers") is True)
         return {"status": "overlay_cleared"}
     if event_type == "swap_slots":
         state.swap_slots()

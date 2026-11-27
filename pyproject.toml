@@ -42,6 +42,7 @@ wakeword = [
 argos = "argos.main:main"
 argos-agent-runner = "argos.agent_runner_main:main"
 argos-install = "argos.installer:main"
+argos-tool = "argos.tools.argos_tool:main"
 
 [build-system]
 requires = ["hatchling"]

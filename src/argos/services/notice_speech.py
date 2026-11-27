@@ -84,6 +84,9 @@ def build_plan(notice: dict[str, Any], max_chars: int = 60) -> SpeechPlan | None
     """通知から読み上げ方を作る。読み上げない通知ならNoneを返す。"""
     if not should_speak(notice):
         return None
+    if notice.get("sender_speaks"):
+        # 送り手が speak を指定した通知は、外部通知の処理が読み上げる（ここで読むと2回になる）。
+        return None
     source = str(notice.get("source", "")).strip()
     title = str(notice.get("title", "")).strip()
     if is_response_ready(notice):

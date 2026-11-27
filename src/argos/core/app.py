@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import datetime
 import hashlib
 import json
 import logging
@@ -50,6 +51,8 @@ from argos.hardware.input_profiles import ProfileInput, matches_device, parse_pr
 from argos.hardware.gpio import GpioPttInput
 from argos.hardware.lcd import St7789TextDisplay
 from argos.core.backchannel_player import BackchannelPlayer
+from argos.router.fast_router import FastRouter
+from argos.router.registry import ToolError, ToolRegistry
 from argos.services.acknowledgement import AcknowledgementClient
 from argos.services.agent import create_agent_client
 from argos.services.agent.runner_client import RunnerSlotBusyError
@@ -68,7 +71,7 @@ from argos.services.bluetooth_chime import BluetoothConnectionChime, build_bluet
 from argos.services.bluetooth_devices import read_connected_bluetooth_types
 from argos.services.network import read_wifi_status
 from argos.services.security_alert import SecurityAlertDispatcher
-from argos.services.startup import build_startup_chime
+from argos.services.startup import build_alarm_sound, build_startup_chime
 from argos.services.stt.gateway import SttGatewayClient
 from argos.services.stt.debug_recording import save_debug_recording
 from argos.services.stt.stream import SttStreamClient, SttStreamUtterance, build_start_options
@@ -135,6 +138,27 @@ FIRST_REPLY_AGENT_HINT = (
     "（音声会話の補足：あなたの回答の前に、ARGOSがすでに短い返事をしています。"
     "回答は受け止めや相槌の言葉から始めず、本題から話してください。）"
 )
+
+
+def _relative_time(then: datetime.datetime, now: datetime.datetime) -> str:
+    """何分前・何時間前かを、短い日本語で返す。"""
+    minutes = int((now - then).total_seconds() // 60)
+    if minutes < 1:
+        return "1分以内"
+    if minutes < 60:
+        return f"{minutes}分前"
+    hours = minutes // 60
+    return f"{hours}時間前" if hours < 48 else f"{hours // 24}日前"
+
+
+def _format_local_turns(turns: list[tuple[datetime.datetime, str, str]], now: datetime.datetime) -> str:
+    """エージェントが知らない、ARGOSだけで済ませた会話を、時刻付きの会話履歴として書く。"""
+    lines = [
+        f"- {then.month}月{then.day}日 {then.hour}:{then.minute:02d}（{_relative_time(then, now)}） "
+        f"利用者「{user}」 ARGOS「{reply}」"
+        for then, user, reply in turns
+    ]
+    return "（前の会話：\n" + "\n".join(lines) + "\n）\n"
 
 
 def _prompt_after_first_reply(text: str) -> str:
@@ -263,6 +287,23 @@ class ArgosApp:
         )
         self._utterance_stream: SttStreamUtterance | None = None
         self._utterance_stream_lock = threading.Lock()
+        # 高速振り分け。ツール置き場は発話のたびに更新を確かめるので、ツールを足しても再起動は要らない。
+        self._tool_registry = ToolRegistry(
+            tuple(Path(d).expanduser() for d in settings.router_tool_dirs) if settings.router_tool_dirs else None
+        )
+        self._fast_router: FastRouter | None = (
+            FastRouter(
+                self._tool_registry,
+                url=settings.router_url,
+                model=settings.router_model,
+                timeout_seconds=settings.router_timeout_seconds,
+            )
+            if settings.router_enabled and not settings.dry_run
+            else None
+        )
+        # ARGOSだけで済ませた会話（時刻, 発話, 返事）。次にエージェントへ頼むとき、会話履歴として付ける。
+        self._local_turns: list[tuple[datetime.datetime, str, str]] = []
+        self._local_turns_lock = threading.Lock()
         self._local_stt = FasterWhisperClient(
             settings.whisper_model_size,
             settings.stt_language,
@@ -1715,7 +1756,10 @@ class ArgosApp:
         self._wait_for_notification_audio_slot()
         if payload.get("sound") and not self._settings.dry_run:
             try:
-                self._audio.play_wav(build_startup_chime(self._settings.voicevox_sample_rate))
+                # sound: "alarm" はタイマーなど、気づいてほしい通知のアラーム音。それ以外の真値は通知のジングル。
+                rate = self._settings.voicevox_sample_rate
+                sound = build_alarm_sound(rate) if payload.get("sound") == "alarm" else build_startup_chime(rate)
+                self._audio.play_wav(sound)
             except Exception as exc:
                 log.exception("通知音の再生に失敗しました")
                 self._report_error("通知音", exc)
@@ -1837,7 +1881,8 @@ class ArgosApp:
         if first_reply is None:
             self._handle_text(transcript)
         else:
-            self._handle_text(transcript, first_reply=first_reply)
+            # 高速振り分けでツールが片付けたときは最初の返事を使わないので、接続を閉じられるようにする。
+            self._handle_text(transcript, first_reply=first_reply, discard_first_reply=stream.close)
 
     def _first_reply_from(self, stream: SttStreamUtterance | None) -> Callable[[], str | None] | None:
         """ストリーミングで送った発話から、最初の返事を待って取り出す関数を返す。"""
@@ -1918,10 +1963,17 @@ class ArgosApp:
             self._report_error("stt-gateway", gateway_error)
         return self._local_stt.transcribe(wav_path)
 
-    def _handle_text(self, text: str, *, first_reply: Callable[[], str | None] | None = None) -> None:
+    def _handle_text(
+        self,
+        text: str,
+        *,
+        first_reply: Callable[[], str | None] | None = None,
+        discard_first_reply: Callable[[], None] | None = None,
+    ) -> None:
         """テキストをLLMエージェントに送り、応答を読み上げる。
 
         first_reply は、待機中の開始メッセージに使う最初の返事を返す関数（stt-gateway の ack）。
+        高速振り分けが有効なら、先にツールで片付くか確かめる（片付いたらエージェントは呼ばない）。
         """
         log.info("ユーザ発話: %s", text)
         slot_name = self._agent.current_name
@@ -1929,6 +1981,8 @@ class ArgosApp:
         slot_key = _app_slot_key(slot_name, slot_provider)
         handle_generation = self._current_cancel_generation()
         self._dashboard_state.add_message("user", text)
+        if self._route_with_tools(text, handle_generation, discard_first_reply):
+            return
         self._dashboard_state.set_slot_busy(slot_name, slot_provider, True)
         self._status.set(handle_generation, "thinking", "考え中")
         announcer = self._start_agent_progress(text, slot_key, first_reply)
@@ -1937,6 +1991,7 @@ class ArgosApp:
         prompt = text
         if announcer is not None and announcer.used_first_reply:
             prompt = _prompt_after_first_reply(text)
+        prompt = self._with_local_turns(prompt)
         dashboard_message_id = self._dashboard_state.add_message("assistant", "", streaming=True)
         try:
             response = self._speech.speak_response_stream(
@@ -1967,6 +2022,75 @@ class ArgosApp:
             if announcer is not None:
                 announcer.stop()
             self._status.finish(handle_generation)
+
+    def _route_with_tools(
+        self, text: str, generation: int, discard_first_reply: Callable[[], None] | None
+    ) -> bool:
+        """高速振り分けでツールが片付けたら True を返す。それ以外は False（エージェントへ渡す）。
+
+        shadow モードでは判断を別スレッドで記録するだけで、必ず False を返す（待たせない）。
+        エージェントは振り分けを知らないので、失敗したときは何も付けずにそのまま渡す。
+        """
+        router = self._fast_router
+        if router is None:
+            return False
+        if self._settings.router_mode != "active":
+            threading.Thread(target=self._log_shadow_route, args=(text,), name="router-shadow", daemon=True).start()
+            return False
+        decision = router.decide(text)
+        log.info("振り分け: %s → %s %s (%.0fms, %s)", text, decision.tool or "エージェント",
+                 json.dumps(decision.args, ensure_ascii=False), decision.elapsed_ms, decision.reason)
+        if decision.tool is None:
+            return False
+        try:
+            spec = router.spec(decision.tool)
+        except ToolError:
+            return False
+        if spec.safety != "display":
+            # 確認が必要なツール（ナビ開始など）は、確認の流れができるまでエージェントへ渡す。
+            log.info("確認が必要なツールのため、エージェントへ渡します: %s", spec.name)
+            return False
+        self._status.set(generation, "thinking", "考え中")
+        try:
+            result = self._tool_registry.run(spec.name, decision.args)
+        except ToolError as exc:
+            log.warning("ツールを実行できませんでした: %s: %s", spec.name, exc)
+            return False
+        if not result.ok:
+            log.warning("ツールが失敗したため、エージェントへ渡します: %s %s", spec.name, result.stderr[-300:])
+            return False
+        if discard_first_reply is not None:
+            discard_first_reply()
+        self._dashboard_state.add_message("assistant", result.reply)
+        with self._local_turns_lock:
+            self._local_turns.append((datetime.datetime.now(), text, result.reply))
+            del self._local_turns[: -max(1, self._settings.router_history_limit)]
+        self._save_conversation_history()
+        self._speech.speak_status(result.reply)
+        self._status.finish(generation)
+        return True
+
+    def _log_shadow_route(self, text: str) -> None:
+        """様子見モード：振り分けの判断だけをログに残す（実行しない）。"""
+        router = self._fast_router
+        if router is None:
+            return
+        decision = router.decide(text)
+        log.info("振り分け（様子見）: %s → %s %s (%.0fms, %s)", text, decision.tool or "エージェント",
+                 json.dumps(decision.args, ensure_ascii=False), decision.elapsed_ms, decision.reason)
+
+    def _with_local_turns(self, prompt: str) -> str:
+        """ARGOSだけで済ませた会話があれば、時刻付きの会話履歴として依頼の前に付ける。
+
+        エージェントはその会話を知らないため。付けたら空にする（次の依頼へは持ち越さない）。
+        """
+        if self._settings.router_history_limit <= 0:
+            return prompt
+        with self._local_turns_lock:
+            turns, self._local_turns = self._local_turns, []
+        if not turns:
+            return prompt
+        return _format_local_turns(turns, datetime.datetime.now()) + prompt
 
     def _save_conversation_history(self) -> None:
         """有効時だけ現在の全スロット表示履歴を永続化する。"""

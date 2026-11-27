@@ -208,3 +208,10 @@ def test_response_plan_keeps_slot_name(title, slot, text):
     assert plan.slot == slot
     assert plan.text == text
     assert build_plan(notice(title="件名")).slot == ""
+
+
+def test_sender_speaks_notice_is_left_to_sender():
+    """送り手が speak を指定した通知は、外部通知の処理が読むので、ここでは読まない（二重読み防止）。"""
+    notice = {"title": "パスタのタイマーが終わったよ", "text": "3分たちました。", "source": "タイマー", "priority": "high"}
+    assert build_plan(notice) is not None
+    assert build_plan({**notice, "sender_speaks": True}) is None

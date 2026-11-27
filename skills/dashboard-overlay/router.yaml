@@ -1,0 +1,23 @@
+# 高速振り分け（argos.router）とエージェントの argos-tool が使うツール定義。
+tools:
+  - name: dashboard_clear
+    description: ARGOSダッシュボードの中央または右に出している表示を消す
+    params:
+      slot:
+        type: enum
+        choices: [center, right, all]
+        description: center=中央の一番上の表示、right=右の一番上の表示、all=中央と右の表示を全部
+    command: ["{python}", "{skill_dir}/scripts/send_overlay.py", "--type", "clear", "--target-slot", "{slot}"]
+    reply: {by: slot, center: 中央の表示を消したよ。, right: 右の表示を消したよ。, all: 表示を全部消したよ。}
+    examples: [中央の表示を消して, 表示を全部消して]
+  - name: rain_radar
+    description: 気象庁の雨雲レーダー（実況と60分先までの予測）をARGOSダッシュボードの中央に表示する
+    params:
+      place:
+        type: string
+        required: false
+        max_length: 30
+        description: 見たい地名や駅名。言われたときだけ（なければ現在地）
+    command: ["{python}", "{skill_dir}/scripts/show_rain_radar.py", "--target-slot", "center", "--query={place}"]
+    reply: 雨雲レーダーを出したよ。
+    examples: [雨雲レーダー見せて, 東京駅の雨雲見せて]

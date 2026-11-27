@@ -2,6 +2,7 @@ import json
 import logging
 import tempfile
 from contextlib import contextmanager
+from dataclasses import replace as dataclasses_replace
 
 import pytest
 
@@ -685,6 +686,40 @@ def test_dashboard_notification_event_can_speak(monkeypatch, capsys):
     assert snapshot["display_activity"]["sequence"] == 1
     output = capsys.readouterr().out
     assert "予定。旅費申請" in output
+
+
+def test_dashboard_notification_sound_alarm_or_chime(monkeypatch):
+    """sound: "alarm" はアラーム音、それ以外の真値は起動ジングルを鳴らす。"""
+    _patch_app(monkeypatch)
+    app = ArgosApp(dataclasses_replace(_settings(), dry_run=False))
+    played = []
+    monkeypatch.setattr(app._audio, "play_wav", lambda wav: played.append(wav) or True)
+    monkeypatch.setattr("argos.core.app.build_alarm_sound", lambda rate: b"ALARM")
+    monkeypatch.setattr("argos.core.app.build_startup_chime", lambda rate: b"CHIME")
+    app._announce_dashboard_notification({"type": "notification", "title": "x", "sound": "alarm"})
+    app._announce_dashboard_notification({"type": "notification", "title": "x", "sound": True})
+    assert played == [b"ALARM", b"CHIME"]
+
+
+@pytest.mark.parametrize("speak", [True, False])
+def test_dashboard_notification_with_speak_is_read_once(monkeypatch, speak):
+    """speak を指定した外部通知は、通知の読み上げ係には渡しても読まれない（外部通知の処理だけが読む）。"""
+    from argos.services.dashboard.server import _apply_event
+    from argos.services.notice_speech import build_plan
+
+    _patch_app(monkeypatch)
+    app = ArgosApp(_settings())
+    seen = []
+    app._dashboard_state.add_notification_listener(seen.append)
+    _apply_event(app._dashboard_state, {"type": "notification", "title": "終わったよ", "source": "タイマー", "speak": speak})
+    _apply_event(app._dashboard_state, {"type": "notification", "title": "お知らせ", "source": "外部"})
+    assert seen[0]["sender_speaks"] is True and build_plan(seen[0]) is None
+    assert "sender_speaks" not in seen[1] and build_plan(seen[1]) is not None
+    assert any(item["title"] == "終わったよ" for item in app._dashboard_state.snapshot()["notifications"])
+    spoken = []
+    monkeypatch.setattr(app._speech, "speak_status", spoken.append)
+    app._announce_dashboard_notification({"title": "終わったよ", "speak": speak})
+    assert spoken == (["終わったよ"] if speak else [])
 
 
 def test_app_restores_audio_state(monkeypatch, tmp_path):
