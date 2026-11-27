@@ -4,6 +4,8 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>ARGOS 設定</title>
+  <link rel="stylesheet" href="/static/idle_screen.css">
+  <script src="/static/idle_screen.js"></script>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #081016; color: #edf4f7; }
     * { box-sizing: border-box; }
@@ -80,6 +82,7 @@
       </div>
       <a id="back-link" class="back" href="/?from=settings">戻る</a>
     </header>
+    <section id="idle-settings" class="card"></section>
     <input id="search" class="search" type="search" placeholder="設定名や説明を検索">
     <div id="form"><div class="empty">設定を読み込んでいます…</div></div>
   </main>
@@ -91,6 +94,7 @@
     </div>
   </div>
   <script>
+    ArgosIdleScreen.mountSettings(document.getElementById("idle-settings"), __ARGOS_IDLE_CONFIG__);
     const backLink = document.getElementById("back-link");
     if (new URLSearchParams(window.location.search).get("from") === "grid") backLink.href = "/grid";
     const dashboardToken = __ARGOS_DASHBOARD_TOKEN__;

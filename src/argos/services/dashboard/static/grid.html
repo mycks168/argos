@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARGOS スロット一覧</title>
   <link rel="stylesheet" href="/static/message_view.css">
+  <link rel="stylesheet" href="/static/idle_screen.css">
+  <script src="/static/idle_screen.js"></script>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #070b0f; color: #edf3f7; }
     * { box-sizing: border-box; }
@@ -105,7 +107,9 @@
     let pttReleasePending = false;
     let isMuted = false;
     let recordingPlaybackGeneration = 0;
+    let audioPlaybackState = "idle";
     const audioPlayer = new ArgosBrowserAudio.AudioPlayer({
+      onStateChange: state => { audioPlaybackState = state; if (state !== "idle") idleScreen.reset(); },
       onError: error => {
         console.error("回答音声の再生に失敗しました", error);
         const focusedTile = document.activeElement?.closest?.(".tile");
@@ -119,6 +123,12 @@
       onError:error => console.error("子の回答取得に失敗しました", error),
     });
     let latestState = null;
+    const idleScreen = new ArgosIdleScreen.Screen({
+      ...__ARGOS_IDLE_CONFIG__,
+      isBusy: () => Boolean(recordingSlotKey) || audioPlaybackState !== "idle"
+        || Boolean(latestState?.slots?.some(slot => slot.busy))
+        || ArgosIdleScreen.isActiveStatus(latestState?.status?.code) || usageDialog.open,
+    });
 
     const slotKey = slot => `${slot.provider}\u0000${slot.name}`;
     const authHeaders = extra => dashboardToken
@@ -273,6 +283,7 @@
 
     function applyState(state) {
       latestState = state;
+      idleScreen.update(state);
       updateMuteState(Boolean(state.audio?.muted));
       if (usageDialog.open) renderUsageDialog();
       for (const slot of state.slots || []) {
@@ -566,9 +577,11 @@
       await refreshState();
       connection.textContent = "接続済み";
       const source = new EventSource("/api/stream");
-      source.onmessage = event => applyState(JSON.parse(event.data));
+      // SSEは状態本体ではなく更新番号を通知するため、APIから最新状態を取得する。
+      const refreshFromStream = () => refreshState().catch(error => console.error("状態更新に失敗しました", error));
+      source.addEventListener("update", refreshFromStream);
       source.onerror = () => { connection.textContent = "再接続中"; };
-      source.onopen = () => { connection.textContent = "接続済み"; };
+      source.onopen = () => { connection.textContent = "接続済み"; refreshFromStream(); };
     }
 
     initialize().catch(error => {

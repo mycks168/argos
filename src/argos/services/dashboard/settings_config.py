@@ -93,6 +93,14 @@ SETTING_FIELDS: tuple[dict[str, Any], ...] = (
         "unit": "秒",
     },
     {
+        "key": "dashboard.idle_url",
+        "section": "画面",
+        "label": "待機画面の共通URL",
+        "description": "操作していないときに表示するWebアプリです。空なら黒画面です。表示先はブラウザごとにも設定できます。",
+        "type": "text",
+        "default": "",
+    },
+    {
         "key": "dashboard.default_font_size",
         "section": "画面",
         "label": "標準の文字サイズ",
@@ -195,6 +203,7 @@ DESCRIPTION_BY_KEY = {
     "dashboard.host": "ダッシュボードが待ち受けるアドレスです。0.0.0.0はLANからも接続できます。",
     "dashboard.port": "ダッシュボードWebサーバーのポート番号です。",
     "dashboard.screensaver_seconds": "操作がないとき画面保護を始めるまでの秒数です。0で無効です。",
+    "dashboard.idle_url": "待機中に表示するWebアプリの共通URLです。空なら黒画面です。",
     "dashboard.default_font_size": "初めて開くブラウザで使う文字サイズです。",
     "runtime.dry_run": "オンにすると機器操作などを実行せず、確認用の動作になります。",
     "location.osrm_url": "道路に沿った経路を計算するOSRMサーバーのURLです。",

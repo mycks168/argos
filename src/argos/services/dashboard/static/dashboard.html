@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ARGOS Dashboard</title>
   <link rel="stylesheet" href="/static/message_view.css">
+  <link rel="stylesheet" href="/static/idle_screen.css">
+  <script src="/static/idle_screen.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -148,19 +150,6 @@
       transition: opacity 260ms ease, transform 420ms ease;
     }
     .splash.is-active { opacity: 1; transform: scale(1); }
-    .screensaver {
-      position: fixed;
-      inset: 0;
-      z-index: 40;
-      background: #000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 180ms ease;
-    }
-    .screensaver.is-active {
-      opacity: 1;
-      pointer-events: auto;
-    }
     /* 画面中央に大きく出す通知（display=center）用のアラート表示 */
     .center-alert {
       position: fixed;
@@ -1123,7 +1112,7 @@
   </style>
 </head>
 <body data-layout=__ARGOS_DASHBOARD_LAYOUT__>
-  <div id="screensaver" class="screensaver" aria-hidden="true"></div>
+  <div id="screensaver" class="argos-idle-screen" aria-hidden="true" hidden></div>
   <div id="center-alert" class="center-alert" aria-hidden="true">
     <div class="center-alert-card">
       <div id="center-alert-source" class="center-alert-source"></div>
@@ -1182,6 +1171,7 @@
           <button id="session-reset-button" class="control-button session-reset-button" type="button" data-confirm="false">セッションリセット</button>
           <button id="session-compact-button" class="control-button" type="button">履歴を引き継いで新規セッション</button>
         </div>
+        <div id="idle-settings" class="settings-row"></div>
         <div class="settings-row">
           <span class="settings-label">ARGOS本体</span>
           <a class="control-button" href="/settings" style="display:block;text-align:center;text-decoration:none;">本体設定を開く</a>
@@ -1549,11 +1539,17 @@
       }
     }
     let splashTimer = null;
-    let screensaverTimer = null;
+    const idleScreen = new ArgosIdleScreen.Screen({
+      ...__ARGOS_IDLE_CONFIG__, timeoutMs: screensaverTimeoutMs, root: screensaver,
+      isBusy: () => voiceState !== "idle" || ArgosIdleScreen.isActiveStatus(document.body.dataset.statusCode)
+        || Boolean(currentCenterAlertId)
+        || document.getElementById("settings-modal").style.display !== "none"
+        || splash.classList.contains("is-active"),
+    });
+    ArgosIdleScreen.mountSettings(document.getElementById("idle-settings"), __ARGOS_IDLE_CONFIG__);
     let muted = false;
     let microphoneEnabled = true;
     let changingVolume = false;
-    let previousDisplayActivitySequence = null;
     let sessionResetConfirmTimer = null;
     // 会話の1件ごとに時刻（今日は「9:41」、それ以前は「11/21 22:10」）と、
     // 前の会話から30分以上空いたときの区切り（「2時間ぶり」など）を付けたコピーを返す。
@@ -1615,18 +1611,8 @@
       window.clearTimeout(splashTimer);
       splashTimer = window.setTimeout(() => splash.classList.remove("is-active"), 3000);
     }
-    function showScreensaver() {
-      if (screensaverTimeoutMs <= 0) {
-        return;
-      }
-      screensaver.classList.add("is-active");
-    }
     function resetScreensaver() {
-      screensaver.classList.remove("is-active");
-      window.clearTimeout(screensaverTimer);
-      if (screensaverTimeoutMs > 0) {
-        screensaverTimer = window.setTimeout(showScreensaver, screensaverTimeoutMs);
-      }
+      idleScreen.reset();
     }
     let currentCenterAlertId = null;
     let dismissedCenterAlertId = null;
@@ -1737,15 +1723,7 @@
       if (displayStatus.code === "booting") {
         showSplash();
       }
-      const activeStates = new Set(["listening", "transcribing", "thinking", "speaking", "authenticating", "auth_listening", "followup"]);
-      if (activeStates.has(displayStatus.code)) {
-        resetScreensaver();
-      }
-      const displayActivitySequence = state.display_activity?.sequence ?? 0;
-      if (previousDisplayActivitySequence !== null && displayActivitySequence !== previousDisplayActivitySequence) {
-        resetScreensaver();
-      }
-      previousDisplayActivitySequence = displayActivitySequence;
+      idleScreen.update({...state, status: displayStatus});
 
       renderCenterAlert(state.center_alert);
 
@@ -2076,6 +2054,7 @@
     }
     function setVoiceState(nextState) {
       voiceState = nextState;
+      if (nextState !== "idle") resetScreensaver();
       if (nextState === "recording") {
         status.dataset.code = "listening";
         document.body.dataset.statusCode = "listening";
@@ -2527,9 +2506,6 @@
     setInterval(updateClock, 1000);
     updateWeather();
     setInterval(updateWeather, 60000);
-    ["pointerdown", "touchstart", "keydown", "wheel"].forEach(eventName => {
-      window.addEventListener(eventName, resetScreensaver, {passive: true});
-    });
     resetScreensaver();
     const pageQuery = new URLSearchParams(window.location.search);
     const skipInitialSplash = ["settings", "grid"].includes(pageQuery.get("from"));
