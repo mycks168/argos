@@ -503,6 +503,7 @@ class ArgosApp:
             ),
             camera_snapshot_path=Path(settings.camera_snapshot_path).expanduser(),
             screensaver_seconds=settings.dashboard_screensaver_seconds,
+            idle_url=settings.dashboard_idle_url,
             sp_notice_seconds=settings.dashboard_sp_notice_seconds,
             default_font_size=settings.dashboard_default_font_size,
             default_layout=settings.dashboard_default_layout,

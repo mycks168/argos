@@ -1,0 +1,13 @@
+/* 外部アプリの操作で会話への復帰が妨げられないよう、親が入力を受ける。 */
+.argos-idle-screen { position: fixed; inset: 0; z-index: 40; background: #000; outline: none; }
+.argos-idle-screen[hidden], .argos-idle-screen iframe[hidden] { display: none !important; }
+.argos-idle-screen iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; pointer-events: none; }
+.argos-idle-fallback { display: none; height: 100%; align-items: center; justify-content: center; flex-direction: column; color: #d6e3e9; font-family: system-ui, sans-serif; }
+.argos-idle-screen.has-page .argos-idle-fallback { display: flex; }
+.argos-idle-fallback time { padding: 24px; text-align: center; font-size: clamp(28px, 6vw, 80px); }
+.argos-idle-fallback p { font-size: 16px; }
+.argos-idle-settings { display: block; padding: 14px 0; }
+.argos-idle-settings label { display: block; font-weight: bold; }
+.argos-idle-settings input { display: block; width: 100%; margin-top: 8px; padding: 10px; background: #101820; color: #edf3f7; border: 1px solid #526775; font: inherit; user-select: text; }
+.argos-idle-settings p { color: #a9bac3; font-size: 13px; line-height: 1.5; }
+.argos-idle-settings button { height: auto; padding: 8px 12px; border: 1px solid #526775; border-radius: 8px; background: #101820; color: #edf3f7; font: inherit; }

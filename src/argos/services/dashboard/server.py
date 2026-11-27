@@ -147,6 +147,7 @@ class DashboardServer:
         terminal_handler: Any | None = None,
         config_path: Path = Path("config.yaml"),
         tls: DashboardTlsConfig = DEFAULT_DASHBOARD_TLS_CONFIG,
+        idle_url: str = "",
     ) -> None:
         """HTTPサーバー設定を保持する。"""
         self._state = state
@@ -160,6 +161,7 @@ class DashboardServer:
         self._upload_max_bytes = upload_max_bytes
         self._upload_keep = upload_keep
         self._screensaver_seconds = screensaver_seconds
+        self._idle_url = idle_url
         self._sp_notice_seconds = sp_notice_seconds
         self._default_font_size = _normalize_font_size(default_font_size)
         self._default_layout = _normalize_layout(default_layout)
@@ -209,6 +211,7 @@ class DashboardServer:
             self._terminal_handler,
             self._config_path,
             sp_notice_seconds=self._sp_notice_seconds,
+            idle_url=self._idle_url,
         )
         context: ssl.SSLContext | None = None
         if self._tls.is_enabled:
@@ -263,6 +266,7 @@ def _create_handler(
     terminal_handler: Any | None = None,
     config_path: Path = Path("config.yaml"),
     sp_notice_seconds: float = 8.0,
+    idle_url: str = "",
 ) -> type[BaseHTTPRequestHandler]:
     """状態とトークンを束縛したHTTPハンドラーを作成する。"""
 
@@ -604,6 +608,10 @@ def _create_handler(
             html_text = html_text.replace("__ARGOS_DASHBOARD_SP_NOTICE_SECONDS__", json.dumps(sp_notice_seconds))
             html_text = html_text.replace("__ARGOS_DASHBOARD_DEFAULT_FONT_SIZE__", json.dumps(_normalize_font_size(default_font_size)))
             html_text = html_text.replace("__ARGOS_DASHBOARD_LAYOUT__", json.dumps(layout))
+            html_text = html_text.replace(
+                "__ARGOS_IDLE_CONFIG__",
+                json.dumps({"url": idle_url, "timeoutMs": screensaver_seconds * 1000}, ensure_ascii=True).replace("<", "\\u003c"),
+            )
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -635,6 +643,10 @@ def _create_handler(
             html_text = html_text.replace(
                 "__ARGOS_DASHBOARD_TOKEN__",
                 json.dumps(token, ensure_ascii=False),
+            )
+            html_text = html_text.replace(
+                "__ARGOS_IDLE_CONFIG__",
+                json.dumps({"url": idle_url, "timeoutMs": screensaver_seconds * 1000}, ensure_ascii=True).replace("<", "\\u003c"),
             )
             html = html_text.encode("utf-8")
             self.send_response(HTTPStatus.OK)

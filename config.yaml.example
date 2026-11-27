@@ -193,6 +193,8 @@ dashboard:
   token: ''
   view_key: ''
   screensaver_seconds: 1800
+  # 待機中に表示するWebアプリ。空なら従来の黒画面。ブラウザごとにも上書き可能。
+  idle_url: ''
   # SP表示で、新しい通知が来たときに通知欄を自動で開いておく秒数。0以下なら自動で開かない。
   # ARGOS自身の通常の通知は対象外で、外部からの通知と優先度が高い通知が対象。
   sp_notice_seconds: 8

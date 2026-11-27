@@ -278,6 +278,7 @@ class Settings:
     whisper_compute_type: str = "int8"
     audio_input_devices: tuple[str, ...] = ()
     dashboard_screensaver_seconds: float = 300.0
+    dashboard_idle_url: str = ""
     # SP表示で、新しい通知が来たときに通知欄を自動で開いておく秒数。0以下なら自動で開かない。
     dashboard_sp_notice_seconds: float = 8.0
     # 通知を声でも知らせる。運転中など、画面を見られないとき向け。
@@ -730,6 +731,7 @@ def load_settings() -> Settings:
             "~/.config/argos/tls/dashboard.key",
         ),
         dashboard_screensaver_seconds=float(os.environ.get("ARGOS_DASHBOARD_SCREENSAVER_SECONDS", "300")),
+        dashboard_idle_url=os.environ.get("ARGOS_DASHBOARD_IDLE_URL", ""),
         dashboard_sp_notice_seconds=float(os.environ.get("ARGOS_DASHBOARD_SP_NOTICE_SECONDS", "8")),
         notice_speak_enabled=_bool_env("ARGOS_NOTICE_SPEAK", True),
         notice_speak_max_chars=int(os.environ.get("ARGOS_NOTICE_SPEAK_MAX_CHARS", "60")),
